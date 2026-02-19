@@ -498,15 +498,15 @@ fn tile_is_floor(tile: Tile) -> bool {
 
 fn tile_label(tile: Tile) -> &'static str {
     match tile {
-        Tile::Floor => "floor",
-        Tile::FloorMetal => "floor_metal",
-        Tile::FloorWood => "floor_wood",
-        Tile::FloorMoss => "floor_moss",
-        Tile::FloorSand => "floor_sand",
-        Tile::Wall => "wall",
-        Tile::WallBrick => "wall_brick",
-        Tile::WallSteel => "wall_steel",
-        Tile::WallNeon => "wall_neon",
+        Tile::Floor => "sol",
+        Tile::FloorMetal => "sol_metal",
+        Tile::FloorWood => "sol_bois",
+        Tile::FloorMoss => "sol_mousse",
+        Tile::FloorSand => "sol_sable",
+        Tile::Wall => "mur",
+        Tile::WallBrick => "mur_brique",
+        Tile::WallSteel => "mur_acier",
+        Tile::WallNeon => "mur_neon",
     }
 }
 
@@ -656,19 +656,52 @@ fn draw_ui_button_sized(
 ) -> bool {
     let hovered = point_in_rect(mouse_pos, rect);
     let base = if active {
-        Color::from_rgba(196, 136, 74, 240)
+        rgba(194, 132, 66, 238)
     } else if hovered {
-        Color::from_rgba(88, 122, 148, 235)
+        rgba(80, 132, 166, 236)
     } else {
-        Color::from_rgba(48, 70, 91, 220)
+        rgba(44, 68, 91, 222)
+    };
+    let top_highlight = if active {
+        with_alpha(rgba(255, 235, 196, 255), 0.22)
+    } else if hovered {
+        with_alpha(rgba(210, 240, 255, 255), 0.17)
+    } else {
+        with_alpha(rgba(180, 214, 236, 255), 0.10)
     };
     let border = if active {
-        Color::from_rgba(252, 205, 135, 250)
+        rgba(252, 208, 138, 252)
+    } else if hovered {
+        rgba(170, 220, 247, 240)
     } else {
-        Color::from_rgba(130, 178, 206, 230)
+        rgba(120, 171, 199, 224)
     };
+    draw_rectangle(
+        rect.x + 2.0,
+        rect.y + 3.0,
+        rect.w,
+        rect.h,
+        with_alpha(BLACK, if hovered || active { 0.30 } else { 0.24 }),
+    );
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+    draw_rectangle(
+        rect.x + 1.5,
+        rect.y + 1.5,
+        (rect.w - 3.0).max(1.0),
+        (rect.h * 0.44).max(1.0),
+        top_highlight,
+    );
     draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, border);
+    if hovered || active {
+        draw_rectangle_lines(
+            rect.x + 1.0,
+            rect.y + 1.0,
+            (rect.w - 2.0).max(1.0),
+            (rect.h - 2.0).max(1.0),
+            1.0,
+            with_alpha(WHITE, 0.25),
+        );
+    }
     let dims = measure_text(label, None, font_size as u16, 1.0);
     draw_text(
         label,
@@ -686,41 +719,41 @@ fn is_border_tile(world: &World, tile: (i32, i32)) -> bool {
 
 fn prop_kind_label(kind: PropKind) -> &'static str {
     match kind {
-        PropKind::Crate => "crate",
-        PropKind::Pipe => "pipe",
-        PropKind::Lamp => "lamp",
-        PropKind::Banner => "banner",
-        PropKind::Plant => "plant",
-        PropKind::Bench => "bench",
-        PropKind::Crystal => "crystal",
+        PropKind::Crate => "caisse",
+        PropKind::Pipe => "tuyau",
+        PropKind::Lamp => "lampe",
+        PropKind::Banner => "banniere",
+        PropKind::Plant => "plante",
+        PropKind::Bench => "banc",
+        PropKind::Crystal => "cristal",
     }
 }
 
 fn editor_brush_label(brush: EditorBrush) -> &'static str {
     match brush {
-        EditorBrush::Floor => "Floor",
-        EditorBrush::FloorMetal => "Floor Metal",
-        EditorBrush::FloorWood => "Floor Wood",
-        EditorBrush::FloorMoss => "Floor Moss",
-        EditorBrush::FloorSand => "Floor Sand",
-        EditorBrush::Wall => "Wall",
-        EditorBrush::WallBrick => "Wall Brick",
-        EditorBrush::WallSteel => "Wall Steel",
-        EditorBrush::WallNeon => "Wall Neon",
-        EditorBrush::Crate => "Crate",
-        EditorBrush::Pipe => "Pipe",
-        EditorBrush::Lamp => "Lamp",
-        EditorBrush::Banner => "Banner",
-        EditorBrush::Plant => "Plant",
-        EditorBrush::Bench => "Bench",
-        EditorBrush::Crystal => "Crystal",
-        EditorBrush::EraseProp => "Erase Prop",
+        EditorBrush::Floor => "Sol",
+        EditorBrush::FloorMetal => "Sol metal",
+        EditorBrush::FloorWood => "Sol bois",
+        EditorBrush::FloorMoss => "Sol mousse",
+        EditorBrush::FloorSand => "Sol sable",
+        EditorBrush::Wall => "Mur",
+        EditorBrush::WallBrick => "Mur brique",
+        EditorBrush::WallSteel => "Mur acier",
+        EditorBrush::WallNeon => "Mur neon",
+        EditorBrush::Crate => "Caisse",
+        EditorBrush::Pipe => "Tuyau",
+        EditorBrush::Lamp => "Lampe",
+        EditorBrush::Banner => "Banniere",
+        EditorBrush::Plant => "Plante",
+        EditorBrush::Bench => "Banc",
+        EditorBrush::Crystal => "Cristal",
+        EditorBrush::EraseProp => "Effacer objet",
     }
 }
 
 fn editor_tool_label(tool: EditorTool) -> &'static str {
     match tool {
-        EditorTool::Brush => "Brush",
+        EditorTool::Brush => "Pinceau",
         EditorTool::Rect => "Rectangle",
     }
 }
@@ -756,23 +789,23 @@ fn editor_set_status(editor: &mut EditorState, message: impl Into<String>) {
 
 fn editor_undo(editor: &mut EditorState, map: &mut MapAsset) -> bool {
     let Some(snapshot) = editor.undo_stack.pop() else {
-        editor_set_status(editor, "Undo vide");
+        editor_set_status(editor, "Annulation vide");
         return false;
     };
     editor.redo_stack.push(editor_capture_snapshot(map));
     editor_apply_snapshot(map, snapshot);
-    editor_set_status(editor, "Undo applique");
+    editor_set_status(editor, "Annulation appliquee");
     true
 }
 
 fn editor_redo(editor: &mut EditorState, map: &mut MapAsset) -> bool {
     let Some(snapshot) = editor.redo_stack.pop() else {
-        editor_set_status(editor, "Redo vide");
+        editor_set_status(editor, "Retablissement vide");
         return false;
     };
     editor.undo_stack.push(editor_capture_snapshot(map));
     editor_apply_snapshot(map, snapshot);
-    editor_set_status(editor, "Redo applique");
+    editor_set_status(editor, "Retablissement applique");
     true
 }
 
@@ -2805,29 +2838,53 @@ fn run_editor_frame(
     let left_released = is_mouse_button_released(MouseButton::Left);
     let ctrl_down = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
 
-    let panel_w = 360.0;
-    let world_w_px = map.world.w as f32 * TILE_SIZE;
-    let panel_x = if screen_width() >= world_w_px + panel_w + 18.0 {
-        world_w_px + 10.0
-    } else {
-        (screen_width() - panel_w - 10.0).max(10.0)
-    };
-    let panel_rect = Rect::new(panel_x, 10.0, panel_w, screen_height() - 20.0);
-    let mouse_in_world = point_in_rect(
-        mouse,
-        Rect::new(
-            0.0,
-            0.0,
-            map.world.w as f32 * TILE_SIZE,
-            map.world.h as f32 * TILE_SIZE,
-        ),
+    let margin = 10.0;
+    let min_map_w = 280.0;
+    let max_panel_w = (screen_width() - min_map_w - margin * 3.0).max(220.0);
+    let panel_w = (screen_width() * 0.30).clamp(260.0, 380.0).min(max_panel_w);
+    let panel_rect = Rect::new(
+        screen_width() - panel_w - margin,
+        margin,
+        panel_w,
+        screen_height() - margin * 2.0,
     );
+    let map_slot_rect = Rect::new(
+        margin,
+        margin,
+        (panel_rect.x - margin * 2.0).max(180.0),
+        (screen_height() - margin * 2.0).max(180.0),
+    );
+    let world_size_px = vec2(map.world.w as f32 * TILE_SIZE, map.world.h as f32 * TILE_SIZE);
+    let map_scale = (map_slot_rect.w / world_size_px.x)
+        .min(map_slot_rect.h / world_size_px.y)
+        .max(0.01);
+    let map_view_rect = Rect::new(
+        map_slot_rect.x + (map_slot_rect.w - world_size_px.x * map_scale) * 0.5,
+        map_slot_rect.y + (map_slot_rect.h - world_size_px.y * map_scale) * 0.5,
+        (world_size_px.x * map_scale).max(1.0),
+        (world_size_px.y * map_scale).max(1.0),
+    );
+    let mut world_camera =
+        Camera2D::from_display_rect(Rect::new(0.0, 0.0, world_size_px.x, world_size_px.y));
+    world_camera.viewport = Some((
+        map_view_rect.x.round() as i32,
+        (screen_height() - map_view_rect.y - map_view_rect.h)
+            .round()
+            .max(0.0) as i32,
+        map_view_rect.w.round().max(1.0) as i32,
+        map_view_rect.h.round().max(1.0) as i32,
+    ));
+    let mouse_in_world = point_in_rect(mouse, map_view_rect);
     let over_panel = point_in_rect(mouse, panel_rect);
-    editor.hover_tile = if mouse_in_world {
-        Some(tile_from_world_clamped(&map.world, mouse))
+    let world_mouse = if mouse_in_world {
+        let mut pos = world_camera.screen_to_world(mouse);
+        pos.x = pos.x.clamp(0.0, (world_size_px.x - 0.001).max(0.0));
+        pos.y = pos.y.clamp(0.0, (world_size_px.y - 0.001).max(0.0));
+        Some(pos)
     } else {
         None
     };
+    editor.hover_tile = world_mouse.map(|pos| tile_from_world_clamped(&map.world, pos));
 
     if is_key_pressed(KeyCode::Key1) {
         editor.brush = EditorBrush::Floor;
@@ -2899,7 +2956,7 @@ fn run_editor_frame(
     if ctrl_down && is_key_pressed(KeyCode::S) {
         sanitize_map_asset(map);
         match save_map_asset(MAP_FILE_PATH, map) {
-            Ok(()) => editor_set_status(editor, format!("Map sauvegardee: {}", MAP_FILE_PATH)),
+            Ok(()) => editor_set_status(editor, format!("Carte sauvegardee: {}", MAP_FILE_PATH)),
             Err(err) => editor_set_status(editor, err),
         }
     }
@@ -2911,7 +2968,7 @@ fn run_editor_frame(
                 editor.redo_stack.clear();
                 editor.stroke_active = false;
                 editor.stroke_changed = false;
-                editor_set_status(editor, format!("Map chargee: {}", MAP_FILE_PATH));
+                editor_set_status(editor, format!("Carte chargee: {}", MAP_FILE_PATH));
             }
             Err(err) => editor_set_status(editor, err),
         }
@@ -2922,14 +2979,14 @@ fn run_editor_frame(
         && !map.world.is_solid(tile.0, tile.1)
     {
         map.player_spawn = tile;
-        editor_set_status(editor, format!("Spawn joueur -> ({}, {})", tile.0, tile.1));
+        editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1));
     }
     if is_key_pressed(KeyCode::N)
         && let Some(tile) = editor.hover_tile
         && !map.world.is_solid(tile.0, tile.1)
     {
         map.npc_spawn = tile;
-        editor_set_status(editor, format!("Spawn PNJ -> ({}, {})", tile.0, tile.1));
+        editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1));
     }
 
     if editor.tool == EditorTool::Brush {
@@ -2980,6 +3037,17 @@ fn run_editor_frame(
 
     clear_background(palette.bg_bottom);
     draw_background(palette, time);
+
+    draw_rectangle(
+        map_slot_rect.x,
+        map_slot_rect.y,
+        map_slot_rect.w,
+        map_slot_rect.h,
+        Color::from_rgba(8, 12, 18, 150),
+    );
+
+    set_camera(&world_camera);
+
     draw_floor_layer(&map.world, palette);
     draw_wall_cast_shadows(&map.world, palette);
     draw_wall_layer(&map.world, palette);
@@ -3059,6 +3127,25 @@ fn run_editor_frame(
         Color::from_rgba(255, 160, 95, 240),
     );
 
+    set_default_camera();
+
+    draw_rectangle_lines(
+        map_slot_rect.x + 0.5,
+        map_slot_rect.y + 0.5,
+        map_slot_rect.w - 1.0,
+        map_slot_rect.h - 1.0,
+        1.8,
+        Color::from_rgba(90, 126, 149, 170),
+    );
+    draw_rectangle_lines(
+        map_view_rect.x + 0.5,
+        map_view_rect.y + 0.5,
+        map_view_rect.w - 1.0,
+        map_view_rect.h - 1.0,
+        2.2,
+        Color::from_rgba(170, 213, 237, 220),
+    );
+
     draw_rectangle(
         panel_rect.x,
         panel_rect.y,
@@ -3084,7 +3171,7 @@ fn run_editor_frame(
     );
     draw_text(
         &format!(
-            "Map: {} | {}x{} | Props: {}",
+            "Carte: {} | {}x{} | Objets: {}",
             map.label,
             map.world.w,
             map.world.h,
@@ -3097,14 +3184,20 @@ fn run_editor_frame(
     );
 
     let mut action = EditorAction::None;
-    let play_rect = Rect::new(panel_rect.x + 14.0, panel_rect.y + 64.0, 136.0, 38.0);
-    let menu_rect = Rect::new(panel_rect.x + 162.0, panel_rect.y + 64.0, 136.0, 38.0);
-    let save_rect = Rect::new(panel_rect.x + 14.0, panel_rect.y + 110.0, 136.0, 34.0);
-    let load_rect = Rect::new(panel_rect.x + 162.0, panel_rect.y + 110.0, 136.0, 34.0);
-    let undo_rect = Rect::new(panel_rect.x + 14.0, panel_rect.y + 150.0, 136.0, 32.0);
-    let redo_rect = Rect::new(panel_rect.x + 162.0, panel_rect.y + 150.0, 136.0, 32.0);
+    let panel_pad = 14.0;
+    let panel_gap = 10.0;
+    let column_w = ((panel_rect.w - panel_pad * 2.0 - panel_gap) * 0.5).max(100.0);
+    let left_x = panel_rect.x + panel_pad;
+    let right_x = left_x + column_w + panel_gap;
 
-    if draw_ui_button(play_rect, "Tester (F5)", mouse, left_pressed, false)
+    let play_rect = Rect::new(left_x, panel_rect.y + 64.0, column_w, 40.0);
+    let menu_rect = Rect::new(right_x, panel_rect.y + 64.0, column_w, 40.0);
+    let save_rect = Rect::new(left_x, panel_rect.y + 112.0, column_w, 34.0);
+    let load_rect = Rect::new(right_x, panel_rect.y + 112.0, column_w, 34.0);
+    let undo_rect = Rect::new(left_x, panel_rect.y + 154.0, column_w, 34.0);
+    let redo_rect = Rect::new(right_x, panel_rect.y + 154.0, column_w, 34.0);
+
+    if draw_ui_button(play_rect, "Lancer (F5)", mouse, left_pressed, false)
         || is_key_pressed(KeyCode::F5)
     {
         sanitize_map_asset(map);
@@ -3118,7 +3211,7 @@ fn run_editor_frame(
     if draw_ui_button(save_rect, "Sauver", mouse, left_pressed, false) {
         sanitize_map_asset(map);
         match save_map_asset(MAP_FILE_PATH, map) {
-            Ok(()) => editor_set_status(editor, format!("Map sauvegardee: {}", MAP_FILE_PATH)),
+            Ok(()) => editor_set_status(editor, format!("Carte sauvegardee: {}", MAP_FILE_PATH)),
             Err(err) => editor_set_status(editor, err),
         }
     }
@@ -3130,15 +3223,15 @@ fn run_editor_frame(
                 editor.redo_stack.clear();
                 editor.stroke_active = false;
                 editor.stroke_changed = false;
-                editor_set_status(editor, format!("Map chargee: {}", MAP_FILE_PATH));
+                editor_set_status(editor, format!("Carte chargee: {}", MAP_FILE_PATH));
             }
             Err(err) => editor_set_status(editor, err),
         }
     }
-    if draw_ui_button(undo_rect, "Undo", mouse, left_pressed, false) {
+    if draw_ui_button(undo_rect, "Annuler", mouse, left_pressed, false) {
         let _ = editor_undo(editor, map);
     }
-    if draw_ui_button(redo_rect, "Redo", mouse, left_pressed, false) {
+    if draw_ui_button(redo_rect, "Retablir", mouse, left_pressed, false) {
         let _ = editor_redo(editor, map);
     }
 
@@ -3150,11 +3243,11 @@ fn run_editor_frame(
         Color::from_rgba(206, 224, 235, 255),
     );
 
-    let tool_brush_rect = Rect::new(panel_rect.x + 14.0, panel_rect.y + 218.0, 136.0, 30.0);
-    let tool_rect_rect = Rect::new(panel_rect.x + 162.0, panel_rect.y + 218.0, 136.0, 30.0);
+    let tool_brush_rect = Rect::new(left_x, panel_rect.y + 218.0, column_w, 32.0);
+    let tool_rect_rect = Rect::new(right_x, panel_rect.y + 218.0, column_w, 32.0);
     if draw_ui_button(
         tool_brush_rect,
-        "Brush (B)",
+        "Pinceau (B)",
         mouse,
         left_pressed,
         editor.tool == EditorTool::Brush,
@@ -3163,7 +3256,7 @@ fn run_editor_frame(
     }
     if draw_ui_button(
         tool_rect_rect,
-        "Rect (R)",
+        "Rectangle (R)",
         mouse,
         left_pressed,
         editor.tool == EditorTool::Rect,
@@ -3180,32 +3273,41 @@ fn run_editor_frame(
     );
 
     let brushes = [
-        (EditorBrush::Floor, "1 Floor"),
-        (EditorBrush::FloorMetal, "2 Metal"),
-        (EditorBrush::FloorWood, "3 Wood"),
-        (EditorBrush::FloorMoss, "4 Moss"),
-        (EditorBrush::FloorSand, "5 Sand"),
-        (EditorBrush::Wall, "6 Wall"),
-        (EditorBrush::WallBrick, "7 Brick"),
-        (EditorBrush::WallSteel, "8 Steel"),
-        (EditorBrush::WallNeon, "9 Neon"),
-        (EditorBrush::Crate, "0 Crate"),
-        (EditorBrush::Pipe, "Q Pipe"),
-        (EditorBrush::Lamp, "W Lamp"),
-        (EditorBrush::Banner, "E Banner"),
-        (EditorBrush::Plant, "T Plant"),
-        (EditorBrush::Bench, "Y Bench"),
-        (EditorBrush::Crystal, "U Crystal"),
-        (EditorBrush::EraseProp, "X Erase"),
+        (EditorBrush::Floor, "1 Sol"),
+        (EditorBrush::FloorMetal, "2 Sol metal"),
+        (EditorBrush::FloorWood, "3 Sol bois"),
+        (EditorBrush::FloorMoss, "4 Sol mousse"),
+        (EditorBrush::FloorSand, "5 Sol sable"),
+        (EditorBrush::Wall, "6 Mur"),
+        (EditorBrush::WallBrick, "7 Mur brique"),
+        (EditorBrush::WallSteel, "8 Mur acier"),
+        (EditorBrush::WallNeon, "9 Mur neon"),
+        (EditorBrush::Crate, "0 Caisse"),
+        (EditorBrush::Pipe, "Q Tuyau"),
+        (EditorBrush::Lamp, "W Lampe"),
+        (EditorBrush::Banner, "E Banniere"),
+        (EditorBrush::Plant, "T Plante"),
+        (EditorBrush::Bench, "Y Banc"),
+        (EditorBrush::Crystal, "U Cristal"),
+        (EditorBrush::EraseProp, "X Effacer"),
     ];
+    let brush_columns = if panel_rect.w >= 338.0 { 3 } else { 2 };
+    let brush_gap = 8.0;
+    let brush_button_w =
+        ((panel_rect.w - panel_pad * 2.0 - brush_gap * (brush_columns as f32 - 1.0))
+            / brush_columns as f32)
+            .max(78.0);
+    let brush_button_h = 20.0;
+    let brush_step_y = 23.0;
+
     for (i, (brush, label)) in brushes.iter().enumerate() {
-        let row = i / 3;
-        let col = i % 3;
+        let row = i / brush_columns;
+        let col = i % brush_columns;
         let rect = Rect::new(
-            panel_rect.x + 14.0 + col as f32 * 114.0,
-            panel_rect.y + 272.0 + row as f32 * 22.0,
-            104.0,
-            20.0,
+            panel_rect.x + panel_pad + col as f32 * (brush_button_w + brush_gap),
+            panel_rect.y + 272.0 + row as f32 * brush_step_y,
+            brush_button_w,
+            brush_button_h,
         );
         if draw_ui_button_sized(
             rect,
@@ -3219,15 +3321,18 @@ fn run_editor_frame(
         }
     }
 
+    let brush_rows = (brushes.len() + brush_columns - 1) / brush_columns;
+    let info_y = panel_rect.y + 272.0 + brush_rows as f32 * brush_step_y + 9.0;
+
     draw_text(
         &format!(
             "Actif: {} | {} | Grille: {}",
             editor_tool_label(editor.tool),
             editor_brush_label(editor.brush),
-            if editor.show_grid { "ON" } else { "OFF" }
+            if editor.show_grid { "Oui" } else { "Non" }
         ),
         panel_rect.x + 14.0,
-        panel_rect.y + 414.0,
+        info_y,
         15.0,
         Color::from_rgba(198, 220, 233, 255),
     );
@@ -3238,21 +3343,21 @@ fn run_editor_frame(
             prop_index_at_tile(&map.props, tile).map(|idx| prop_kind_label(map.props[idx].kind));
         draw_text(
             &format!(
-                "Tile ({}, {})={} prop={}",
+                "Case ({}, {})={} objet={}",
                 tile.0,
                 tile.1,
                 tile_label(tile_kind),
-                prop_at.unwrap_or("none"),
+                prop_at.unwrap_or("aucun"),
             ),
             panel_rect.x + 14.0,
-            panel_rect.y + 431.0,
+            info_y + 19.0,
             15.0,
             Color::from_rgba(168, 194, 208, 255),
         );
     }
 
     draw_text(
-        "Ctrl+S/L  Ctrl+Z/Y  P/N spawn  G grille  F11 plein ecran",
+        "Ctrl+S/L  Ctrl+Z/Y  P/N points apparition  G grille  F11 plein ecran",
         panel_rect.x + 14.0,
         panel_rect.y + panel_rect.h - 30.0,
         14.0,
@@ -3374,7 +3479,10 @@ async fn main() {
         if is_key_pressed(KeyCode::F12) {
             sanitize_map_asset(&mut map);
             let _ = save_map_asset(MAP_FILE_PATH, &map);
-            editor_set_status(&mut editor_state, format!("Autosave: {}", MAP_FILE_PATH));
+            editor_set_status(
+                &mut editor_state,
+                format!("Sauvegarde auto: {}", MAP_FILE_PATH),
+            );
         }
 
         next_frame().await;
