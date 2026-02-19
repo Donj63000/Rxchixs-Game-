@@ -1,1 +1,22 @@
 /target
+**/target
+
+# IDE and editor
+.idea/
+.vscode/
+
+# OS and editor temp files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Logs and caches
+*.log
+*.tmp
+
+# Project helper documents to keep local
+plan.md
+codex.md
+AGENTS.md
+docs/codex.md
