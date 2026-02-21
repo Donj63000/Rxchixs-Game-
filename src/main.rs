@@ -4,6 +4,7 @@ mod edition;
 mod historique;
 mod interactions;
 mod modes;
+mod render_safety;
 mod rendu;
 mod sim;
 mod social;
@@ -18,6 +19,7 @@ use deplacement::*;
 use edition::*;
 use macroquad::prelude::*;
 use modes::*;
+use render_safety::*;
 use rendu::*;
 use ron::{
     de::from_str as ron_from_str,

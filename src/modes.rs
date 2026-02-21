@@ -355,7 +355,7 @@ pub(crate) fn run_play_frame(
         draw_sim_agent_overlay(&state.sim, state.debug || state.sim.build_mode_enabled());
     }
     draw_lighting_region(&state.props, &state.palette, time, visible_bounds);
-    set_default_camera();
+    begin_ui_pass();
 
     draw_rectangle_lines(
         map_view_rect.x + 0.5,
@@ -831,7 +831,7 @@ pub(crate) fn run_editor_frame(
         Color::from_rgba(255, 160, 95, 240),
     );
 
-    set_default_camera();
+    begin_ui_pass();
 
     draw_rectangle_lines(
         map_slot_rect.x + 0.5,

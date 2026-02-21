@@ -920,7 +920,7 @@ pub(crate) fn run_main_menu_frame(map: &MapAsset, palette: &Palette, time: f32) 
     draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
     draw_props_region(&map.props, palette, time, visible_bounds);
     draw_lighting_region(&map.props, palette, time, visible_bounds);
-    set_default_camera();
+    begin_ui_pass();
     draw_rectangle_lines(
         menu_view_rect.x + 0.5,
         menu_view_rect.y + 0.5,
