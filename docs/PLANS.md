@@ -69,3 +69,39 @@ Portee: Etapes 2 a 6 du plan (l'etape 1 est deja integree).
   - placement/suppression bloc
   - sauvegarde F8
   - verification HUD debug F1
+
+# ExecPlan - Refonte UI Editeur + Zoom sensible + Fluidite
+
+Date: 2026-02-21
+Portee: refonte interface editeur, camera/zoom, optimisation rendu.
+
+## 5 etapes de recherche/analyse
+1. Inventorier les points de friction UX de `run_editor_frame` (densite panneau, lisibilite, feedback, raccourcis).
+2. Mesurer la charge de rendu actuelle sur grande map (boucles tiles completes, overlays, grilles, props).
+3. Identifier les chemins critiques de fluidite (sim steps backlog, draw calls inutiles hors viewport).
+4. Definir un modele de camera editeur pan+zoom coherent avec gameplay et ergonomie souris.
+5. Etablir un layout UI cible responsive (barre action, toolbox, inspector, viewport central).
+
+## 10 etapes d'execution
+1. Introduire des constantes camera/perf (zoom plus sensible, cap de simulation, vitesses de pan).
+2. Ajouter un etat camera dedie a l'editeur (center/zoom/init) dans `EditorState`.
+3. Mettre en place des helpers de bounds visibles (tuile min/max depuis camera+viewport).
+4. Ajouter un rendu monde par region visible (floor, murs, ombres, grille) pour eviter le full redraw.
+5. Adapter les overlays sim en mode jeu a ces bounds visibles.
+6. Refaire `run_editor_frame` avec layout 3 zones: topbar, toolbox gauche, inspector droite.
+7. Ajouter interactions camera editeur: molette sensible, pan fleches/Space+ZQSD, drag molette.
+8. Conserver et harmoniser les actions critiques (save/load/undo/redo/play/menu, status, hover info).
+9. Augmenter la sensibilite du zoom en mode jeu et garder clamp stable.
+10. Ajouter un garde-fou anti-stutter (limite de ticks sim par frame) pour fluidite en charge.
+
+## 10 etapes de verification
+1. `cargo fmt`.
+2. `cargo clippy --all-targets --all-features -- -D warnings`.
+3. `cargo test` + tests unitaires ajoutes pour les nouveaux invariants perf/camera.
+4. Validation manuelle: edition pinceau/rectangle sur zoom faible/fort.
+5. Validation manuelle: pan editeur clavier + drag molette sur grande carte.
+6. Validation manuelle: boutons topbar + raccourcis clavier sans regression.
+7. Validation manuelle: hover/inspection case et points spawn P/N.
+8. Validation manuelle: gameplay camera ZQSD + click-to-move limite map.
+9. Validation manuelle: fluidite percue en fenetre et plein ecran.
+10. Smoke run: lancement/fermeture sans crash ni blocage binaire.

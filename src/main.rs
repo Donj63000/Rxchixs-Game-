@@ -17,8 +17,10 @@ use std::fs;
 use std::path::Path;
 
 const TILE_SIZE: f32 = 32.0;
-const MAP_W: i32 = 25;
-const MAP_H: i32 = 15;
+const MAP_W: i32 = 96;
+const MAP_H: i32 = 64;
+const WINDOW_W: i32 = 1600;
+const WINDOW_H: i32 = 900;
 const FIXED_DT: f32 = 1.0 / 60.0;
 const DIRECTION_HYSTERESIS: f32 = 0.18;
 const WALK_CYCLE_SPEED: f32 = 9.0;
@@ -33,8 +35,18 @@ const NPC_GREETING_DURATION: f32 = 1.25;
 const NPC_GREETING_COOLDOWN: f32 = 3.8;
 const MAP_FILE_PATH: &str = "maps/main_map.ron";
 const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
-const MAP_FILE_VERSION: u32 = 2;
+const MAP_FILE_VERSION: u32 = 3;
 const EDITOR_UNDO_LIMIT: usize = 160;
+const PLAY_CAMERA_MARGIN: f32 = 10.0;
+const PLAY_CAMERA_PAN_SPEED: f32 = 880.0;
+const PLAY_CAMERA_ZOOM_MIN: f32 = 0.55;
+const PLAY_CAMERA_ZOOM_MAX: f32 = 2.65;
+const PLAY_CAMERA_ZOOM_STEP: f32 = 0.24;
+const EDITOR_CAMERA_PAN_SPEED: f32 = 980.0;
+const EDITOR_CAMERA_ZOOM_MIN: f32 = 0.45;
+const EDITOR_CAMERA_ZOOM_MAX: f32 = 3.2;
+const EDITOR_CAMERA_ZOOM_STEP: f32 = 0.28;
+const MAX_SIM_STEPS_PER_FRAME: usize = 8;
 
 const MASK_N: u8 = 1 << 0;
 const MASK_E: u8 = 1 << 1;
@@ -44,8 +56,8 @@ const MASK_W: u8 = 1 << 3;
 fn window_conf() -> Conf {
     Conf {
         window_title: "Rxchixs - Visual Room Prototype".to_string(),
-        window_width: (MAP_W as f32 * TILE_SIZE) as i32,
-        window_height: (MAP_H as f32 * TILE_SIZE) as i32,
+        window_width: WINDOW_W,
+        window_height: WINDOW_H,
         window_resizable: true,
         ..Default::default()
     }
@@ -345,6 +357,8 @@ struct GameState {
     world: World,
     player: Player,
     npc: NpcWanderer,
+    camera_center: Vec2,
+    camera_zoom: f32,
     palette: Palette,
     sim: sim::FactorySim,
     props: Vec<Prop>,
@@ -377,16 +391,15 @@ struct MapAsset {
 
 impl MapAsset {
     fn new_default() -> Self {
-        let mut world = World::new_room(MAP_W, MAP_H);
-        apply_material_variation(&mut world);
+        let world = generate_starter_factory_world(MAP_W, MAP_H);
         let props = default_props(&world);
-        let player_spawn = nearest_walkable_tile(&world, (2, 2)).unwrap_or((2, 2));
-        let npc_spawn =
-            nearest_walkable_tile(&world, (MAP_W - 4, MAP_H / 2)).unwrap_or((MAP_W - 4, MAP_H / 2));
+        let player_spawn = nearest_walkable_tile(&world, (8, MAP_H / 2)).unwrap_or((2, 2));
+        let npc_spawn = nearest_walkable_tile(&world, (MAP_W - 10, MAP_H / 2))
+            .unwrap_or((MAP_W - 4, MAP_H / 2));
 
         Self {
             version: MAP_FILE_VERSION,
-            label: "Default Room".to_string(),
+            label: "Starter Factory".to_string(),
             world,
             props,
             player_spawn,
@@ -436,6 +449,9 @@ struct EditorState {
     hover_tile: Option<(i32, i32)>,
     drag_start: Option<(i32, i32)>,
     show_grid: bool,
+    camera_center: Vec2,
+    camera_zoom: f32,
+    camera_initialized: bool,
     status_text: String,
     status_timer: f32,
     undo_stack: Vec<EditorSnapshot>,
@@ -452,6 +468,9 @@ impl EditorState {
             hover_tile: None,
             drag_start: None,
             show_grid: true,
+            camera_center: Vec2::ZERO,
+            camera_zoom: 1.05,
+            camera_initialized: false,
             status_text: "Editeur pret".to_string(),
             status_timer: 0.0,
             undo_stack: Vec::new(),
@@ -550,29 +569,134 @@ fn tiles_overlapping_aabb(world: &World, aabb: Aabb) -> (i32, i32, i32, i32) {
     )
 }
 
+fn generate_starter_factory_world(w: i32, h: i32) -> World {
+    let mut world = World::new_room(w, h);
+
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let tile = if x < w / 3 {
+                if y < h / 2 {
+                    Tile::FloorWood
+                } else {
+                    Tile::FloorMoss
+                }
+            } else if x > (w * 2) / 3 {
+                if y < h / 2 {
+                    Tile::Floor
+                } else {
+                    Tile::FloorSand
+                }
+            } else {
+                Tile::FloorMetal
+            };
+            world.set(x, y, tile);
+        }
+    }
+
+    let vertical_walls = [w / 3, (w * 2) / 3];
+    for &vx in &vertical_walls {
+        for y in 1..h - 1 {
+            world.set(vx, y, Tile::WallSteel);
+        }
+        for &door_y in &[h / 6, h / 2, (h * 5) / 6] {
+            for dy in -1..=1 {
+                let y = clamp_i32(door_y + dy, 1, h - 2);
+                world.set(vx, y, Tile::FloorMetal);
+            }
+        }
+    }
+
+    let horizontal_walls = [h / 3, (h * 2) / 3];
+    for &hy in &horizontal_walls {
+        for x in 1..w - 1 {
+            world.set(x, hy, Tile::WallBrick);
+        }
+        for &door_x in &[w / 6, w / 2, (w * 5) / 6] {
+            for dx in -1..=1 {
+                let x = clamp_i32(door_x + dx, 1, w - 2);
+                world.set(x, hy, Tile::FloorMetal);
+            }
+        }
+    }
+
+    let core_min_x = (w / 2) - 9;
+    let core_max_x = (w / 2) + 9;
+    let core_min_y = (h / 2) - 6;
+    let core_max_y = (h / 2) + 6;
+
+    for x in core_min_x..=core_max_x {
+        world.set(x, core_min_y, Tile::WallNeon);
+        world.set(x, core_max_y, Tile::WallNeon);
+    }
+    for y in core_min_y..=core_max_y {
+        world.set(core_min_x, y, Tile::WallNeon);
+        world.set(core_max_x, y, Tile::WallNeon);
+    }
+    for x in (w / 2) - 1..=(w / 2) + 1 {
+        world.set(x, core_min_y, Tile::FloorWood);
+        world.set(x, core_max_y, Tile::FloorWood);
+    }
+    for y in (h / 2) - 1..=(h / 2) + 1 {
+        world.set(core_min_x, y, Tile::FloorWood);
+        world.set(core_max_x, y, Tile::FloorWood);
+    }
+    for y in core_min_y + 1..core_max_y {
+        for x in core_min_x + 1..core_max_x {
+            if !world.is_solid(x, y) {
+                world.set(x, y, Tile::FloorWood);
+            }
+        }
+    }
+
+    enforce_world_border(&mut world);
+    world
+}
+
 fn default_props(world: &World) -> Vec<Prop> {
     let mut props = Vec::new();
 
-    let seeds = [
-        (3, 3, PropKind::Crate, 0.0),
-        (7, 5, PropKind::Pipe, 0.6),
-        (17, 4, PropKind::Lamp, 1.2),
-        (19, 11, PropKind::Crate, 1.9),
-        (9, 12, PropKind::Lamp, 2.8),
-        (15, 9, PropKind::Pipe, 3.3),
-        (5, 11, PropKind::Plant, 1.4),
-        (20, 5, PropKind::Banner, 2.0),
-        (6, 6, PropKind::Bench, 1.0),
-        (18, 9, PropKind::Crystal, 0.3),
-    ];
-
-    for (x, y, kind, phase) in seeds {
-        if !world.is_solid(x, y) {
+    for y in (3..world.h - 3).step_by(5) {
+        for x in (3..world.w - 3).step_by(6) {
+            if world.is_solid(x, y) {
+                continue;
+            }
+            let h = hash_with_salt(x, y, 0xA3) % 19;
+            if h > 14 {
+                continue;
+            }
+            let kind = match h {
+                0..=3 => PropKind::Crate,
+                4..=6 => PropKind::Pipe,
+                7..=8 => PropKind::Lamp,
+                9..=10 => PropKind::Banner,
+                11..=12 => PropKind::Plant,
+                13 => PropKind::Bench,
+                _ => PropKind::Crystal,
+            };
             props.push(Prop {
                 tile_x: x,
                 tile_y: y,
                 kind,
-                phase,
+                phase: prop_phase_for_tile((x, y)),
+            });
+        }
+    }
+
+    let hero_spots = [
+        (world.w / 2, world.h / 2, PropKind::Bench),
+        (world.w / 2 - 2, world.h / 2, PropKind::Lamp),
+        (world.w / 2 + 2, world.h / 2, PropKind::Lamp),
+    ];
+    for (x, y, kind) in hero_spots {
+        if world.in_bounds(x, y)
+            && !world.is_solid(x, y)
+            && prop_index_at_tile(&props, (x, y)).is_none()
+        {
+            props.push(Prop {
+                tile_x: x,
+                tile_y: y,
+                kind,
+                phase: prop_phase_for_tile((x, y)),
             });
         }
     }
@@ -639,6 +763,144 @@ fn point_in_rect(point: Vec2, rect: Rect) -> bool {
         && point.y <= rect.y + rect.h
 }
 
+fn fit_world_camera_to_screen(world: &World, margin: f32) -> (Camera2D, Rect) {
+    let sw = screen_width();
+    let sh = screen_height();
+
+    let world_size_px = vec2(world.w as f32 * TILE_SIZE, world.h as f32 * TILE_SIZE);
+    let avail_w = (sw - margin * 2.0).max(1.0);
+    let avail_h = (sh - margin * 2.0).max(1.0);
+    let scale = (avail_w / world_size_px.x)
+        .min(avail_h / world_size_px.y)
+        .max(0.01);
+
+    let view_w = (world_size_px.x * scale).max(1.0);
+    let view_h = (world_size_px.y * scale).max(1.0);
+    let view_rect = Rect::new((sw - view_w) * 0.5, (sh - view_h) * 0.5, view_w, view_h);
+
+    let mut cam =
+        Camera2D::from_display_rect(Rect::new(0.0, 0.0, world_size_px.x, world_size_px.y));
+    // Keep world coordinates in the same orientation as the rest of the game (Y grows downward).
+    cam.zoom.y = cam.zoom.y.abs();
+    cam.viewport = Some((
+        view_rect.x.round() as i32,
+        (sh - view_rect.y - view_rect.h).round().max(0.0) as i32,
+        view_rect.w.round().max(1.0) as i32,
+        view_rect.h.round().max(1.0) as i32,
+    ));
+
+    (cam, view_rect)
+}
+
+fn build_world_camera_for_viewport(
+    world: &World,
+    center: Vec2,
+    zoom: f32,
+    view_rect: Rect,
+    zoom_min: f32,
+    zoom_max: f32,
+) -> (Camera2D, Vec2, f32) {
+    let world_w = (world.w as f32 * TILE_SIZE).max(1.0);
+    let world_h = (world.h as f32 * TILE_SIZE).max(1.0);
+    let zoom = zoom.clamp(zoom_min, zoom_max);
+    let camera_w = (view_rect.w / zoom).clamp(1.0, world_w);
+    let camera_h = (view_rect.h / zoom).clamp(1.0, world_h);
+
+    let mut clamped_center = center;
+    if world_w <= camera_w {
+        clamped_center.x = world_w * 0.5;
+    } else {
+        clamped_center.x = clamped_center
+            .x
+            .clamp(camera_w * 0.5, world_w - camera_w * 0.5);
+    }
+    if world_h <= camera_h {
+        clamped_center.y = world_h * 0.5;
+    } else {
+        clamped_center.y = clamped_center
+            .y
+            .clamp(camera_h * 0.5, world_h - camera_h * 0.5);
+    }
+
+    let display_rect = Rect::new(
+        clamped_center.x - camera_w * 0.5,
+        clamped_center.y - camera_h * 0.5,
+        camera_w,
+        camera_h,
+    );
+    let mut camera = Camera2D::from_display_rect(display_rect);
+    camera.zoom.y = camera.zoom.y.abs();
+    let sh = screen_height();
+    camera.viewport = Some((
+        view_rect.x.round() as i32,
+        (sh - view_rect.y - view_rect.h).round().max(0.0) as i32,
+        view_rect.w.round().max(1.0) as i32,
+        view_rect.h.round().max(1.0) as i32,
+    ));
+
+    (camera, clamped_center, zoom)
+}
+
+fn build_pannable_world_camera(
+    world: &World,
+    center: Vec2,
+    zoom: f32,
+    margin: f32,
+) -> (Camera2D, Rect, Vec2) {
+    let sw = screen_width();
+    let sh = screen_height();
+    let view_rect = Rect::new(
+        margin,
+        margin,
+        (sw - margin * 2.0).max(1.0),
+        (sh - margin * 2.0).max(1.0),
+    );
+    let (camera, clamped_center, _) = build_world_camera_for_viewport(
+        world,
+        center,
+        zoom,
+        view_rect,
+        PLAY_CAMERA_ZOOM_MIN,
+        PLAY_CAMERA_ZOOM_MAX,
+    );
+
+    (camera, view_rect, clamped_center)
+}
+
+fn tile_bounds_from_camera(
+    world: &World,
+    camera: &Camera2D,
+    view_rect: Rect,
+    padding_tiles: i32,
+) -> (i32, i32, i32, i32) {
+    if world.w <= 0 || world.h <= 0 {
+        return (0, 0, 0, 0);
+    }
+
+    let top_left = camera.screen_to_world(vec2(view_rect.x, view_rect.y));
+    let bottom_right =
+        camera.screen_to_world(vec2(view_rect.x + view_rect.w, view_rect.y + view_rect.h));
+    let min_world_x = top_left.x.min(bottom_right.x);
+    let max_world_x = top_left.x.max(bottom_right.x);
+    let min_world_y = top_left.y.min(bottom_right.y);
+    let max_world_y = top_left.y.max(bottom_right.y);
+
+    let mut min_x = (min_world_x / TILE_SIZE).floor() as i32 - padding_tiles;
+    let mut max_x = (max_world_x / TILE_SIZE).floor() as i32 + padding_tiles;
+    let mut min_y = (min_world_y / TILE_SIZE).floor() as i32 - padding_tiles;
+    let mut max_y = (max_world_y / TILE_SIZE).floor() as i32 + padding_tiles;
+
+    min_x = clamp_i32(min_x, 0, world.w - 1);
+    max_x = clamp_i32(max_x, 0, world.w - 1);
+    min_y = clamp_i32(min_y, 0, world.h - 1);
+    max_y = clamp_i32(max_y, 0, world.h - 1);
+    (min_x, max_x, min_y, max_y)
+}
+
+fn tile_in_bounds(tile: (i32, i32), bounds: (i32, i32, i32, i32)) -> bool {
+    tile.0 >= bounds.0 && tile.0 <= bounds.1 && tile.1 >= bounds.2 && tile.1 <= bounds.3
+}
+
 fn draw_ui_button(
     rect: Rect,
     label: &str,
@@ -659,18 +921,18 @@ fn draw_ui_button_sized(
 ) -> bool {
     let hovered = point_in_rect(mouse_pos, rect);
     let base = if active {
-        rgba(194, 132, 66, 238)
+        rgba(210, 150, 82, 242)
     } else if hovered {
-        rgba(80, 132, 166, 236)
+        rgba(98, 152, 188, 240)
     } else {
-        rgba(44, 68, 91, 222)
+        rgba(68, 100, 128, 236)
     };
     let top_highlight = if active {
-        with_alpha(rgba(255, 235, 196, 255), 0.22)
+        with_alpha(rgba(255, 240, 210, 255), 0.35)
     } else if hovered {
-        with_alpha(rgba(210, 240, 255, 255), 0.17)
+        with_alpha(rgba(222, 244, 255, 255), 0.28)
     } else {
-        with_alpha(rgba(180, 214, 236, 255), 0.10)
+        with_alpha(rgba(194, 226, 246, 255), 0.20)
     };
     let border = if active {
         rgba(252, 208, 138, 252)
@@ -705,14 +967,23 @@ fn draw_ui_button_sized(
             with_alpha(WHITE, 0.25),
         );
     }
+
     let dims = measure_text(label, None, font_size as u16, 1.0);
-    draw_text(
-        label,
-        rect.x + rect.w * 0.5 - dims.width * 0.5,
-        rect.y + rect.h * 0.5 + dims.height * 0.32,
-        font_size,
-        WHITE,
-    );
+    let text_x = rect.x + rect.w * 0.5 - dims.width * 0.5;
+    let text_y = rect.y + rect.h * 0.5 + dims.height * 0.32;
+    let text_fill = if active {
+        Color::from_rgba(255, 248, 232, 255)
+    } else {
+        Color::from_rgba(244, 252, 255, 255)
+    };
+    let shadow = if active {
+        with_alpha(Color::from_rgba(56, 36, 18, 255), 0.82)
+    } else {
+        with_alpha(Color::from_rgba(8, 12, 18, 255), 0.82)
+    };
+    draw_text(label, text_x + 1.0, text_y + 1.0, font_size, shadow);
+    draw_text(label, text_x, text_y, font_size, text_fill);
+
     hovered && mouse_pressed
 }
 
@@ -788,6 +1059,34 @@ fn editor_push_undo(editor: &mut EditorState, map: &MapAsset) {
 fn editor_set_status(editor: &mut EditorState, message: impl Into<String>) {
     editor.status_text = message.into();
     editor.status_timer = 3.4;
+}
+
+fn editor_reset_stroke_state(editor: &mut EditorState) {
+    editor.stroke_active = false;
+    editor.stroke_changed = false;
+    editor.drag_start = None;
+}
+
+fn editor_save_current_map(editor: &mut EditorState, map: &mut MapAsset) {
+    sanitize_map_asset(map);
+    match save_map_asset(MAP_FILE_PATH, map) {
+        Ok(()) => editor_set_status(editor, format!("Carte sauvegardee: {}", MAP_FILE_PATH)),
+        Err(err) => editor_set_status(editor, err),
+    }
+}
+
+fn editor_load_current_map(editor: &mut EditorState, map: &mut MapAsset) {
+    match load_map_asset(MAP_FILE_PATH) {
+        Ok(loaded) => {
+            *map = loaded;
+            editor.undo_stack.clear();
+            editor.redo_stack.clear();
+            editor_reset_stroke_state(editor);
+            editor.camera_initialized = false;
+            editor_set_status(editor, format!("Carte chargee: {}", MAP_FILE_PATH));
+        }
+        Err(err) => editor_set_status(editor, err),
+    }
 }
 
 fn editor_undo(editor: &mut EditorState, map: &mut MapAsset) -> bool {
@@ -925,8 +1224,14 @@ fn editor_apply_brush_rect(
 
 fn sanitize_map_asset(map: &mut MapAsset) {
     let needs_material_upgrade = map.version < MAP_FILE_VERSION;
+    let needs_layout_upgrade =
+        map.version < MAP_FILE_VERSION && (map.world.w < MAP_W || map.world.h < MAP_H);
+    if needs_layout_upgrade {
+        *map = MapAsset::new_default();
+        return;
+    }
     if map.world.w < 4 || map.world.h < 4 {
-        map.world = World::new_room(MAP_W, MAP_H);
+        map.world = generate_starter_factory_world(MAP_W, MAP_H);
     }
 
     let required = (map.world.w * map.world.h) as usize;
@@ -1005,6 +1310,8 @@ fn build_game_state_from_map(
         world: map_copy.world,
         player,
         npc,
+        camera_center: tile_center(map_copy.player_spawn),
+        camera_zoom: 1.15,
         palette,
         sim,
         props: map_copy.props,
@@ -1098,17 +1405,77 @@ fn draw_character_inspector_panel(state: &GameState, time: f32) {
 fn read_input_dir() -> Vec2 {
     let mut dir = Vec2::ZERO;
 
-    if is_key_down(KeyCode::W) || is_key_down(KeyCode::Z) || is_key_down(KeyCode::Up) {
+    if is_key_down(KeyCode::Up) {
         dir.y -= 1.0;
     }
-    if is_key_down(KeyCode::S) || is_key_down(KeyCode::Down) {
+    if is_key_down(KeyCode::Down) {
         dir.y += 1.0;
     }
-    if is_key_down(KeyCode::A) || is_key_down(KeyCode::Q) || is_key_down(KeyCode::Left) {
+    if is_key_down(KeyCode::Left) {
         dir.x -= 1.0;
     }
-    if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
+    if is_key_down(KeyCode::Right) {
         dir.x += 1.0;
+    }
+
+    if dir.length_squared() > 0.0 {
+        dir.normalize()
+    } else {
+        Vec2::ZERO
+    }
+}
+
+fn read_camera_pan_input() -> Vec2 {
+    let mut dir = Vec2::ZERO;
+
+    if is_key_down(KeyCode::W) || is_key_down(KeyCode::Z) {
+        dir.y -= 1.0;
+    }
+    if is_key_down(KeyCode::S) {
+        dir.y += 1.0;
+    }
+    if is_key_down(KeyCode::A) || is_key_down(KeyCode::Q) {
+        dir.x -= 1.0;
+    }
+    if is_key_down(KeyCode::D) {
+        dir.x += 1.0;
+    }
+
+    if dir.length_squared() > 0.0 {
+        dir.normalize()
+    } else {
+        Vec2::ZERO
+    }
+}
+
+fn read_editor_pan_input(space_held: bool) -> Vec2 {
+    let mut dir = Vec2::ZERO;
+
+    if is_key_down(KeyCode::Up) {
+        dir.y -= 1.0;
+    }
+    if is_key_down(KeyCode::Down) {
+        dir.y += 1.0;
+    }
+    if is_key_down(KeyCode::Left) {
+        dir.x -= 1.0;
+    }
+    if is_key_down(KeyCode::Right) {
+        dir.x += 1.0;
+    }
+    if space_held {
+        if is_key_down(KeyCode::W) || is_key_down(KeyCode::Z) {
+            dir.y -= 1.0;
+        }
+        if is_key_down(KeyCode::S) {
+            dir.y += 1.0;
+        }
+        if is_key_down(KeyCode::A) || is_key_down(KeyCode::Q) {
+            dir.x -= 1.0;
+        }
+        if is_key_down(KeyCode::D) {
+            dir.x += 1.0;
+        }
     }
 
     if dir.length_squared() > 0.0 {
@@ -1931,9 +2298,9 @@ fn draw_floor_tile(x: i32, y: i32, tile: Tile, palette: &Palette) {
     );
 }
 
-fn draw_floor_layer(world: &World, palette: &Palette) {
-    for y in 0..world.h {
-        for x in 0..world.w {
+fn draw_floor_layer_region(world: &World, palette: &Palette, bounds: (i32, i32, i32, i32)) {
+    for y in bounds.2..=bounds.3 {
+        for x in bounds.0..=bounds.1 {
             let tile = world.get(x, y);
             if tile_is_floor(tile) {
                 draw_floor_tile(x, y, tile, palette);
@@ -1942,9 +2309,9 @@ fn draw_floor_layer(world: &World, palette: &Palette) {
     }
 }
 
-fn draw_wall_cast_shadows(world: &World, palette: &Palette) {
-    for y in 0..world.h {
-        for x in 0..world.w {
+fn draw_wall_cast_shadows_region(world: &World, palette: &Palette, bounds: (i32, i32, i32, i32)) {
+    for y in bounds.2..=bounds.3 {
+        for x in bounds.0..=bounds.1 {
             if !tile_is_wall(world.get(x, y)) {
                 continue;
             }
@@ -2150,9 +2517,9 @@ fn draw_wall_tile(world: &World, x: i32, y: i32, tile: Tile, palette: &Palette) 
     );
 }
 
-fn draw_wall_layer(world: &World, palette: &Palette) {
-    for y in 0..world.h {
-        for x in 0..world.w {
+fn draw_wall_layer_region(world: &World, palette: &Palette, bounds: (i32, i32, i32, i32)) {
+    for y in bounds.2..=bounds.3 {
+        for x in bounds.0..=bounds.1 {
             let tile = world.get(x, y);
             if tile_is_wall(tile) {
                 draw_wall_tile(world, x, y, tile, palette);
@@ -2161,8 +2528,16 @@ fn draw_wall_layer(world: &World, palette: &Palette) {
     }
 }
 
-fn draw_prop_shadows(props: &[Prop], palette: &Palette, time: f32) {
+fn draw_prop_shadows_region(
+    props: &[Prop],
+    palette: &Palette,
+    time: f32,
+    bounds: (i32, i32, i32, i32),
+) {
     for prop in props {
+        if !tile_in_bounds((prop.tile_x, prop.tile_y), bounds) {
+            continue;
+        }
         let x = prop.tile_x as f32 * TILE_SIZE;
         let y = prop.tile_y as f32 * TILE_SIZE;
 
@@ -2232,8 +2607,11 @@ fn draw_prop_shadows(props: &[Prop], palette: &Palette, time: f32) {
     }
 }
 
-fn draw_props(props: &[Prop], palette: &Palette, time: f32) {
+fn draw_props_region(props: &[Prop], palette: &Palette, time: f32, bounds: (i32, i32, i32, i32)) {
     for prop in props {
+        if !tile_in_bounds((prop.tile_x, prop.tile_y), bounds) {
+            continue;
+        }
         let x = prop.tile_x as f32 * TILE_SIZE;
         let y = prop.tile_y as f32 * TILE_SIZE;
 
@@ -2363,8 +2741,16 @@ fn draw_props(props: &[Prop], palette: &Palette, time: f32) {
     }
 }
 
-fn draw_lighting(props: &[Prop], palette: &Palette, time: f32) {
+fn draw_lighting_region(
+    props: &[Prop],
+    palette: &Palette,
+    time: f32,
+    bounds: (i32, i32, i32, i32),
+) {
     for prop in props {
+        if !tile_in_bounds((prop.tile_x, prop.tile_y), bounds) {
+            continue;
+        }
         let cx = prop.tile_x as f32 * TILE_SIZE + TILE_SIZE * 0.5;
         let cy = prop.tile_y as f32 * TILE_SIZE + 9.0;
         if matches!(prop.kind, PropKind::Lamp) {
@@ -2571,24 +2957,24 @@ fn draw_npc_wander_overlay(npc: &NpcWanderer) {
     }
 }
 
-fn draw_editor_grid(world: &World) {
-    for x in 0..=world.w {
+fn draw_editor_grid_region(bounds: (i32, i32, i32, i32)) {
+    for x in bounds.0..=bounds.1 + 1 {
         let px = x as f32 * TILE_SIZE;
         draw_line(
             px,
-            0.0,
+            bounds.2 as f32 * TILE_SIZE,
             px,
-            world.h as f32 * TILE_SIZE,
+            (bounds.3 + 1) as f32 * TILE_SIZE,
             1.0,
             Color::from_rgba(110, 140, 165, 70),
         );
     }
-    for y in 0..=world.h {
+    for y in bounds.2..=bounds.3 + 1 {
         let py = y as f32 * TILE_SIZE;
         draw_line(
-            0.0,
+            bounds.0 as f32 * TILE_SIZE,
             py,
-            world.w as f32 * TILE_SIZE,
+            (bounds.1 + 1) as f32 * TILE_SIZE,
             py,
             1.0,
             Color::from_rgba(110, 140, 165, 70),
@@ -2599,12 +2985,24 @@ fn draw_editor_grid(world: &World) {
 fn run_main_menu_frame(map: &MapAsset, palette: &Palette, time: f32) -> Option<AppMode> {
     clear_background(palette.bg_bottom);
     draw_background(palette, time * 0.6);
-    draw_floor_layer(&map.world, palette);
-    draw_wall_cast_shadows(&map.world, palette);
-    draw_wall_layer(&map.world, palette);
-    draw_prop_shadows(&map.props, palette, time);
-    draw_props(&map.props, palette, time);
-    draw_lighting(&map.props, palette, time);
+    let (menu_camera, menu_view_rect) = fit_world_camera_to_screen(&map.world, 34.0);
+    let visible_bounds = tile_bounds_from_camera(&map.world, &menu_camera, menu_view_rect, 2);
+    set_camera(&menu_camera);
+    draw_floor_layer_region(&map.world, palette, visible_bounds);
+    draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
+    draw_wall_layer_region(&map.world, palette, visible_bounds);
+    draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
+    draw_props_region(&map.props, palette, time, visible_bounds);
+    draw_lighting_region(&map.props, palette, time, visible_bounds);
+    set_default_camera();
+    draw_rectangle_lines(
+        menu_view_rect.x + 0.5,
+        menu_view_rect.y + 0.5,
+        menu_view_rect.w - 1.0,
+        menu_view_rect.h - 1.0,
+        2.0,
+        Color::from_rgba(130, 170, 194, 165),
+    );
     draw_ambient_dust(palette, time);
     draw_vignette(palette);
 
@@ -2696,12 +3094,12 @@ fn sim_block_overlay_color(kind: sim::BlockKind) -> Color {
     }
 }
 
-fn draw_sim_zone_overlay(world: &World, sim: &sim::FactorySim) {
+fn draw_sim_zone_overlay_region(sim: &sim::FactorySim, bounds: (i32, i32, i32, i32)) {
     if !sim.zone_overlay_enabled() {
         return;
     }
-    for y in 0..world.h {
-        for x in 0..world.w {
+    for y in bounds.2..=bounds.3 {
+        for x in bounds.0..=bounds.1 {
             if let Some(color) = sim_zone_overlay_color(sim.zone_kind_at_tile((x, y))) {
                 let tile = World::tile_rect(x, y);
                 draw_rectangle(tile.x, tile.y, tile.w, tile.h, color);
@@ -2710,8 +3108,17 @@ fn draw_sim_zone_overlay(world: &World, sim: &sim::FactorySim) {
     }
 }
 
-fn draw_sim_blocks_overlay(sim: &sim::FactorySim, show_labels: bool) {
+fn draw_sim_blocks_overlay(
+    sim: &sim::FactorySim,
+    show_labels: bool,
+    bounds: Option<(i32, i32, i32, i32)>,
+) {
     for block in sim.block_debug_views() {
+        if let Some(tile_bounds) = bounds
+            && !tile_in_bounds(block.tile, tile_bounds)
+        {
+            continue;
+        }
         let rect = World::tile_rect(block.tile.0, block.tile.1);
         let color = sim_block_overlay_color(block.kind);
         draw_rectangle_lines(
@@ -2801,25 +3208,73 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
         let _ = state.sim.save_layout();
     }
 
-    let (mx, my) = mouse_position();
-    let mouse_tile = tile_from_world_clamped(&state.world, vec2(mx, my));
-    if is_key_pressed(KeyCode::M) {
-        state.sim.select_move_source(mouse_tile);
+    let wheel = mouse_wheel().1;
+    if wheel.abs() > f32::EPSILON {
+        let zoom_factor = (1.0 + wheel * PLAY_CAMERA_ZOOM_STEP).max(0.2);
+        state.camera_zoom =
+            (state.camera_zoom * zoom_factor).clamp(PLAY_CAMERA_ZOOM_MIN, PLAY_CAMERA_ZOOM_MAX);
+    }
+    if is_key_pressed(KeyCode::C) {
+        state.camera_center = state.player.pos;
+    }
+
+    let pan = read_camera_pan_input();
+    if pan.length_squared() > 0.0 {
+        let speed = PLAY_CAMERA_PAN_SPEED / state.camera_zoom.max(0.01);
+        state.camera_center += pan * speed * frame_dt;
+    }
+
+    let (world_camera, map_view_rect) = if state.world.w <= 36 && state.world.h <= 24 {
+        let (camera, rect) = fit_world_camera_to_screen(&state.world, PLAY_CAMERA_MARGIN);
+        state.camera_center = vec2(
+            state.world.w as f32 * TILE_SIZE * 0.5,
+            state.world.h as f32 * TILE_SIZE * 0.5,
+        );
+        (camera, rect)
+    } else {
+        let (camera, rect, clamped_center) = build_pannable_world_camera(
+            &state.world,
+            state.camera_center,
+            state.camera_zoom,
+            PLAY_CAMERA_MARGIN,
+        );
+        state.camera_center = clamped_center;
+        (camera, rect)
+    };
+
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    let mouse_in_map = point_in_rect(mouse, map_view_rect);
+    let mouse_world = if mouse_in_map {
+        let mut pos = world_camera.screen_to_world(mouse);
+        let world_w = state.world.w as f32 * TILE_SIZE;
+        let world_h = state.world.h as f32 * TILE_SIZE;
+        pos.x = pos.x.clamp(0.0, (world_w - 0.001).max(0.0));
+        pos.y = pos.y.clamp(0.0, (world_h - 0.001).max(0.0));
+        Some(pos)
+    } else {
+        None
+    };
+    let mouse_tile = mouse_world.map(|pos| tile_from_world_clamped(&state.world, pos));
+
+    if is_key_pressed(KeyCode::M)
+        && let Some(tile) = mouse_tile
+    {
+        state.sim.select_move_source(tile);
     }
 
     let left_click = is_mouse_button_pressed(MouseButton::Left);
     let right_click = is_mouse_button_pressed(MouseButton::Right);
     if state.sim.build_mode_enabled() {
-        if left_click {
-            state.sim.apply_build_click(mouse_tile, false);
+        if left_click && let Some(tile) = mouse_tile {
+            state.sim.apply_build_click(tile, false);
         }
-        if right_click {
-            state.sim.apply_build_click(mouse_tile, true);
+        if right_click && let Some(tile) = mouse_tile {
+            state.sim.apply_build_click(tile, true);
         }
     }
 
     let click_tile = if left_click && !state.sim.build_mode_enabled() {
-        Some(mouse_tile)
+        mouse_tile
     } else {
         None
     };
@@ -2832,25 +3287,36 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
         click_tile,
     );
 
-    *accumulator += frame_dt;
-    while *accumulator >= FIXED_DT {
+    *accumulator = (*accumulator + frame_dt).min(FIXED_DT * MAX_SIM_STEPS_PER_FRAME as f32);
+    let mut sim_steps = 0usize;
+    while *accumulator >= FIXED_DT && sim_steps < MAX_SIM_STEPS_PER_FRAME {
         state.sim.step(FIXED_DT);
         update_player(&mut state.player, &state.world, state.last_input, FIXED_DT);
         update_npc_wanderer(&mut state.npc, &state.world, &state.player, FIXED_DT);
         *accumulator -= FIXED_DT;
+        sim_steps += 1;
+    }
+    if sim_steps == MAX_SIM_STEPS_PER_FRAME && *accumulator >= FIXED_DT {
+        *accumulator = 0.0;
     }
 
     let time = get_time() as f32;
+    let visible_bounds = tile_bounds_from_camera(&state.world, &world_camera, map_view_rect, 2);
 
     clear_background(state.palette.bg_bottom);
     draw_background(&state.palette, time);
-    draw_floor_layer(&state.world, &state.palette);
-    draw_sim_zone_overlay(&state.world, &state.sim);
-    draw_wall_cast_shadows(&state.world, &state.palette);
-    draw_wall_layer(&state.world, &state.palette);
-    draw_prop_shadows(&state.props, &state.palette, time);
-    draw_props(&state.props, &state.palette, time);
-    draw_sim_blocks_overlay(&state.sim, state.debug || state.sim.build_mode_enabled());
+    set_camera(&world_camera);
+    draw_floor_layer_region(&state.world, &state.palette, visible_bounds);
+    draw_sim_zone_overlay_region(&state.sim, visible_bounds);
+    draw_wall_cast_shadows_region(&state.world, &state.palette, visible_bounds);
+    draw_wall_layer_region(&state.world, &state.palette, visible_bounds);
+    draw_prop_shadows_region(&state.props, &state.palette, time, visible_bounds);
+    draw_props_region(&state.props, &state.palette, time, visible_bounds);
+    draw_sim_blocks_overlay(
+        &state.sim,
+        state.debug || state.sim.build_mode_enabled(),
+        Some(visible_bounds),
+    );
     if state.npc.pos.y <= state.player.pos.y {
         draw_npc(&state.npc, &state.npc_character, time, state.debug);
         if let Some(player_character) = state.lineage.get(state.player_lineage_index) {
@@ -2865,9 +3331,31 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
     if state.debug {
         draw_auto_move_overlay(&state.player);
         draw_npc_wander_overlay(&state.npc);
+        let tx = (state.player.pos.x / TILE_SIZE).floor() as i32;
+        let ty = (state.player.pos.y / TILE_SIZE).floor() as i32;
+        let tile_rect = World::tile_rect(tx, ty);
+        draw_rectangle_lines(
+            tile_rect.x,
+            tile_rect.y,
+            tile_rect.w,
+            tile_rect.h,
+            2.0,
+            YELLOW,
+        );
     }
     draw_sim_agent_overlay(&state.sim, state.debug || state.sim.build_mode_enabled());
-    draw_lighting(&state.props, &state.palette, time);
+    draw_lighting_region(&state.props, &state.palette, time, visible_bounds);
+    set_default_camera();
+
+    draw_rectangle_lines(
+        map_view_rect.x + 0.5,
+        map_view_rect.y + 0.5,
+        map_view_rect.w - 1.0,
+        map_view_rect.h - 1.0,
+        2.0,
+        Color::from_rgba(170, 213, 237, 135),
+    );
+
     draw_ambient_dust(&state.palette, time);
     draw_vignette(&state.palette);
 
@@ -2878,16 +3366,6 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
     if state.debug {
         let tx = (state.player.pos.x / TILE_SIZE).floor() as i32;
         let ty = (state.player.pos.y / TILE_SIZE).floor() as i32;
-
-        let tile_rect = World::tile_rect(tx, ty);
-        draw_rectangle_lines(
-            tile_rect.x,
-            tile_rect.y,
-            tile_rect.w,
-            tile_rect.h,
-            2.0,
-            YELLOW,
-        );
 
         let mask = wall_mask_4(&state.world, tx, ty);
         let player_visual = state
@@ -2908,7 +3386,7 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
             .map(|(x, y)| format!("({}, {})", x, y))
             .unwrap_or_else(|| "none".to_string());
         let info = format!(
-            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran\nF1: debug on/off | F2: inspector | F3: regenerate\nmouse: click-to-move | keyboard: manual override\nplayer pos(px)=({:.1},{:.1}) tile=({},{})\nmode={} walking={} frame={} facing={} facing_left={} walk_cycle={:.2}\ninput=({:.2},{:.2}) fps={}\nplayer_path_nodes={} next_wp={} target_tile={}\nnpc pos=({:.1},{:.1}) walking={} bubble={:.2}s cooldown={:.2}s npc_path_nodes={} npc_target={}\nwall_mask@tile={:04b}\nmutation_permille={} visual={}\n{}",
+            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran\nF1: debug on/off | F2: inspector | F3: regenerate\ncamera: ZQSD/WASD pan | molette zoom | C recentrer\nmouse: click-to-move sur la map | fleches: override manuel\nplayer pos(px)=({:.1},{:.1}) tile=({},{})\nmode={} walking={} frame={} facing={} facing_left={} walk_cycle={:.2}\ninput=({:.2},{:.2}) camera=({:.1},{:.1}) zoom={:.2} fps={}\nplayer_path_nodes={} next_wp={} target_tile={}\nnpc pos=({:.1},{:.1}) walking={} bubble={:.2}s cooldown={:.2}s npc_path_nodes={} npc_target={}\nwall_mask@tile={:04b}\nmutation_permille={} visual={}\n{}",
             state.player.pos.x,
             state.player.pos.y,
             tx,
@@ -2921,6 +3399,9 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
             state.player.walk_cycle,
             state.last_input.x,
             state.last_input.y,
+            state.camera_center.x,
+            state.camera_center.y,
+            state.camera_zoom,
             get_fps(),
             state.player.auto.path_world.len(),
             state.player.auto.next_waypoint,
@@ -2946,13 +3427,20 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
             24.0,
             Color::from_rgba(220, 235, 242, 255),
         );
+        draw_text(
+            "Camera: ZQSD/WASD pan | molette zoom | C recentrer",
+            12.0,
+            48.0,
+            20.0,
+            Color::from_rgba(200, 224, 236, 255),
+        );
         let hud = state.sim.short_hud();
-        draw_text(&hud, 12.0, 48.0, 22.0, Color::from_rgba(200, 224, 236, 255));
+        draw_text(&hud, 12.0, 72.0, 22.0, Color::from_rgba(200, 224, 236, 255));
         let build = state.sim.build_hint_line();
         draw_text(
             &build,
             12.0,
-            72.0,
+            96.0,
             18.0,
             Color::from_rgba(182, 210, 228, 255),
         );
@@ -2960,7 +3448,7 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
             draw_text(
                 state.sim.status_line(),
                 12.0,
-                94.0,
+                118.0,
                 18.0,
                 Color::from_rgba(252, 228, 182, 255),
             );
@@ -2980,54 +3468,104 @@ fn run_editor_frame(
         editor.status_timer = (editor.status_timer - get_frame_time()).max(0.0);
     }
 
+    let frame_dt = get_frame_time().min(0.05);
     let mouse = vec2(mouse_position().0, mouse_position().1);
     let left_pressed = is_mouse_button_pressed(MouseButton::Left);
     let left_down = is_mouse_button_down(MouseButton::Left);
     let left_released = is_mouse_button_released(MouseButton::Left);
+    let middle_down = is_mouse_button_down(MouseButton::Middle);
     let ctrl_down = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+    let space_down = is_key_down(KeyCode::Space);
 
+    let sw = screen_width();
+    let sh = screen_height();
     let margin = 10.0;
-    let min_map_w = 280.0;
-    let max_panel_w = (screen_width() - min_map_w - margin * 3.0).max(220.0);
-    let panel_w = (screen_width() * 0.30).clamp(260.0, 380.0).min(max_panel_w);
-    let panel_rect = Rect::new(
-        screen_width() - panel_w - margin,
-        margin,
-        panel_w,
-        screen_height() - margin * 2.0,
-    );
+    let top_bar_h = 64.0;
+    let panel_top = margin + top_bar_h + margin;
+    let panel_h = (sh - panel_top - margin).max(180.0);
+
+    let mut left_panel_w = (sw * 0.18).clamp(220.0, 300.0);
+    let mut right_panel_w = (sw * 0.24).clamp(280.0, 390.0);
+    let min_map_w = 420.0;
+    let mut map_w = sw - left_panel_w - right_panel_w - margin * 4.0;
+    if map_w < min_map_w {
+        let mut deficit = min_map_w - map_w;
+        let shrink_right = deficit.min((right_panel_w - 240.0).max(0.0));
+        right_panel_w -= shrink_right;
+        deficit -= shrink_right;
+        let shrink_left = deficit.min((left_panel_w - 190.0).max(0.0));
+        left_panel_w -= shrink_left;
+        map_w = sw - left_panel_w - right_panel_w - margin * 4.0;
+    }
+    map_w = map_w.max(180.0);
+
+    let top_bar_rect = Rect::new(margin, margin, (sw - margin * 2.0).max(240.0), top_bar_h);
+    let left_panel_rect = Rect::new(margin, panel_top, left_panel_w, panel_h);
     let map_slot_rect = Rect::new(
-        margin,
-        margin,
-        (panel_rect.x - margin * 2.0).max(180.0),
-        (screen_height() - margin * 2.0).max(180.0),
+        left_panel_rect.x + left_panel_rect.w + margin,
+        panel_top,
+        map_w,
+        panel_h,
     );
+    let right_panel_rect = Rect::new(
+        map_slot_rect.x + map_slot_rect.w + margin,
+        panel_top,
+        right_panel_w,
+        panel_h,
+    );
+    let map_view_rect = map_slot_rect;
+
+    if !editor.camera_initialized {
+        editor.camera_center = tile_center(map.player_spawn);
+        editor.camera_zoom = 1.0;
+        editor.camera_initialized = true;
+    }
+
+    let mouse_over_map = point_in_rect(mouse, map_view_rect);
+    let wheel = mouse_wheel().1;
+    if mouse_over_map && wheel.abs() > f32::EPSILON {
+        let zoom_factor = (1.0 + wheel * EDITOR_CAMERA_ZOOM_STEP).max(0.2);
+        editor.camera_zoom = (editor.camera_zoom * zoom_factor)
+            .clamp(EDITOR_CAMERA_ZOOM_MIN, EDITOR_CAMERA_ZOOM_MAX);
+    }
+    if is_key_pressed(KeyCode::PageUp) {
+        editor.camera_zoom =
+            (editor.camera_zoom * 1.15).clamp(EDITOR_CAMERA_ZOOM_MIN, EDITOR_CAMERA_ZOOM_MAX);
+    }
+    if is_key_pressed(KeyCode::PageDown) {
+        editor.camera_zoom =
+            (editor.camera_zoom / 1.15).clamp(EDITOR_CAMERA_ZOOM_MIN, EDITOR_CAMERA_ZOOM_MAX);
+    }
+    if is_key_pressed(KeyCode::Home) {
+        editor.camera_center = tile_center(map.player_spawn);
+    }
+
+    let pan_input = read_editor_pan_input(space_down);
+    if pan_input.length_squared() > 0.0 {
+        let pan_speed = EDITOR_CAMERA_PAN_SPEED / editor.camera_zoom.max(0.01);
+        editor.camera_center += pan_input * pan_speed * frame_dt;
+    }
+    if middle_down && mouse_over_map {
+        let delta = mouse_delta_position();
+        editor.camera_center -= delta / editor.camera_zoom.max(0.01);
+    }
+
+    let (world_camera, clamped_center, clamped_zoom) = build_world_camera_for_viewport(
+        &map.world,
+        editor.camera_center,
+        editor.camera_zoom,
+        map_view_rect,
+        EDITOR_CAMERA_ZOOM_MIN,
+        EDITOR_CAMERA_ZOOM_MAX,
+    );
+    editor.camera_center = clamped_center;
+    editor.camera_zoom = clamped_zoom;
+
     let world_size_px = vec2(
         map.world.w as f32 * TILE_SIZE,
         map.world.h as f32 * TILE_SIZE,
     );
-    let map_scale = (map_slot_rect.w / world_size_px.x)
-        .min(map_slot_rect.h / world_size_px.y)
-        .max(0.01);
-    let map_view_rect = Rect::new(
-        map_slot_rect.x + (map_slot_rect.w - world_size_px.x * map_scale) * 0.5,
-        map_slot_rect.y + (map_slot_rect.h - world_size_px.y * map_scale) * 0.5,
-        (world_size_px.x * map_scale).max(1.0),
-        (world_size_px.y * map_scale).max(1.0),
-    );
-    let mut world_camera =
-        Camera2D::from_display_rect(Rect::new(0.0, 0.0, world_size_px.x, world_size_px.y));
-    world_camera.viewport = Some((
-        map_view_rect.x.round() as i32,
-        (screen_height() - map_view_rect.y - map_view_rect.h)
-            .round()
-            .max(0.0) as i32,
-        map_view_rect.w.round().max(1.0) as i32,
-        map_view_rect.h.round().max(1.0) as i32,
-    ));
-    let mouse_in_world = point_in_rect(mouse, map_view_rect);
-    let over_panel = point_in_rect(mouse, panel_rect);
-    let world_mouse = if mouse_in_world {
+    let world_mouse = if mouse_over_map {
         let mut pos = world_camera.screen_to_world(mouse);
         pos.x = pos.x.clamp(0.0, (world_size_px.x - 0.001).max(0.0));
         pos.y = pos.y.clamp(0.0, (world_size_px.y - 0.001).max(0.0));
@@ -3036,6 +3574,7 @@ fn run_editor_frame(
         None
     };
     editor.hover_tile = world_mouse.map(|pos| tile_from_world_clamped(&map.world, pos));
+    let visible_bounds = tile_bounds_from_camera(&map.world, &world_camera, map_view_rect, 2);
 
     if is_key_pressed(KeyCode::Key1) {
         editor.brush = EditorBrush::Floor;
@@ -3067,10 +3606,10 @@ fn run_editor_frame(
     if is_key_pressed(KeyCode::Key0) {
         editor.brush = EditorBrush::Crate;
     }
-    if is_key_pressed(KeyCode::Q) {
+    if !space_down && is_key_pressed(KeyCode::Q) {
         editor.brush = EditorBrush::Pipe;
     }
-    if is_key_pressed(KeyCode::W) {
+    if !space_down && is_key_pressed(KeyCode::W) {
         editor.brush = EditorBrush::Lamp;
     }
     if is_key_pressed(KeyCode::E) {
@@ -3105,24 +3644,10 @@ fn run_editor_frame(
         let _ = editor_redo(editor, map);
     }
     if ctrl_down && is_key_pressed(KeyCode::S) {
-        sanitize_map_asset(map);
-        match save_map_asset(MAP_FILE_PATH, map) {
-            Ok(()) => editor_set_status(editor, format!("Carte sauvegardee: {}", MAP_FILE_PATH)),
-            Err(err) => editor_set_status(editor, err),
-        }
+        editor_save_current_map(editor, map);
     }
     if ctrl_down && is_key_pressed(KeyCode::L) {
-        match load_map_asset(MAP_FILE_PATH) {
-            Ok(loaded) => {
-                *map = loaded;
-                editor.undo_stack.clear();
-                editor.redo_stack.clear();
-                editor.stroke_active = false;
-                editor.stroke_changed = false;
-                editor_set_status(editor, format!("Carte chargee: {}", MAP_FILE_PATH));
-            }
-            Err(err) => editor_set_status(editor, err),
-        }
+        editor_load_current_map(editor, map);
     }
 
     if is_key_pressed(KeyCode::P)
@@ -3140,8 +3665,13 @@ fn run_editor_frame(
         editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1));
     }
 
+    let over_ui = point_in_rect(mouse, top_bar_rect)
+        || point_in_rect(mouse, left_panel_rect)
+        || point_in_rect(mouse, right_panel_rect);
+    let can_edit_map = mouse_over_map && !over_ui;
+
     if editor.tool == EditorTool::Brush {
-        if left_pressed && !over_panel && editor.hover_tile.is_some() {
+        if left_pressed && can_edit_map && editor.hover_tile.is_some() {
             editor_push_undo(editor, map);
             editor.stroke_active = true;
             editor.stroke_changed = false;
@@ -3166,7 +3696,7 @@ fn run_editor_frame(
             editor.stroke_changed = false;
         }
     } else {
-        if left_pressed && !over_panel {
+        if left_pressed && can_edit_map {
             editor.drag_start = editor.hover_tile;
         }
         if left_released {
@@ -3199,15 +3729,15 @@ fn run_editor_frame(
 
     set_camera(&world_camera);
 
-    draw_floor_layer(&map.world, palette);
-    draw_wall_cast_shadows(&map.world, palette);
-    draw_wall_layer(&map.world, palette);
-    draw_prop_shadows(&map.props, palette, time);
-    draw_props(&map.props, palette, time);
-    draw_lighting(&map.props, palette, time);
+    draw_floor_layer_region(&map.world, palette, visible_bounds);
+    draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
+    draw_wall_layer_region(&map.world, palette, visible_bounds);
+    draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
+    draw_props_region(&map.props, palette, time, visible_bounds);
+    draw_lighting_region(&map.props, palette, time, visible_bounds);
 
     if editor.show_grid {
-        draw_editor_grid(&map.world);
+        draw_editor_grid_region(visible_bounds);
     }
 
     if let Some(tile) = editor.hover_tile {
@@ -3297,131 +3827,180 @@ fn run_editor_frame(
         Color::from_rgba(170, 213, 237, 220),
     );
 
+    draw_ambient_dust(palette, time);
+    draw_vignette(palette);
+
     draw_rectangle(
-        panel_rect.x,
-        panel_rect.y,
-        panel_rect.w,
-        panel_rect.h,
-        Color::from_rgba(10, 16, 22, 220),
+        top_bar_rect.x,
+        top_bar_rect.y,
+        top_bar_rect.w,
+        top_bar_rect.h,
+        Color::from_rgba(10, 18, 26, 228),
     );
     draw_rectangle_lines(
-        panel_rect.x + 0.5,
-        panel_rect.y + 0.5,
-        panel_rect.w - 1.0,
-        panel_rect.h - 1.0,
+        top_bar_rect.x + 0.5,
+        top_bar_rect.y + 0.5,
+        top_bar_rect.w - 1.0,
+        top_bar_rect.h - 1.0,
         1.8,
-        Color::from_rgba(94, 133, 157, 235),
+        Color::from_rgba(92, 133, 162, 238),
     );
-
     draw_text(
-        "EDITEUR DE CARTE",
-        panel_rect.x + 14.0,
-        panel_rect.y + 26.0,
-        28.0,
-        Color::from_rgba(227, 238, 245, 255),
+        "EDITEUR USINE",
+        top_bar_rect.x + 16.0,
+        top_bar_rect.y + 26.0,
+        30.0,
+        Color::from_rgba(230, 242, 250, 255),
     );
     draw_text(
         &format!(
-            "Carte: {} | {}x{} | Objets: {}",
+            "{} | {}x{} | props {}",
             map.label,
             map.world.w,
             map.world.h,
             map.props.len()
         ),
-        panel_rect.x + 14.0,
-        panel_rect.y + 48.0,
-        20.0,
-        Color::from_rgba(178, 204, 218, 255),
+        top_bar_rect.x + 16.0,
+        top_bar_rect.y + 48.0,
+        18.0,
+        Color::from_rgba(176, 206, 223, 255),
     );
 
+    let top_button_h = 34.0;
+    let top_button_w = 102.0;
+    let top_button_gap = 8.0;
+    let top_button_y = top_bar_rect.y + (top_bar_rect.h - top_button_h) * 0.5;
+    let mut right_cursor = top_bar_rect.x + top_bar_rect.w - 12.0;
+    right_cursor -= top_button_w;
+    let load_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
+    right_cursor -= top_button_gap + top_button_w;
+    let save_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
+    right_cursor -= top_button_gap + top_button_w;
+    let menu_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
+    right_cursor -= top_button_gap + top_button_w;
+    let play_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
+
     let mut action = EditorAction::None;
-    let panel_pad = 14.0;
-    let panel_gap = 10.0;
-    let column_w = ((panel_rect.w - panel_pad * 2.0 - panel_gap) * 0.5).max(100.0);
-    let left_x = panel_rect.x + panel_pad;
-    let right_x = left_x + column_w + panel_gap;
-
-    let play_rect = Rect::new(left_x, panel_rect.y + 64.0, column_w, 40.0);
-    let menu_rect = Rect::new(right_x, panel_rect.y + 64.0, column_w, 40.0);
-    let save_rect = Rect::new(left_x, panel_rect.y + 112.0, column_w, 34.0);
-    let load_rect = Rect::new(right_x, panel_rect.y + 112.0, column_w, 34.0);
-    let undo_rect = Rect::new(left_x, panel_rect.y + 154.0, column_w, 34.0);
-    let redo_rect = Rect::new(right_x, panel_rect.y + 154.0, column_w, 34.0);
-
-    if draw_ui_button(play_rect, "Lancer (F5)", mouse, left_pressed, false)
+    if draw_ui_button(play_rect, "Jouer F5", mouse, left_pressed, false)
         || is_key_pressed(KeyCode::F5)
     {
         sanitize_map_asset(map);
         action = EditorAction::StartPlay;
     }
-    if draw_ui_button(menu_rect, "Menu (Esc)", mouse, left_pressed, false)
+    if draw_ui_button(menu_rect, "Menu Esc", mouse, left_pressed, false)
         || is_key_pressed(KeyCode::Escape)
     {
         action = EditorAction::BackToMenu;
     }
     if draw_ui_button(save_rect, "Sauver", mouse, left_pressed, false) {
-        sanitize_map_asset(map);
-        match save_map_asset(MAP_FILE_PATH, map) {
-            Ok(()) => editor_set_status(editor, format!("Carte sauvegardee: {}", MAP_FILE_PATH)),
-            Err(err) => editor_set_status(editor, err),
-        }
+        editor_save_current_map(editor, map);
     }
     if draw_ui_button(load_rect, "Charger", mouse, left_pressed, false) {
-        match load_map_asset(MAP_FILE_PATH) {
-            Ok(loaded) => {
-                *map = loaded;
-                editor.undo_stack.clear();
-                editor.redo_stack.clear();
-                editor.stroke_active = false;
-                editor.stroke_changed = false;
-                editor_set_status(editor, format!("Carte chargee: {}", MAP_FILE_PATH));
-            }
-            Err(err) => editor_set_status(editor, err),
-        }
+        editor_load_current_map(editor, map);
     }
-    if draw_ui_button(undo_rect, "Annuler", mouse, left_pressed, false) {
+
+    draw_rectangle(
+        left_panel_rect.x,
+        left_panel_rect.y,
+        left_panel_rect.w,
+        left_panel_rect.h,
+        Color::from_rgba(9, 15, 22, 222),
+    );
+    draw_rectangle_lines(
+        left_panel_rect.x + 0.5,
+        left_panel_rect.y + 0.5,
+        left_panel_rect.w - 1.0,
+        left_panel_rect.h - 1.0,
+        1.8,
+        Color::from_rgba(88, 124, 146, 232),
+    );
+
+    draw_rectangle(
+        right_panel_rect.x,
+        right_panel_rect.y,
+        right_panel_rect.w,
+        right_panel_rect.h,
+        Color::from_rgba(9, 15, 22, 222),
+    );
+    draw_rectangle_lines(
+        right_panel_rect.x + 0.5,
+        right_panel_rect.y + 0.5,
+        right_panel_rect.w - 1.0,
+        right_panel_rect.h - 1.0,
+        1.8,
+        Color::from_rgba(88, 124, 146, 232),
+    );
+
+    draw_text(
+        "TOOLBOX",
+        left_panel_rect.x + 14.0,
+        left_panel_rect.y + 24.0,
+        24.0,
+        Color::from_rgba(214, 232, 244, 255),
+    );
+
+    let left_pad = 14.0;
+    let left_content_w = left_panel_rect.w - left_pad * 2.0;
+    let undo_w = ((left_content_w - 8.0) * 0.5).max(80.0);
+    let undo_rect = Rect::new(
+        left_panel_rect.x + left_pad,
+        left_panel_rect.y + 34.0,
+        undo_w,
+        30.0,
+    );
+    let redo_rect = Rect::new(
+        undo_rect.x + undo_rect.w + 8.0,
+        left_panel_rect.y + 34.0,
+        undo_w,
+        30.0,
+    );
+    if draw_ui_button_sized(undo_rect, "Annuler", mouse, left_pressed, false, 14.0) {
         let _ = editor_undo(editor, map);
     }
-    if draw_ui_button(redo_rect, "Retablir", mouse, left_pressed, false) {
+    if draw_ui_button_sized(redo_rect, "Retablir", mouse, left_pressed, false, 14.0) {
         let _ = editor_redo(editor, map);
     }
 
+    let tool_label_y = left_panel_rect.y + 86.0;
     draw_text(
-        "Outils",
-        panel_rect.x + 14.0,
-        panel_rect.y + 208.0,
-        22.0,
-        Color::from_rgba(206, 224, 235, 255),
+        "Outil",
+        left_panel_rect.x + 14.0,
+        tool_label_y,
+        20.0,
+        Color::from_rgba(190, 216, 231, 255),
     );
-
-    let tool_brush_rect = Rect::new(left_x, panel_rect.y + 218.0, column_w, 32.0);
-    let tool_rect_rect = Rect::new(right_x, panel_rect.y + 218.0, column_w, 32.0);
-    if draw_ui_button(
+    let tool_brush_rect = Rect::new(
+        left_panel_rect.x + left_pad,
+        tool_label_y + 8.0,
+        left_content_w,
+        30.0,
+    );
+    let tool_rect_rect = Rect::new(
+        left_panel_rect.x + left_pad,
+        tool_label_y + 44.0,
+        left_content_w,
+        30.0,
+    );
+    if draw_ui_button_sized(
         tool_brush_rect,
         "Pinceau (B)",
         mouse,
         left_pressed,
         editor.tool == EditorTool::Brush,
+        14.0,
     ) {
         editor.tool = EditorTool::Brush;
     }
-    if draw_ui_button(
+    if draw_ui_button_sized(
         tool_rect_rect,
         "Rectangle (R)",
         mouse,
         left_pressed,
         editor.tool == EditorTool::Rect,
+        14.0,
     ) {
         editor.tool = EditorTool::Rect;
     }
-
-    draw_text(
-        "Pinceaux",
-        panel_rect.x + 14.0,
-        panel_rect.y + 266.0,
-        20.0,
-        Color::from_rgba(206, 224, 235, 255),
-    );
 
     let brushes = [
         (EditorBrush::Floor, "1 Sol"),
@@ -3442,21 +4021,28 @@ fn run_editor_frame(
         (EditorBrush::Crystal, "U Cristal"),
         (EditorBrush::EraseProp, "X Effacer"),
     ];
-    let brush_columns = if panel_rect.w >= 338.0 { 3 } else { 2 };
-    let brush_gap = 8.0;
-    let brush_button_w =
-        ((panel_rect.w - panel_pad * 2.0 - brush_gap * (brush_columns as f32 - 1.0))
-            / brush_columns as f32)
-            .max(78.0);
-    let brush_button_h = 20.0;
-    let brush_step_y = 23.0;
 
+    let brush_title_y = tool_label_y + 90.0;
+    draw_text(
+        "Pinceaux",
+        left_panel_rect.x + 14.0,
+        brush_title_y,
+        20.0,
+        Color::from_rgba(190, 216, 231, 255),
+    );
+    let brush_columns = if left_panel_rect.w > 250.0 { 2 } else { 1 };
+    let brush_gap = 8.0;
+    let brush_button_w = ((left_content_w - brush_gap * (brush_columns as f32 - 1.0))
+        / brush_columns as f32)
+        .max(78.0);
+    let brush_button_h = 22.0;
+    let brush_step_y = 25.0;
     for (i, (brush, label)) in brushes.iter().enumerate() {
         let row = i / brush_columns;
         let col = i % brush_columns;
         let rect = Rect::new(
-            panel_rect.x + panel_pad + col as f32 * (brush_button_w + brush_gap),
-            panel_rect.y + 272.0 + row as f32 * brush_step_y,
+            left_panel_rect.x + left_pad + col as f32 * (brush_button_w + brush_gap),
+            brush_title_y + 8.0 + row as f32 * brush_step_y,
             brush_button_w,
             brush_button_h,
         );
@@ -3471,21 +4057,59 @@ fn run_editor_frame(
             editor.brush = *brush;
         }
     }
-
     let brush_rows = brushes.len().div_ceil(brush_columns);
-    let info_y = panel_rect.y + 272.0 + brush_rows as f32 * brush_step_y + 9.0;
+    let left_help_y = brush_title_y + 8.0 + brush_rows as f32 * brush_step_y + 10.0;
+
+    let toggle_grid_rect = Rect::new(
+        left_panel_rect.x + left_pad,
+        left_help_y,
+        left_content_w,
+        28.0,
+    );
+    if draw_ui_button_sized(
+        toggle_grid_rect,
+        if editor.show_grid {
+            "Grille: ON (G)"
+        } else {
+            "Grille: OFF (G)"
+        },
+        mouse,
+        left_pressed,
+        editor.show_grid,
+        13.0,
+    ) {
+        editor.show_grid = !editor.show_grid;
+    }
 
     draw_text(
-        &format!(
-            "Actif: {} | {} | Grille: {}",
-            editor_tool_label(editor.tool),
-            editor_brush_label(editor.brush),
-            if editor.show_grid { "Oui" } else { "Non" }
-        ),
-        panel_rect.x + 14.0,
-        info_y,
-        15.0,
-        Color::from_rgba(198, 220, 233, 255),
+        "INSPECTOR",
+        right_panel_rect.x + 14.0,
+        right_panel_rect.y + 24.0,
+        24.0,
+        Color::from_rgba(214, 232, 244, 255),
+    );
+    let inspector_text = format!(
+        "Actif: {} / {}\nCamera: x={:.0} y={:.0} zoom={:.2}\nViewport tuiles: x[{}..{}] y[{}..{}]\nSpawn joueur: ({}, {})\nSpawn PNJ: ({}, {})",
+        editor_tool_label(editor.tool),
+        editor_brush_label(editor.brush),
+        editor.camera_center.x,
+        editor.camera_center.y,
+        editor.camera_zoom,
+        visible_bounds.0,
+        visible_bounds.1,
+        visible_bounds.2,
+        visible_bounds.3,
+        map.player_spawn.0,
+        map.player_spawn.1,
+        map.npc_spawn.0,
+        map.npc_spawn.1,
+    );
+    draw_text(
+        &inspector_text,
+        right_panel_rect.x + 14.0,
+        right_panel_rect.y + 50.0,
+        17.0,
+        Color::from_rgba(186, 209, 224, 255),
     );
 
     if let Some(tile) = editor.hover_tile {
@@ -3494,47 +4118,104 @@ fn run_editor_frame(
             prop_index_at_tile(&map.props, tile).map(|idx| prop_kind_label(map.props[idx].kind));
         draw_text(
             &format!(
-                "Case ({}, {})={} objet={}",
+                "Case survolee: ({}, {})\nTuile: {}\nObjet: {}",
                 tile.0,
                 tile.1,
                 tile_label(tile_kind),
-                prop_at.unwrap_or("aucun"),
+                prop_at.unwrap_or("aucun")
             ),
-            panel_rect.x + 14.0,
-            info_y + 19.0,
-            15.0,
-            Color::from_rgba(168, 194, 208, 255),
-        );
-    }
-
-    draw_text(
-        "Ctrl+S/L  Ctrl+Z/Y  P/N points apparition  G grille  F11 plein ecran",
-        panel_rect.x + 14.0,
-        panel_rect.y + panel_rect.h - 30.0,
-        14.0,
-        Color::from_rgba(160, 187, 202, 255),
-    );
-
-    if editor.status_timer > 0.0 {
-        draw_text(
-            &editor.status_text,
-            panel_rect.x + 14.0,
-            panel_rect.y + panel_rect.h - 46.0,
-            16.0,
-            Color::from_rgba(252, 232, 188, 255),
+            right_panel_rect.x + 14.0,
+            right_panel_rect.y + 160.0,
+            18.0,
+            Color::from_rgba(214, 232, 244, 255),
         );
     } else {
         draw_text(
-            "Pret",
-            panel_rect.x + 14.0,
-            panel_rect.y + panel_rect.h - 46.0,
-            16.0,
-            Color::from_rgba(182, 205, 218, 255),
+            "Case survolee: aucune",
+            right_panel_rect.x + 14.0,
+            right_panel_rect.y + 160.0,
+            18.0,
+            Color::from_rgba(166, 188, 204, 255),
         );
     }
 
-    draw_ambient_dust(palette, time);
-    draw_vignette(palette);
+    let center_cam_rect = Rect::new(
+        right_panel_rect.x + 14.0,
+        right_panel_rect.y + 232.0,
+        right_panel_rect.w - 28.0,
+        30.0,
+    );
+    if draw_ui_button_sized(
+        center_cam_rect,
+        "Centrer camera (Home)",
+        mouse,
+        left_pressed,
+        false,
+        13.0,
+    ) {
+        editor.camera_center = tile_center(map.player_spawn);
+    }
+
+    let set_player_rect = Rect::new(
+        right_panel_rect.x + 14.0,
+        right_panel_rect.y + 270.0,
+        right_panel_rect.w - 28.0,
+        30.0,
+    );
+    if draw_ui_button_sized(
+        set_player_rect,
+        "Definir spawn joueur (P)",
+        mouse,
+        left_pressed,
+        false,
+        13.0,
+    ) && let Some(tile) = editor.hover_tile
+        && !map.world.is_solid(tile.0, tile.1)
+    {
+        map.player_spawn = tile;
+        editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1));
+    }
+
+    let set_npc_rect = Rect::new(
+        right_panel_rect.x + 14.0,
+        right_panel_rect.y + 308.0,
+        right_panel_rect.w - 28.0,
+        30.0,
+    );
+    if draw_ui_button_sized(
+        set_npc_rect,
+        "Definir spawn PNJ (N)",
+        mouse,
+        left_pressed,
+        false,
+        13.0,
+    ) && let Some(tile) = editor.hover_tile
+        && !map.world.is_solid(tile.0, tile.1)
+    {
+        map.npc_spawn = tile;
+        editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1));
+    }
+
+    draw_text(
+        "Raccourcis:\nCtrl+S/L sauver/charger\nCtrl+Z/Y undo/redo\nF11 plein ecran\nPan: fleches ou Space+ZQSD\nZoom: molette / PageUp/Down\nDrag camera: molette maintenue",
+        right_panel_rect.x + 14.0,
+        right_panel_rect.y + right_panel_rect.h - 126.0,
+        15.0,
+        Color::from_rgba(160, 186, 202, 255),
+    );
+
+    let status_text = if editor.status_timer > 0.0 {
+        editor.status_text.as_str()
+    } else {
+        "Pret"
+    };
+    draw_text(
+        status_text,
+        top_bar_rect.x + 16.0,
+        top_bar_rect.y + top_bar_rect.h - 6.0,
+        16.0,
+        Color::from_rgba(252, 232, 188, 255),
+    );
 
     action
 }
@@ -3865,6 +4546,25 @@ mod tests {
         assert!(prop_index_at_tile(&map.props, (0, 0)).is_none());
         assert!(!map.world.is_solid(map.player_spawn.0, map.player_spawn.1));
         assert!(!map.world.is_solid(map.npc_spawn.0, map.npc_spawn.1));
+    }
+
+    #[test]
+    fn sanitize_upgrades_legacy_small_map_to_starter_factory_layout() {
+        let mut map = MapAsset {
+            version: 1,
+            label: "Legacy".to_string(),
+            world: World::new_room(25, 15),
+            props: Vec::new(),
+            player_spawn: (2, 2),
+            npc_spawn: (20, 10),
+        };
+
+        sanitize_map_asset(&mut map);
+
+        assert_eq!(map.version, MAP_FILE_VERSION);
+        assert_eq!(map.world.w, MAP_W);
+        assert_eq!(map.world.h, MAP_H);
+        assert_eq!(map.label, "Starter Factory");
     }
 
     #[test]
