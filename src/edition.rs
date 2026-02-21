@@ -322,26 +322,38 @@ pub(crate) fn build_game_state_from_map(
 
     let sim = sim::FactorySim::load_or_default(SIM_CONFIG_PATH, map_copy.world.w, map_copy.world.h);
 
-    let pawns = vec![
+    let mut pawns = vec![
         PawnCard {
             key: PawnKey::Player,
             name: "Patron".to_string(),
             role: "Management".to_string(),
             metrics: PawnMetrics::seeded(lineage_seed ^ 0x1111_2222_3333_4444),
+            history: crate::historique::HistoriqueLog::new(600),
         },
         PawnCard {
             key: PawnKey::Npc,
             name: npc_character.label.clone(),
             role: "Visiteur".to_string(),
             metrics: PawnMetrics::seeded(lineage_seed ^ 0x9999_AAAA_BBBB_CCCC),
+            history: crate::historique::HistoriqueLog::new(600),
         },
         PawnCard {
             key: PawnKey::SimWorker,
             name: "Employe 01".to_string(),
             role: "Operateur".to_string(),
             metrics: PawnMetrics::seeded(lineage_seed ^ 0x0F0F_55AA_00FF_7788),
+            history: crate::historique::HistoriqueLog::new(600),
         },
     ];
+
+    for pawn in &mut pawns {
+        pawn.history.push(
+            0.0,
+            crate::historique::LogCategorie::Systeme,
+            "Arrive sur le site.".to_string(),
+        );
+    }
+    let social_state = social::SocialState::new(&pawns, lineage_seed);
 
     let pawn_ui = PawnsUiState {
         selected: Some(PawnKey::Player),
@@ -364,6 +376,7 @@ pub(crate) fn build_game_state_from_map(
         npc_character,
         sim_worker_character,
         pawns,
+        social_state,
         pawn_ui,
         show_character_inspector: false,
         debug: false,

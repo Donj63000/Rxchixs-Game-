@@ -6,6 +6,19 @@ pub(crate) enum PlayAction {
     OpenEditor,
 }
 
+fn normalize_wheel_units(raw_delta: f32) -> f32 {
+    if raw_delta.abs() <= f32::EPSILON {
+        return 0.0;
+    }
+    // Some Windows/device backends report +/-120 per notch.
+    let normalized = if raw_delta.abs() > 10.0 {
+        raw_delta / 120.0
+    } else {
+        raw_delta
+    };
+    normalized.clamp(-8.0, 8.0)
+}
+
 pub(crate) fn run_play_frame(
     state: &mut GameState,
     frame_dt: f32,
@@ -73,8 +86,10 @@ pub(crate) fn run_play_frame(
     );
 
     // Wheel zoom only if UI didn't consume the wheel.
-    if !ui_input.consumed_wheel && !ui_input.mouse_over_ui && wheel_y.abs() > f32::EPSILON {
-        let zoom_factor = (1.0 + wheel_y * PLAY_CAMERA_ZOOM_STEP).max(0.2);
+    let wheel_units = normalize_wheel_units(wheel_y);
+    if !ui_input.consumed_wheel && !ui_input.mouse_over_ui && wheel_units.abs() > f32::EPSILON {
+        // Exponential scaling gives finer, more uniform zoom steps.
+        let zoom_factor = (1.0 + PLAY_CAMERA_ZOOM_STEP).powf(wheel_units);
         state.camera_zoom =
             (state.camera_zoom * zoom_factor).clamp(PLAY_CAMERA_ZOOM_MIN, PLAY_CAMERA_ZOOM_MAX);
     }
@@ -132,6 +147,43 @@ pub(crate) fn run_play_frame(
         None
     };
     let mouse_tile = mouse_world.map(|pos| tile_from_world_clamped(&state.world, pos));
+    let now_sim_s = state.sim.clock.seconds();
+    let mut context_menu_consumed =
+        ui_pawns::process_pawn_context_menu_input(state, mouse, left_click, right_click, now_sim_s);
+
+    if !context_menu_consumed
+        && right_click
+        && mouse_in_map
+        && !ui_input.mouse_over_ui
+        && let Some(world_pos) = mouse_world
+    {
+        if let Some(target) = ui_pawns::hit_test_pawn_world(state, world_pos) {
+            ui_pawns::open_pawn_context_menu(state, target, mouse);
+            context_menu_consumed = true;
+        } else {
+            state.pawn_ui.context_menu = None;
+        }
+    }
+
+    let mut clicked_pawn: Option<PawnKey> = None;
+    if !context_menu_consumed
+        && left_click
+        && mouse_in_map
+        && !ui_input.mouse_over_ui
+        && !ui_input.consumed_click
+        && !state.sim.build_mode_enabled()
+        && let Some(world_pos) = mouse_world
+    {
+        clicked_pawn = ui_pawns::hit_test_pawn_world(state, world_pos);
+        if let Some(hit) = clicked_pawn {
+            state.pawn_ui.selected = Some(hit);
+            state.pawn_ui.context_menu = None;
+            if let Some(pos) = ui_pawns::pawn_world_pos(state, hit) {
+                state.camera_center = pos;
+            }
+            context_menu_consumed = true;
+        }
+    }
 
     if is_key_pressed(KeyCode::M)
         && let Some(tile) = mouse_tile
@@ -143,23 +195,40 @@ pub(crate) fn run_play_frame(
     if state.sim.build_mode_enabled() {
         if left_click
             && mouse_in_map
+            && !context_menu_consumed
             && let Some(tile) = mouse_tile
         {
             state.sim.apply_build_click(tile, false);
         }
         if right_click
             && mouse_in_map
+            && !context_menu_consumed
             && let Some(tile) = mouse_tile
         {
             state.sim.apply_build_click(tile, true);
         }
     }
 
-    let click_tile = if left_click && mouse_in_map && !state.sim.build_mode_enabled() {
+    let click_tile = if left_click
+        && mouse_in_map
+        && !state.sim.build_mode_enabled()
+        && !context_menu_consumed
+        && clicked_pawn.is_none()
+    {
         mouse_tile
     } else {
         None
     };
+
+    if let Some(tile) = click_tile
+        && let Some(player_card) = state.pawns.iter_mut().find(|p| p.key == PawnKey::Player)
+    {
+        player_card.history.push(
+            now_sim_s,
+            crate::historique::LogCategorie::Deplacement,
+            format!("Ordre de deplacement vers ({}, {}).", tile.0, tile.1),
+        );
+    }
 
     state.last_input = read_input_dir();
     apply_control_inputs(
@@ -174,6 +243,20 @@ pub(crate) fn run_play_frame(
     let mut sim_steps = 0usize;
     while *accumulator >= FIXED_DT && sim_steps < MAX_SIM_STEPS_PER_FRAME {
         state.sim.step(FIXED_DT);
+        let sim_now_s = state.sim.clock.seconds();
+        state.social_state.tick(
+            FIXED_DT,
+            sim_now_s,
+            social::SocialTickContext {
+                world: &state.world,
+                sim: &state.sim,
+            },
+            social::SocialTickActors {
+                player: &mut state.player,
+                npc: &mut state.npc,
+                pawns: &mut state.pawns,
+            },
+        );
         update_player(&mut state.player, &state.world, state.last_input, FIXED_DT);
         update_npc_wanderer(&mut state.npc, &state.world, &state.player, FIXED_DT);
         *accumulator -= FIXED_DT;
@@ -249,6 +332,7 @@ pub(crate) fn run_play_frame(
 
     // Selection ring in world space.
     ui_pawns::draw_selected_world_indicator(state);
+    ui_pawns::draw_social_bubbles(state);
 
     if state.debug {
         draw_auto_move_overlay(&state.player);

@@ -27,6 +27,10 @@ impl SimClock {
         }
     }
 
+    pub fn seconds(&self) -> f64 {
+        self.sim_seconds
+    }
+
     pub fn hours(&self) -> f64 {
         self.sim_seconds / 3600.0
     }
@@ -743,6 +747,34 @@ impl FactorySim {
 
     pub fn primary_agent_stress(&self) -> f64 {
         self.agent.stress
+    }
+
+    pub fn primary_agent_current_job_id(&self) -> Option<JobId> {
+        self.agent.current_job
+    }
+
+    pub fn job_brief(&self, job_id: JobId) -> Option<String> {
+        let job = self.jobs.iter().find(|j| j.id == job_id)?;
+        let brief = match job.kind {
+            JobKind::Haul {
+                from_block,
+                to_block,
+                item_kind,
+                qty,
+            } => {
+                let item_label = match item_kind {
+                    ItemKind::Raw => "Matiere",
+                    ItemKind::Wip => "Encours",
+                    ItemKind::Finished => "Produit fini",
+                    ItemKind::Scrap => "Rebut",
+                };
+                format!("Transport: {qty} x {item_label} (B{from_block} -> B{to_block})")
+            }
+            JobKind::OperateMachine { block_id } => {
+                format!("Operation machine (B{block_id})")
+            }
+        };
+        Some(brief)
     }
 
     pub fn zone_overlay_enabled(&self) -> bool {

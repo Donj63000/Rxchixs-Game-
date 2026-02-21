@@ -1,9 +1,12 @@
 mod character;
 mod deplacement;
 mod edition;
+mod historique;
+mod interactions;
 mod modes;
 mod rendu;
 mod sim;
+mod social;
 mod ui_pawns;
 mod utilitaires;
 
@@ -53,7 +56,7 @@ const PLAY_CAMERA_MARGIN: f32 = 10.0;
 const PLAY_CAMERA_PAN_SPEED: f32 = 880.0;
 const PLAY_CAMERA_ZOOM_MIN: f32 = 0.55;
 const PLAY_CAMERA_ZOOM_MAX: f32 = 2.65;
-const PLAY_CAMERA_ZOOM_STEP: f32 = 0.24;
+const PLAY_CAMERA_ZOOM_STEP: f32 = 0.03;
 const EDITOR_CAMERA_PAN_SPEED: f32 = 980.0;
 const EDITOR_CAMERA_ZOOM_MIN: f32 = 0.45;
 const EDITOR_CAMERA_ZOOM_MAX: f32 = 3.2;
@@ -381,6 +384,7 @@ struct GameState {
     npc_character: CharacterRecord,
     sim_worker_character: CharacterRecord,
     pawns: Vec<PawnCard>,
+    social_state: social::SocialState,
     pawn_ui: PawnsUiState,
     show_character_inspector: bool,
     debug: bool,

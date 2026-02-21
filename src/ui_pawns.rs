@@ -1,4 +1,6 @@
 use super::*;
+use crate::historique::LogCategorie;
+use crate::interactions::SocialActionKind;
 
 // ---------------------------------------------
 // RimWorld-like pawn bar + skill/character sheet
@@ -250,6 +252,21 @@ pub struct PawnCard {
     pub name: String,
     pub role: String,
     pub metrics: PawnMetrics,
+    pub history: crate::historique::HistoriqueLog,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PawnSheetTab {
+    #[default]
+    Fiche,
+    Historique,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PawnContextMenu {
+    pub actor: PawnKey,
+    pub target: PawnKey,
+    pub anchor_screen: Vec2,
 }
 
 #[derive(Clone, Debug)]
@@ -257,6 +274,9 @@ pub struct PawnsUiState {
     pub selected: Option<PawnKey>,
     pub follow: Option<PawnKey>,
     pub sheet_open: Option<PawnKey>,
+    pub sheet_tab: PawnSheetTab,
+    pub history_scroll_y: f32,
+    pub context_menu: Option<PawnContextMenu>,
     pub bar_scroll_x: f32,
     pub last_click_time: f32,
     pub last_click_pawn: Option<PawnKey>,
@@ -268,6 +288,9 @@ impl Default for PawnsUiState {
             selected: None,
             follow: None,
             sheet_open: None,
+            sheet_tab: PawnSheetTab::Fiche,
+            history_scroll_y: 0.0,
+            context_menu: None,
             bar_scroll_x: 0.0,
             last_click_time: -999.0,
             last_click_pawn: None,
@@ -428,6 +451,14 @@ pub fn process_pawn_ui_input(
         .unwrap_or(false);
     out.mouse_over_ui = over_top || over_sheet || over_close;
 
+    let (tab_fiche_rect, tab_history_rect) = layout
+        .sheet_rect
+        .map(sheet_tab_rects)
+        .unwrap_or((Rect::new(0.0, 0.0, 0.0, 0.0), Rect::new(0.0, 0.0, 0.0, 0.0)));
+    let over_tabs = state.pawn_ui.sheet_open.is_some()
+        && (point_in_rect(mouse, tab_fiche_rect) || point_in_rect(mouse, tab_history_rect));
+    out.mouse_over_ui |= over_tabs;
+
     // Wheel: scroll pawn bar when hovering it.
     if over_top && wheel_y.abs() > f32::EPSILON {
         let pawns = state.pawns.len();
@@ -443,6 +474,18 @@ pub fn process_pawn_ui_input(
             out.consumed_wheel = true;
         }
     }
+    if !out.consumed_wheel
+        && state.pawn_ui.sheet_open.is_some()
+        && over_sheet
+        && state.pawn_ui.sheet_tab == PawnSheetTab::Historique
+        && wheel_y.abs() > f32::EPSILON
+        && let (Some(panel), Some(key)) = (layout.sheet_rect, state.pawn_ui.sheet_open)
+    {
+        let max_scroll = history_max_scroll_px(state, key, panel);
+        state.pawn_ui.history_scroll_y =
+            (state.pawn_ui.history_scroll_y - wheel_y * 32.0).clamp(0.0, max_scroll);
+        out.consumed_wheel = true;
+    }
 
     if !left_pressed {
         return out;
@@ -450,8 +493,20 @@ pub fn process_pawn_ui_input(
 
     // Modal-like behavior: clicking the close button or outside closes the sheet.
     if state.pawn_ui.sheet_open.is_some() {
+        if point_in_rect(mouse, tab_fiche_rect) {
+            state.pawn_ui.sheet_tab = PawnSheetTab::Fiche;
+            state.pawn_ui.history_scroll_y = 0.0;
+            out.consumed_click = true;
+            return out;
+        }
+        if point_in_rect(mouse, tab_history_rect) {
+            state.pawn_ui.sheet_tab = PawnSheetTab::Historique;
+            out.consumed_click = true;
+            return out;
+        }
         if over_close {
             state.pawn_ui.sheet_open = None;
+            state.pawn_ui.context_menu = None;
             out.consumed_click = true;
             return out;
         }
@@ -461,6 +516,7 @@ pub fn process_pawn_ui_input(
             let click_inside_top = point_in_rect(mouse, layout.top_bar);
             if !click_inside_panel && !click_inside_top {
                 state.pawn_ui.sheet_open = None;
+                state.pawn_ui.context_menu = None;
                 out.consumed_click = true;
                 return out;
             }
@@ -493,6 +549,8 @@ pub fn process_pawn_ui_input(
             } else {
                 Some(slot.key)
             };
+            state.pawn_ui.sheet_tab = PawnSheetTab::Fiche;
+            state.pawn_ui.history_scroll_y = 0.0;
             out.consumed_click = true;
             return out;
         }
@@ -537,6 +595,143 @@ pub fn draw_selected_world_indicator(state: &GameState) {
     let inner = Color::from_rgba(255, 255, 255, 180);
     draw_circle_lines(pos.x, pos.y, 16.0, 2.4, outer);
     draw_circle_lines(pos.x, pos.y, 13.0, 1.2, inner);
+}
+
+fn choose_order_actor(state: &GameState, target: PawnKey) -> PawnKey {
+    if let Some(selected) = state.pawn_ui.selected
+        && selected != target
+    {
+        return selected;
+    }
+    for candidate in [PawnKey::Player, PawnKey::Npc, PawnKey::SimWorker] {
+        if candidate != target {
+            return candidate;
+        }
+    }
+    target
+}
+
+pub fn open_pawn_context_menu(state: &mut GameState, target: PawnKey, mouse: Vec2) {
+    let actor = choose_order_actor(state, target);
+    if actor == target {
+        state.pawn_ui.context_menu = None;
+        return;
+    }
+    state.pawn_ui.context_menu = Some(PawnContextMenu {
+        actor,
+        target,
+        anchor_screen: mouse,
+    });
+}
+
+pub fn process_pawn_context_menu_input(
+    state: &mut GameState,
+    mouse: Vec2,
+    left_pressed: bool,
+    right_pressed: bool,
+    now_sim_s: f64,
+) -> bool {
+    let Some(menu) = state.pawn_ui.context_menu else {
+        return false;
+    };
+    let (menu_rect, action_rects) = context_menu_layout(menu.anchor_screen);
+    let over_menu = point_in_rect(mouse, menu_rect);
+
+    if left_pressed {
+        for (action, rect) in &action_rects {
+            if point_in_rect(mouse, *rect) {
+                state.social_state.queue_order(
+                    now_sim_s,
+                    &mut state.pawns,
+                    menu.actor,
+                    menu.target,
+                    *action,
+                );
+                state.pawn_ui.context_menu = None;
+                return true;
+            }
+        }
+        if !over_menu {
+            state.pawn_ui.context_menu = None;
+        }
+        return true;
+    }
+
+    if right_pressed && over_menu {
+        return true;
+    }
+
+    false
+}
+
+pub fn hit_test_pawn_world(state: &GameState, world_pos: Vec2) -> Option<PawnKey> {
+    let mut best: Option<(PawnKey, f32)> = None;
+    for key in [PawnKey::Player, PawnKey::Npc, PawnKey::SimWorker] {
+        let Some(pos) = pawn_world_pos(state, key) else {
+            continue;
+        };
+        let radius = match key {
+            PawnKey::Player => 18.0,
+            PawnKey::Npc => 18.0,
+            PawnKey::SimWorker => 16.0,
+        };
+        let dist = pos.distance(world_pos);
+        if dist > radius {
+            continue;
+        }
+        if best.is_none_or(|(_, best_dist)| dist < best_dist) {
+            best = Some((key, dist));
+        }
+    }
+    best.map(|(key, _)| key)
+}
+
+pub fn draw_social_bubbles(state: &GameState) {
+    for key in [PawnKey::Player, PawnKey::Npc, PawnKey::SimWorker] {
+        let timer = state.social_state.bubble_timer(key);
+        if timer <= 0.0 {
+            continue;
+        }
+        let Some(pos) = pawn_world_pos(state, key) else {
+            continue;
+        };
+        let alpha = (timer / 2.2).clamp(0.0, 1.0);
+        let bubble_w = 34.0;
+        let bubble_h = 19.0;
+        let bx = pos.x - bubble_w * 0.5;
+        let by = pos.y - 42.0;
+        draw_rectangle(
+            bx,
+            by,
+            bubble_w,
+            bubble_h,
+            Color::new(0.95, 0.98, 1.0, 0.9 * alpha),
+        );
+        draw_rectangle_lines(
+            bx,
+            by,
+            bubble_w,
+            bubble_h,
+            1.3,
+            Color::new(0.18, 0.22, 0.30, 0.95 * alpha),
+        );
+        draw_triangle(
+            vec2(pos.x - 3.2, by + bubble_h - 0.5),
+            vec2(pos.x + 3.2, by + bubble_h - 0.5),
+            vec2(pos.x, by + bubble_h + 6.5),
+            Color::new(0.95, 0.98, 1.0, 0.9 * alpha),
+        );
+        draw_text_ex(
+            "...",
+            bx + 10.5,
+            by + 14.4,
+            TextParams {
+                font_size: 18,
+                color: Color::new(0.10, 0.14, 0.21, 0.95 * alpha),
+                ..Default::default()
+            },
+        );
+    }
 }
 
 pub fn draw_pawn_ui(state: &GameState, layout: &PawnUiLayout, mouse: Vec2, time: f32) {
@@ -680,7 +875,7 @@ pub fn draw_pawn_ui(state: &GameState, layout: &PawnUiLayout, mouse: Vec2, time:
         // Skills/Sheet button.
         let sheet_active = state.pawn_ui.sheet_open == Some(slot.key);
         let sheet_hover = point_in_rect(mouse, slot.sheet_rect);
-        draw_small_wide_button(slot.sheet_rect, "Comp", sheet_hover, sheet_active);
+        draw_small_wide_button(slot.sheet_rect, "Fiche", sheet_hover, sheet_active);
     }
 
     // Skills sheet.
@@ -689,6 +884,8 @@ pub fn draw_pawn_ui(state: &GameState, layout: &PawnUiLayout, mouse: Vec2, time:
     {
         draw_pawn_sheet(state, open, panel, layout.sheet_close, mouse, time);
     }
+
+    draw_pawn_context_menu(state, mouse);
 }
 
 fn draw_pawn_sheet(
@@ -718,7 +915,7 @@ fn draw_pawn_sheet(
         panel.x + 2.0,
         panel.y + 2.0,
         (panel.w - 4.0).max(1.0),
-        (panel.h * 0.12).max(1.0),
+        (panel.h * 0.14).max(1.0),
         Color::from_rgba(180, 220, 244, 18),
     );
 
@@ -777,9 +974,28 @@ fn draw_pawn_sheet(
         return;
     };
 
-    // Layout: 2 columns
+    let (tab_fiche_rect, tab_history_rect) = sheet_tab_rects(panel);
+    draw_small_wide_button(
+        tab_fiche_rect,
+        "Fiche",
+        point_in_rect(mouse, tab_fiche_rect),
+        state.pawn_ui.sheet_tab == PawnSheetTab::Fiche,
+    );
+    draw_small_wide_button(
+        tab_history_rect,
+        "Historique",
+        point_in_rect(mouse, tab_history_rect),
+        state.pawn_ui.sheet_tab == PawnSheetTab::Historique,
+    );
+
+    if state.pawn_ui.sheet_tab == PawnSheetTab::Historique {
+        draw_pawn_sheet_history(state, pawn, panel);
+        return;
+    }
+
+    // Layout: 2 columns (fiche)
     let inner_x = panel.x + 14.0;
-    let inner_y = panel.y + 104.0;
+    let inner_y = tab_fiche_rect.y + tab_fiche_rect.h + 10.0;
     let inner_w = panel.w - 28.0;
     let col_gap = 16.0;
     let col_w = (inner_w - col_gap) * 0.5;
@@ -833,6 +1049,115 @@ fn draw_pawn_sheet(
             pawn.metrics.traits[bar as usize],
         );
     }
+}
+
+fn sheet_tab_rects(panel: Rect) -> (Rect, Rect) {
+    let tab_y = panel.y + 100.0;
+    let tab_h = 24.0;
+    let tab_fiche = Rect::new(panel.x + 14.0, tab_y, 96.0, tab_h);
+    let tab_history = Rect::new(panel.x + 116.0, tab_y, 134.0, tab_h);
+    (tab_fiche, tab_history)
+}
+
+fn history_row_color(cat: LogCategorie) -> Color {
+    match cat {
+        LogCategorie::Systeme => Color::from_rgba(188, 208, 228, 255),
+        LogCategorie::Deplacement => Color::from_rgba(138, 220, 255, 255),
+        LogCategorie::Travail => Color::from_rgba(186, 232, 170, 255),
+        LogCategorie::Social => Color::from_rgba(250, 218, 170, 255),
+        LogCategorie::Ordre => Color::from_rgba(255, 196, 132, 255),
+        LogCategorie::Etat => Color::from_rgba(214, 204, 252, 255),
+        LogCategorie::Debug => Color::from_rgba(172, 182, 198, 255),
+    }
+}
+
+fn draw_pawn_sheet_history(state: &GameState, pawn: &PawnCard, panel: Rect) {
+    let top = panel.y + 132.0;
+    let bottom = panel.y + panel.h - 16.0;
+    let left = panel.x + 14.0;
+    let right = panel.x + panel.w - 14.0;
+    let viewport_h = (bottom - top).max(1.0);
+
+    draw_rectangle(
+        left,
+        top,
+        right - left,
+        viewport_h,
+        Color::from_rgba(14, 20, 28, 214),
+    );
+    draw_rectangle_lines(
+        left + 0.5,
+        top + 0.5,
+        (right - left - 1.0).max(1.0),
+        (viewport_h - 1.0).max(1.0),
+        1.0,
+        Color::from_rgba(102, 142, 170, 190),
+    );
+
+    let row_h = 22.0;
+    let scroll = state.pawn_ui.history_scroll_y;
+    let max_y = top + viewport_h;
+    let mut y = top + 8.0 - scroll;
+    let time_w = 52.0;
+    let cat_w = 92.0;
+    let msg_x = left + time_w + cat_w + 8.0;
+    let msg_w = (right - msg_x - 12.0).max(40.0);
+
+    for entry in pawn.history.iter().rev() {
+        if y + row_h < top {
+            y += row_h;
+            continue;
+        }
+        if y > max_y {
+            break;
+        }
+
+        let recent = entry.t_sim_s > state.sim.clock.seconds() - 25.0;
+        draw_text_shadowed(
+            &entry.stamp,
+            left + 6.0,
+            y + 14.0,
+            14.0,
+            if recent {
+                Color::from_rgba(196, 224, 244, 255)
+            } else {
+                Color::from_rgba(166, 190, 208, 255)
+            },
+        );
+        draw_text_shadowed(
+            entry.cat.label(),
+            left + time_w,
+            y + 14.0,
+            14.0,
+            history_row_color(entry.cat),
+        );
+        draw_text_ellipsized_shadowed(
+            &entry.msg,
+            msg_x,
+            y + 14.0,
+            msg_w,
+            14.0,
+            Color::from_rgba(232, 240, 248, 255),
+        );
+        draw_line(
+            left + 4.0,
+            y + row_h - 2.0,
+            right - 4.0,
+            y + row_h - 2.0,
+            1.0,
+            Color::from_rgba(80, 104, 128, 70),
+        );
+        y += row_h;
+    }
+}
+
+fn history_max_scroll_px(state: &GameState, key: PawnKey, panel: Rect) -> f32 {
+    let Some(pawn) = state.pawns.iter().find(|p| p.key == key) else {
+        return 0.0;
+    };
+    let content_h = pawn.history.len() as f32 * 22.0 + 8.0;
+    let viewport_h = (panel.y + panel.h - 16.0) - (panel.y + 132.0);
+    (content_h - viewport_h).max(0.0)
 }
 
 fn draw_group_title(x: f32, y: f32, w: f32, title: &str) -> f32 {
@@ -894,6 +1219,151 @@ fn bar_color(v01: f32) -> Color {
     } else {
         color_lerp(yellow, green, (t - 0.5) / 0.5)
     }
+}
+
+fn context_menu_layout(anchor: Vec2) -> (Rect, Vec<(SocialActionKind, Rect)>) {
+    let menu_w = 296.0;
+    let item_h = 24.0;
+    let header_h = 42.0;
+    let pad = 8.0;
+    let count = SocialActionKind::MENU_DEFAULT.len() as f32;
+    let menu_h = header_h + pad + count * item_h + pad;
+
+    let mut x = anchor.x + 10.0;
+    let mut y = anchor.y + 10.0;
+    if x + menu_w > screen_width() - 8.0 {
+        x = screen_width() - menu_w - 8.0;
+    }
+    if y + menu_h > screen_height() - 8.0 {
+        y = screen_height() - menu_h - 8.0;
+    }
+    x = x.max(8.0);
+    y = y.max(8.0);
+
+    let rect = Rect::new(x, y, menu_w, menu_h);
+    let mut actions = Vec::with_capacity(SocialActionKind::MENU_DEFAULT.len());
+    for (idx, action) in SocialActionKind::MENU_DEFAULT.iter().enumerate() {
+        let row_y = y + header_h + pad + idx as f32 * item_h;
+        actions.push((
+            *action,
+            Rect::new(x + 8.0, row_y, menu_w - 16.0, item_h - 2.0),
+        ));
+    }
+    (rect, actions)
+}
+
+fn pawn_label(state: &GameState, key: PawnKey) -> &str {
+    state
+        .pawns
+        .iter()
+        .find(|p| p.key == key)
+        .map(|p| p.name.as_str())
+        .unwrap_or(key.short_label())
+}
+
+fn draw_pawn_context_menu(state: &GameState, mouse: Vec2) {
+    let Some(menu) = state.pawn_ui.context_menu else {
+        return;
+    };
+    let (menu_rect, action_rects) = context_menu_layout(menu.anchor_screen);
+
+    draw_rectangle(
+        menu_rect.x,
+        menu_rect.y,
+        menu_rect.w,
+        menu_rect.h,
+        Color::from_rgba(9, 13, 19, 236),
+    );
+    draw_rectangle_lines(
+        menu_rect.x + 0.5,
+        menu_rect.y + 0.5,
+        menu_rect.w - 1.0,
+        menu_rect.h - 1.0,
+        1.5,
+        Color::from_rgba(110, 156, 184, 228),
+    );
+
+    draw_text_shadowed(
+        "Interaction sociale",
+        menu_rect.x + 12.0,
+        menu_rect.y + 18.0,
+        17.0,
+        Color::from_rgba(236, 246, 255, 255),
+    );
+    draw_text_shadowed(
+        &format!(
+            "{} -> {}",
+            pawn_label(state, menu.actor),
+            pawn_label(state, menu.target)
+        ),
+        menu_rect.x + 12.0,
+        menu_rect.y + 35.0,
+        14.0,
+        Color::from_rgba(178, 208, 228, 255),
+    );
+
+    for (action, rect) in &action_rects {
+        let hovered = point_in_rect(mouse, *rect);
+        let (bg, fg) = if action.is_hostile() {
+            (
+                if hovered {
+                    Color::from_rgba(120, 52, 52, 235)
+                } else {
+                    Color::from_rgba(92, 40, 40, 226)
+                },
+                Color::from_rgba(255, 214, 206, 255),
+            )
+        } else if action.is_positive() {
+            (
+                if hovered {
+                    Color::from_rgba(52, 108, 70, 235)
+                } else {
+                    Color::from_rgba(40, 88, 58, 226)
+                },
+                Color::from_rgba(220, 255, 226, 255),
+            )
+        } else {
+            (
+                if hovered {
+                    Color::from_rgba(56, 90, 120, 235)
+                } else {
+                    Color::from_rgba(46, 72, 98, 226)
+                },
+                Color::from_rgba(220, 240, 255, 255),
+            )
+        };
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+        draw_rectangle_lines(
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            1.0,
+            Color::from_rgba(160, 198, 224, 140),
+        );
+        draw_text_shadowed(action.ui_label(), rect.x + 8.0, rect.y + 16.0, 15.0, fg);
+    }
+}
+
+fn draw_text_ellipsized_shadowed(text: &str, x: f32, y: f32, max_w: f32, size: f32, color: Color) {
+    if measure_text(text, None, size as u16, 1.0).width <= max_w {
+        draw_text_shadowed(text, x, y, size, color);
+        return;
+    }
+
+    let ellipsis = "...";
+    let ellipsis_w = measure_text(ellipsis, None, size as u16, 1.0).width;
+    let mut out = String::new();
+    for ch in text.chars() {
+        out.push(ch);
+        let w = measure_text(&out, None, size as u16, 1.0).width;
+        if w + ellipsis_w > max_w {
+            out.pop();
+            break;
+        }
+    }
+    out.push_str(ellipsis);
+    draw_text_shadowed(&out, x, y, size, color);
 }
 
 fn draw_text_shadowed(text: &str, x: f32, y: f32, size: f32, color: Color) {
