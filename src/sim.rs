@@ -732,6 +732,19 @@ impl FactorySim {
         };
     }
 
+    // --- Public, stable accessors for UI/debug (no string parsing) ---
+    pub fn primary_agent_tile(&self) -> (i32, i32) {
+        self.agent.tile
+    }
+
+    pub fn primary_agent_fatigue(&self) -> f64 {
+        self.agent.fatigue
+    }
+
+    pub fn primary_agent_stress(&self) -> f64 {
+        self.agent.stress
+    }
+
     pub fn zone_overlay_enabled(&self) -> bool {
         self.show_zone_overlay
     }

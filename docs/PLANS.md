@@ -105,3 +105,51 @@ Portee: refonte interface editeur, camera/zoom, optimisation rendu.
 8. Validation manuelle: gameplay camera ZQSD + click-to-move limite map.
 9. Validation manuelle: fluidite percue en fenetre et plein ecran.
 10. Smoke run: lancement/fermeture sans crash ni blocage binaire.
+
+# ExecPlan - Decoupage `main.rs` en modules logiques FR
+
+Date: 2026-02-21
+Portee: refactor structurel sans changement fonctionnel.
+
+## Objectifs observables
+- Reduire fortement la taille de `src/main.rs`.
+- Introduire des fichiers nommes en francais pour clarifier les responsabilites:
+  - `src/utilitaires.rs`
+  - `src/edition.rs`
+  - `src/deplacement.rs`
+  - `src/rendu.rs`
+- Garder le meme comportement en jeu/editeur et la meme boucle de tick fixe.
+
+## Invariants
+- Aucun changement de logique metier voulu (refactor only).
+- Separation simulation/rendu intacte (`sim.rs` reste inchange sur son role).
+- Compatibilite sauvegarde/chargement carte conservee.
+
+## Milestones
+1. Extraire les helpers generiques/camera/UI vers `utilitaires.rs`.
+2. Extraire logique map/edition/sauvegarde vers `edition.rs`.
+3. Extraire pathfinding + deplacements joueur/PNJ vers `deplacement.rs`.
+4. Extraire rendu monde/props/overlays/HUD vers `rendu.rs`.
+5. Reconnecter `main.rs` via `mod` + `use` et laisser les frames principales stables.
+6. Validation complete (`fmt`, `clippy -D warnings`, `test`, smoke run).
+
+## Fichiers impactes
+- `src/main.rs`
+- `src/utilitaires.rs` (nouveau)
+- `src/edition.rs` (nouveau)
+- `src/deplacement.rs` (nouveau)
+- `src/rendu.rs` (nouveau)
+- `docs/PLANS.md`
+
+## Risques
+- Imports/cycles de dependances entre modules.
+- Fonctions devenues inaccessibles apres extraction (visibilite).
+- Regressions de compilation dues aux changements de scope.
+
+## Strategie de test
+- Compiler apres extraction de chaque bloc pour isoler les erreurs.
+- Executer:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+- Smoke run `cargo run` pour verifier que menu/jeu/editeur s'ouvrent.
