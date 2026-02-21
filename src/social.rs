@@ -1352,3 +1352,171 @@ fn get_skill01(pawns: &[PawnCard], key: PawnKey, bar: SkillBar) -> f32 {
         .map(|p| p.metrics.skills[bar as usize] as f32 / 100.0)
         .unwrap_or(0.5)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_pawns() -> Vec<PawnCard> {
+        vec![
+            PawnCard {
+                key: PawnKey::Player,
+                name: "Player".to_string(),
+                role: "Manager".to_string(),
+                metrics: PawnMetrics::seeded(10),
+                history: crate::historique::HistoriqueLog::new(64),
+            },
+            PawnCard {
+                key: PawnKey::Npc,
+                name: "NPC".to_string(),
+                role: "Visitor".to_string(),
+                metrics: PawnMetrics::seeded(11),
+                history: crate::historique::HistoriqueLog::new(64),
+            },
+            PawnCard {
+                key: PawnKey::SimWorker,
+                name: "Worker".to_string(),
+                role: "Operator".to_string(),
+                metrics: PawnMetrics::seeded(12),
+                history: crate::historique::HistoriqueLog::new(64),
+            },
+        ]
+    }
+
+    fn social_fixture_same_tile() -> (
+        World,
+        sim::FactorySim,
+        Player,
+        NpcWanderer,
+        Vec<PawnCard>,
+        SocialState,
+    ) {
+        let world = World::new_room(25, 15);
+        let sim = sim::FactorySim::new(sim::StarterSimConfig::default(), 25, 15);
+        let player = Player::new(tile_center((6, 6)));
+        let npc = NpcWanderer::new(tile_center((6, 6)), 0xABCD);
+        let pawns = test_pawns();
+        let social = SocialState::new(&pawns, 0x1234_5678);
+        (world, sim, player, npc, pawns, social)
+    }
+
+    #[test]
+    fn queue_order_ignores_self_target() {
+        let (_, _, _, _, mut pawns, mut social) = social_fixture_same_tile();
+        social.queue_order(
+            0.0,
+            &mut pawns,
+            PawnKey::Player,
+            PawnKey::Player,
+            SocialActionKind::SmallTalk,
+        );
+        let pi = social
+            .idx_of(PawnKey::Player)
+            .expect("player key should exist");
+        assert!(social.runtime[pi].order.is_none());
+    }
+
+    #[test]
+    fn queued_order_expires_after_timeout() {
+        let (world, sim, mut player, mut npc, mut pawns, mut social) = social_fixture_same_tile();
+        social.queue_order(
+            0.0,
+            &mut pawns,
+            PawnKey::Player,
+            PawnKey::Npc,
+            SocialActionKind::SmallTalk,
+        );
+
+        social.tick(
+            SOCIAL_TICK_DT,
+            ORDER_TIMEOUT_S as f64 + 0.5,
+            SocialTickContext {
+                world: &world,
+                sim: &sim,
+            },
+            SocialTickActors {
+                player: &mut player,
+                npc: &mut npc,
+                pawns: &mut pawns,
+            },
+        );
+
+        let pi = social
+            .idx_of(PawnKey::Player)
+            .expect("player key should exist");
+        assert!(social.runtime[pi].order.is_none());
+    }
+
+    #[test]
+    fn proximity_greeting_reaches_active_then_afterglow() {
+        let (world, sim, mut player, mut npc, mut pawns, mut social) = social_fixture_same_tile();
+
+        social.tick(
+            SOCIAL_TICK_DT,
+            0.0,
+            SocialTickContext {
+                world: &world,
+                sim: &sim,
+            },
+            SocialTickActors {
+                player: &mut player,
+                npc: &mut npc,
+                pawns: &mut pawns,
+            },
+        );
+        let first = social
+            .emote_view(PawnKey::Npc)
+            .expect("first social tick should create a greeting encounter");
+        assert_eq!(first.kind, Some(SocialActionKind::DireBonjour));
+        assert_eq!(first.stage, SocialVisualStage::Approaching);
+
+        social.tick(
+            SOCIAL_TICK_DT,
+            SOCIAL_TICK_DT as f64,
+            SocialTickContext {
+                world: &world,
+                sim: &sim,
+            },
+            SocialTickActors {
+                player: &mut player,
+                npc: &mut npc,
+                pawns: &mut pawns,
+            },
+        );
+        let hint = social.anim_hint(PawnKey::Npc);
+        assert!(hint.force_face_partner);
+        assert!(hint.force_idle);
+        assert_eq!(hint.kind, Some(SocialActionKind::DireBonjour));
+        assert_eq!(hint.gesture, SocialGesture::Wave);
+
+        let mut now = SOCIAL_TICK_DT * 2.0;
+        for _ in 0..6 {
+            social.tick(
+                SOCIAL_TICK_DT,
+                now as f64,
+                SocialTickContext {
+                    world: &world,
+                    sim: &sim,
+                },
+                SocialTickActors {
+                    player: &mut player,
+                    npc: &mut npc,
+                    pawns: &mut pawns,
+                },
+            );
+            now += SOCIAL_TICK_DT;
+        }
+
+        let final_view = social
+            .emote_view(PawnKey::Npc)
+            .expect("after completion the interaction should still be visible in afterglow");
+        assert_eq!(final_view.stage, SocialVisualStage::Afterglow);
+
+        let ni = social.idx_of(PawnKey::Npc).expect("npc key should exist");
+        let pi = social
+            .idx_of(PawnKey::Player)
+            .expect("player key should exist");
+        assert!(social.runtime[ni].encounter_id.is_none());
+        assert!(social.pair_cooldown[ni][pi] > 0.0);
+    }
+}

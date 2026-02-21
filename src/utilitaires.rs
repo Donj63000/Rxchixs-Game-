@@ -687,3 +687,44 @@ pub(crate) fn draw_ui_text_tinted_centered_on(
     let y = rect.y + rect.h * 0.5 + dims.height * 0.32;
     draw_ui_text_tinted_on(bg, desired_fill, text, x, y, font_size);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_i32_respects_bounds() {
+        assert_eq!(clamp_i32(5, 0, 10), 5);
+        assert_eq!(clamp_i32(-4, 0, 10), 0);
+        assert_eq!(clamp_i32(42, 0, 10), 10);
+    }
+
+    #[test]
+    fn advance_seed_is_deterministic_and_changes_value() {
+        let seed = 0x1234_5678_9ABC_DEF0;
+        let next_a = advance_seed(seed);
+        let next_b = advance_seed(seed);
+        assert_eq!(next_a, next_b);
+        assert_ne!(next_a, seed);
+    }
+
+    #[test]
+    fn tile_label_and_kind_helpers_are_consistent() {
+        assert!(tile_is_wall(Tile::Wall));
+        assert!(tile_is_wall(Tile::WallBrick));
+        assert!(!tile_is_wall(Tile::Floor));
+        assert!(tile_is_floor(Tile::FloorMoss));
+        assert!(!tile_is_floor(Tile::WallNeon));
+        assert_eq!(tile_label(Tile::WallSteel), "mur_acier");
+        assert_eq!(tile_label(Tile::FloorWood), "sol_bois");
+    }
+
+    #[test]
+    fn hash_with_salt_is_stable_for_same_inputs() {
+        let h1 = hash_with_salt(12, 7, 99);
+        let h2 = hash_with_salt(12, 7, 99);
+        let h3 = hash_with_salt(12, 7, 100);
+        assert_eq!(h1, h2);
+        assert_ne!(h1, h3);
+    }
+}

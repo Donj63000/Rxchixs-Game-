@@ -761,3 +761,42 @@ pub(crate) fn wall_mask_4(world: &World, x: i32, y: i32) -> u8 {
     }
     mask
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simplify_tile_path_keeps_turn_points() {
+        let path = vec![(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (3, 2)];
+        let simplified = simplify_tile_path(&path);
+        assert_eq!(simplified, vec![(0, 0), (2, 0), (2, 2), (3, 2)]);
+    }
+
+    #[test]
+    fn move_towards_vec2_clamps_by_max_delta() {
+        let current = vec2(0.0, 0.0);
+        let target = vec2(10.0, 0.0);
+        let moved = move_towards_vec2(current, target, 3.0);
+        assert!((moved.x - 3.0).abs() < 0.001);
+        assert!(moved.y.abs() < 0.001);
+
+        let reached = move_towards_vec2(current, target, 50.0);
+        assert!((reached.x - target.x).abs() < 0.001);
+        assert!((reached.y - target.y).abs() < 0.001);
+    }
+
+    #[test]
+    fn npc_hold_timer_prevents_new_wander_target() {
+        let world = World::new_room(25, 15);
+        let mut npc = NpcWanderer::new(tile_center((6, 6)), 0xBEEF);
+        npc.idle_timer = 0.0;
+        npc.hold_timer = 1.0;
+
+        update_npc_wanderer(&mut npc, &world, FIXED_DT);
+
+        assert!(npc.hold_timer > 0.0 && npc.hold_timer < 1.0);
+        assert!(npc.auto.path_world.is_empty());
+        assert!(npc.idle_timer >= 0.19);
+    }
+}

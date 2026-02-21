@@ -153,3 +153,39 @@ Portee: refactor structurel sans changement fonctionnel.
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
 - Smoke run `cargo run` pour verifier que menu/jeu/editeur s'ouvrent.
+
+# ExecPlan - Suite de tests unitaires anti-regression (5 etapes)
+
+Date: 2026-02-21
+Portee: renforcer les tests unitaires sur les sous-systemes critiques pour accelerer les evolutions sans regressions.
+
+## Objectifs observables
+- Ajouter des tests unitaires pertinents sur `interactions`, `social`, `deplacement`, `utilitaires`.
+- Capter les regressions de logique sociale (etats/cooldowns), de deplacement et de helpers fondamentaux.
+- Conserver une suite compatible `clippy -D warnings`.
+
+## Invariants
+- Les tests doivent rester deterministes (pas de flaky).
+- Chaque test doit verifier un contrat metier clair (pas de snapshots opaques).
+- Pas d'introduction d'allocations lourdes ou de temps de test excessif.
+
+## Plan en 5 etapes
+1. Identifier les invariants anti-regression par sous-systeme.
+2. Couvrir les contrats de `SocialActionKind` (classification + mappings).
+3. Couvrir les transitions et cooldowns du moteur social.
+4. Couvrir les helpers de deplacement et utilitaires purs.
+5. Valider la suite complete avec `fmt`, `clippy -D warnings`, `test`.
+
+## Fichiers impactes
+- `src/interactions.rs`
+- `src/social.rs`
+- `src/deplacement.rs`
+- `src/utilitaires.rs`
+- `docs/PLANS.md`
+
+## Strategie de test
+- Unit tests localises dans chaque module pour acceder aux invariants internes.
+- Validation globale:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`

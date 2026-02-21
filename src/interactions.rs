@@ -143,3 +143,44 @@ impl SocialActionKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_and_menu_default_cover_same_actions() {
+        assert_eq!(SocialActionKind::ALL.len(), 10);
+        assert_eq!(SocialActionKind::MENU_DEFAULT.len(), 10);
+        for action in SocialActionKind::ALL {
+            assert!(SocialActionKind::MENU_DEFAULT.contains(&action));
+        }
+    }
+
+    #[test]
+    fn action_classification_is_consistent() {
+        for action in SocialActionKind::ALL {
+            assert!(action.duration_s() > 0.0);
+            assert!(!(action.is_positive() && action.is_hostile()));
+            assert!(!action.ui_label().is_empty());
+        }
+    }
+
+    #[test]
+    fn canonical_mappings_match_expected_semantics() {
+        assert_eq!(
+            SocialActionKind::SExcuser.emote_icon(),
+            SocialEmoteIcon::Apology
+        );
+        assert_eq!(
+            SocialActionKind::SExcuser.gesture(),
+            SocialGesture::Apologize
+        );
+        assert_eq!(
+            SocialActionKind::SEngueuler.emote_icon(),
+            SocialEmoteIcon::Lightning
+        );
+        assert_eq!(SocialActionKind::SEngueuler.gesture(), SocialGesture::Argue);
+        assert_eq!(SocialActionKind::DireBonjour.gesture(), SocialGesture::Wave);
+    }
+}
