@@ -1,0 +1,23 @@
+(
+    schema_version: 1,
+
+    // Time: dt_sim = dt_real * time_scale
+    // 60.0 => 1 real second = 1 simulation minute
+    time_scale: 60.0,
+
+    starting_cash: 25000.0,
+
+    // Human OPEX
+    worker_count: 3,
+    wage_per_hour: 18.5,
+
+    // Raw material input (units / simulation hour)
+    raw_delivery_per_hour: 40.0,
+
+    // Two machines in series (durations in simulation seconds)
+    machine_a_cycle_s: 90.0,
+    machine_b_cycle_s: 120.0,
+
+    // Sale: money per finished unit
+    sale_price: 45.0,
+)

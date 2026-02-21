@@ -1,4 +1,5 @@
 mod character;
+mod sim;
 
 use character::{
     CharacterCatalog, CharacterFacing, CharacterRecord, CharacterRenderParams,
@@ -31,6 +32,7 @@ const NPC_GREETING_RADIUS: f32 = 26.0;
 const NPC_GREETING_DURATION: f32 = 1.25;
 const NPC_GREETING_COOLDOWN: f32 = 3.8;
 const MAP_FILE_PATH: &str = "maps/main_map.ron";
+const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
 const MAP_FILE_VERSION: u32 = 2;
 const EDITOR_UNDO_LIMIT: usize = 160;
 
@@ -344,6 +346,7 @@ struct GameState {
     player: Player,
     npc: NpcWanderer,
     palette: Palette,
+    sim: sim::FactorySim,
     props: Vec<Prop>,
     character_catalog: CharacterCatalog,
     lineage_seed: u64,
@@ -996,12 +999,14 @@ fn build_game_state_from_map(
     let lineage = build_lineage_preview(character_catalog, lineage_seed);
     let npc_character =
         character_catalog.spawn_founder("Wanderer", lineage_seed ^ 0x55AA_7788_1133_2244);
+    let sim = sim::FactorySim::load_or_default(SIM_CONFIG_PATH, map_copy.world.w, map_copy.world.h);
 
     GameState {
         world: map_copy.world,
         player,
         npc,
         palette,
+        sim,
         props: map_copy.props,
         character_catalog: character_catalog.clone(),
         lineage_seed,
@@ -2671,6 +2676,90 @@ enum PlayAction {
     OpenEditor,
 }
 
+fn sim_zone_overlay_color(zone: sim::ZoneKind) -> Option<Color> {
+    match zone {
+        sim::ZoneKind::Neutral => None,
+        sim::ZoneKind::Receiving => Some(Color::from_rgba(86, 122, 224, 62)),
+        sim::ZoneKind::Processing => Some(Color::from_rgba(218, 114, 42, 66)),
+        sim::ZoneKind::Shipping => Some(Color::from_rgba(64, 180, 122, 62)),
+        sim::ZoneKind::Support => Some(Color::from_rgba(172, 130, 220, 58)),
+    }
+}
+
+fn sim_block_overlay_color(kind: sim::BlockKind) -> Color {
+    match kind {
+        sim::BlockKind::Storage => Color::from_rgba(88, 160, 222, 255),
+        sim::BlockKind::MachineA => Color::from_rgba(240, 154, 72, 255),
+        sim::BlockKind::MachineB => Color::from_rgba(252, 120, 82, 255),
+        sim::BlockKind::Buffer => Color::from_rgba(142, 122, 208, 255),
+        sim::BlockKind::Seller => Color::from_rgba(94, 196, 124, 255),
+    }
+}
+
+fn draw_sim_zone_overlay(world: &World, sim: &sim::FactorySim) {
+    if !sim.zone_overlay_enabled() {
+        return;
+    }
+    for y in 0..world.h {
+        for x in 0..world.w {
+            if let Some(color) = sim_zone_overlay_color(sim.zone_kind_at_tile((x, y))) {
+                let tile = World::tile_rect(x, y);
+                draw_rectangle(tile.x, tile.y, tile.w, tile.h, color);
+            }
+        }
+    }
+}
+
+fn draw_sim_blocks_overlay(sim: &sim::FactorySim, show_labels: bool) {
+    for block in sim.block_debug_views() {
+        let rect = World::tile_rect(block.tile.0, block.tile.1);
+        let color = sim_block_overlay_color(block.kind);
+        draw_rectangle_lines(
+            rect.x + 2.0,
+            rect.y + 2.0,
+            rect.w - 4.0,
+            rect.h - 4.0,
+            2.0,
+            color,
+        );
+        if show_labels {
+            let label = format!("#{} {}", block.id, block.kind.label());
+            draw_text(
+                &label,
+                rect.x + 2.0,
+                rect.y - 2.0,
+                14.0,
+                Color::from_rgba(232, 240, 248, 255),
+            );
+            draw_text(
+                &block.inventory_summary,
+                rect.x + 2.0,
+                rect.y + rect.h + 13.0,
+                12.0,
+                Color::from_rgba(180, 215, 232, 255),
+            );
+        }
+    }
+}
+
+fn draw_sim_agent_overlay(sim: &sim::FactorySim, show_label: bool) {
+    for agent in sim.agent_debug_views() {
+        let px = agent.world_pos.0 * TILE_SIZE;
+        let py = agent.world_pos.1 * TILE_SIZE;
+        draw_circle(px, py, 5.5, Color::from_rgba(255, 214, 122, 245));
+        draw_circle_lines(px, py, 8.0, 1.6, Color::from_rgba(255, 248, 220, 245));
+        if show_label {
+            draw_text(
+                &agent.label,
+                px - 42.0,
+                py - 10.0,
+                14.0,
+                Color::from_rgba(255, 244, 218, 255),
+            );
+        }
+    }
+}
+
 fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -> PlayAction {
     if is_key_pressed(KeyCode::Escape) {
         return PlayAction::BackToMenu;
@@ -2693,9 +2782,44 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
         }
     }
 
-    let click_tile = if is_mouse_button_pressed(MouseButton::Left) {
-        let (mx, my) = mouse_position();
-        Some(tile_from_world_clamped(&state.world, vec2(mx, my)))
+    if is_key_pressed(KeyCode::F6) {
+        state.sim.toggle_zone_overlay();
+    }
+    if is_key_pressed(KeyCode::F7) {
+        state.sim.toggle_build_mode();
+    }
+    if is_key_pressed(KeyCode::B) {
+        state.sim.cycle_block_brush();
+    }
+    if is_key_pressed(KeyCode::N) {
+        state.sim.cycle_zone_brush();
+    }
+    if is_key_pressed(KeyCode::V) {
+        state.sim.toggle_zone_paint_mode();
+    }
+    if is_key_pressed(KeyCode::F8) {
+        let _ = state.sim.save_layout();
+    }
+
+    let (mx, my) = mouse_position();
+    let mouse_tile = tile_from_world_clamped(&state.world, vec2(mx, my));
+    if is_key_pressed(KeyCode::M) {
+        state.sim.select_move_source(mouse_tile);
+    }
+
+    let left_click = is_mouse_button_pressed(MouseButton::Left);
+    let right_click = is_mouse_button_pressed(MouseButton::Right);
+    if state.sim.build_mode_enabled() {
+        if left_click {
+            state.sim.apply_build_click(mouse_tile, false);
+        }
+        if right_click {
+            state.sim.apply_build_click(mouse_tile, true);
+        }
+    }
+
+    let click_tile = if left_click && !state.sim.build_mode_enabled() {
+        Some(mouse_tile)
     } else {
         None
     };
@@ -2710,6 +2834,7 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
 
     *accumulator += frame_dt;
     while *accumulator >= FIXED_DT {
+        state.sim.step(FIXED_DT);
         update_player(&mut state.player, &state.world, state.last_input, FIXED_DT);
         update_npc_wanderer(&mut state.npc, &state.world, &state.player, FIXED_DT);
         *accumulator -= FIXED_DT;
@@ -2720,10 +2845,12 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
     clear_background(state.palette.bg_bottom);
     draw_background(&state.palette, time);
     draw_floor_layer(&state.world, &state.palette);
+    draw_sim_zone_overlay(&state.world, &state.sim);
     draw_wall_cast_shadows(&state.world, &state.palette);
     draw_wall_layer(&state.world, &state.palette);
     draw_prop_shadows(&state.props, &state.palette, time);
     draw_props(&state.props, &state.palette, time);
+    draw_sim_blocks_overlay(&state.sim, state.debug || state.sim.build_mode_enabled());
     if state.npc.pos.y <= state.player.pos.y {
         draw_npc(&state.npc, &state.npc_character, time, state.debug);
         if let Some(player_character) = state.lineage.get(state.player_lineage_index) {
@@ -2739,6 +2866,7 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
         draw_auto_move_overlay(&state.player);
         draw_npc_wander_overlay(&state.npc);
     }
+    draw_sim_agent_overlay(&state.sim, state.debug || state.sim.build_mode_enabled());
     draw_lighting(&state.props, &state.palette, time);
     draw_ambient_dust(&state.palette, time);
     draw_vignette(&state.palette);
@@ -2780,7 +2908,7 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
             .map(|(x, y)| format!("({}, {})", x, y))
             .unwrap_or_else(|| "none".to_string());
         let info = format!(
-            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran\nF1: debug on/off | F2: inspector | F3: regenerate\nmouse: click-to-move | keyboard: manual override\nplayer pos(px)=({:.1},{:.1}) tile=({},{})\nmode={} walking={} frame={} facing={} facing_left={} walk_cycle={:.2}\ninput=({:.2},{:.2}) fps={}\nplayer_path_nodes={} next_wp={} target_tile={}\nnpc pos=({:.1},{:.1}) walking={} bubble={:.2}s cooldown={:.2}s npc_path_nodes={} npc_target={}\nwall_mask@tile={:04b}\nmutation_permille={} visual={}",
+            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran\nF1: debug on/off | F2: inspector | F3: regenerate\nmouse: click-to-move | keyboard: manual override\nplayer pos(px)=({:.1},{:.1}) tile=({},{})\nmode={} walking={} frame={} facing={} facing_left={} walk_cycle={:.2}\ninput=({:.2},{:.2}) fps={}\nplayer_path_nodes={} next_wp={} target_tile={}\nnpc pos=({:.1},{:.1}) walking={} bubble={:.2}s cooldown={:.2}s npc_path_nodes={} npc_target={}\nwall_mask@tile={:04b}\nmutation_permille={} visual={}\n{}",
             state.player.pos.x,
             state.player.pos.y,
             tx,
@@ -2807,6 +2935,7 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
             mask,
             state.character_catalog.mutation_permille(),
             player_visual,
+            state.sim.debug_hud(),
         );
         draw_text(&info, 12.0, 20.0, 18.0, WHITE);
     } else {
@@ -2817,6 +2946,25 @@ fn run_play_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -
             24.0,
             Color::from_rgba(220, 235, 242, 255),
         );
+        let hud = state.sim.short_hud();
+        draw_text(&hud, 12.0, 48.0, 22.0, Color::from_rgba(200, 224, 236, 255));
+        let build = state.sim.build_hint_line();
+        draw_text(
+            &build,
+            12.0,
+            72.0,
+            18.0,
+            Color::from_rgba(182, 210, 228, 255),
+        );
+        if !state.sim.status_line().is_empty() {
+            draw_text(
+                state.sim.status_line(),
+                12.0,
+                94.0,
+                18.0,
+                Color::from_rgba(252, 228, 182, 255),
+            );
+        }
     }
 
     PlayAction::None
@@ -2854,7 +3002,10 @@ fn run_editor_frame(
         (panel_rect.x - margin * 2.0).max(180.0),
         (screen_height() - margin * 2.0).max(180.0),
     );
-    let world_size_px = vec2(map.world.w as f32 * TILE_SIZE, map.world.h as f32 * TILE_SIZE);
+    let world_size_px = vec2(
+        map.world.w as f32 * TILE_SIZE,
+        map.world.h as f32 * TILE_SIZE,
+    );
     let map_scale = (map_slot_rect.w / world_size_px.x)
         .min(map_slot_rect.h / world_size_px.y)
         .max(0.01);
@@ -3321,7 +3472,7 @@ fn run_editor_frame(
         }
     }
 
-    let brush_rows = (brushes.len() + brush_columns - 1) / brush_columns;
+    let brush_rows = brushes.len().div_ceil(brush_columns);
     let info_y = panel_rect.y + 272.0 + brush_rows as f32 * brush_step_y + 9.0;
 
     draw_text(
