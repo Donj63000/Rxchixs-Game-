@@ -274,6 +274,7 @@ pub struct CharacterRenderParams {
     pub facing_left: bool,
     pub is_walking: bool,
     pub walk_cycle: f32,
+    pub gesture: CharacterGesture,
     pub time: f32,
     pub debug: bool,
 }
@@ -283,6 +284,18 @@ pub enum CharacterFacing {
     Front,
     Side,
     Back,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CharacterGesture {
+    None,
+    Talk,
+    Wave,
+    Explain,
+    Laugh,
+    Apologize,
+    Threaten,
+    Argue,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -653,7 +666,24 @@ pub fn draw_character(record: &CharacterRecord, params: CharacterRenderParams) {
     };
     let stride = walk_phase * (0.8 + params.walk_cycle.cos().abs() * 0.25);
     let idle_wave = (params.time * 2.1 + record.seed as f32 * 0.0003).sin() * 0.22;
-    let bob = stride * 0.24 + idle_wave;
+    let gesture = params.gesture;
+    let g_phase = (params.time * 7.5 + record.seed as f32 * 0.0009).sin();
+    let g_power = match gesture {
+        CharacterGesture::None => 0.0,
+        CharacterGesture::Talk => 0.7,
+        CharacterGesture::Explain => 0.9,
+        CharacterGesture::Laugh => 0.8,
+        CharacterGesture::Apologize => 0.6,
+        CharacterGesture::Wave => 1.5,
+        CharacterGesture::Threaten => 1.0,
+        CharacterGesture::Argue => 1.2,
+    };
+    let g_anim = if params.is_walking {
+        0.0
+    } else {
+        g_phase * g_power
+    };
+    let bob = stride * 0.24 + idle_wave + g_anim * 0.35;
 
     draw_circle(
         params.center.x,
@@ -769,15 +799,30 @@ pub fn draw_character(record: &CharacterRecord, params: CharacterRenderParams) {
 
     match facing {
         CharacterFacing::Side => {
+            let (near_extra, far_extra) = if !params.is_walking {
+                match gesture {
+                    CharacterGesture::Talk => (g_anim * 1.6, -g_anim * 0.6),
+                    CharacterGesture::Explain => (g_anim.abs() * 1.2, g_anim * 0.8),
+                    CharacterGesture::Wave => (g_anim.abs() * 4.0, 0.0),
+                    CharacterGesture::Apologize => (-g_anim.abs() * 1.4, -g_anim.abs() * 0.5),
+                    CharacterGesture::Threaten => (g_anim.abs() * 2.8, g_anim.abs() * 1.6),
+                    CharacterGesture::Argue => (g_anim * 2.5, -g_anim * 2.0),
+                    CharacterGesture::Laugh => (g_anim.abs() * 1.8, g_anim * 0.4),
+                    CharacterGesture::None => (0.0, 0.0),
+                }
+            } else {
+                (0.0, 0.0)
+            };
+
             let far_arm = xform.rect(
                 14.0,
-                13.8 + bob - stride * 0.22,
+                13.8 + bob - stride * 0.22 - far_extra,
                 2.2,
                 7.0 + stride.abs() * 0.4,
             );
             let near_arm = xform.rect(
                 17.4,
-                13.8 + bob + stride * 0.34,
+                13.8 + bob + stride * 0.34 - near_extra,
                 2.5,
                 7.6 + stride.abs() * 0.4,
             );
@@ -799,15 +844,30 @@ pub fn draw_character(record: &CharacterRecord, params: CharacterRenderParams) {
             draw_circle(near_hand.x, near_hand.y, 1.35 * scale, shade(skin, 0.9));
         }
         CharacterFacing::Front | CharacterFacing::Back => {
+            let (left_extra, right_extra) = if !params.is_walking {
+                match gesture {
+                    CharacterGesture::Talk => (-g_anim * 1.4, g_anim * 1.1),
+                    CharacterGesture::Explain => (g_anim.abs() * 1.1, g_anim * 0.6),
+                    CharacterGesture::Wave => (0.0, g_anim.abs() * 3.8),
+                    CharacterGesture::Apologize => (-g_anim.abs() * 1.2, -g_anim.abs() * 0.8),
+                    CharacterGesture::Threaten => (g_anim.abs() * 2.2, g_anim.abs() * 2.4),
+                    CharacterGesture::Argue => (-g_anim * 2.0, g_anim * 2.0),
+                    CharacterGesture::Laugh => (g_anim.abs() * 1.3, g_anim * 0.5),
+                    CharacterGesture::None => (0.0, 0.0),
+                }
+            } else {
+                (0.0, 0.0)
+            };
+
             let left_arm = xform.rect(
                 16.0 - metrics.shoulder_w * 0.5 - 2.2,
-                13.6 + bob + stride * 0.28,
+                13.6 + bob + stride * 0.28 - left_extra,
                 2.4,
                 7.5,
             );
             let right_arm = xform.rect(
                 16.0 + metrics.shoulder_w * 0.5 - 0.2,
-                13.6 + bob - stride * 0.28,
+                13.6 + bob - stride * 0.28 - right_extra,
                 2.4,
                 7.5,
             );
@@ -861,14 +921,64 @@ pub fn draw_character(record: &CharacterRecord, params: CharacterRenderParams) {
                 0.75 * scale,
                 eyes,
             );
-            draw_line(
-                head_center.x - 1.8 * scale,
-                head_center.y + 3.0 * scale,
-                head_center.x + 1.8 * scale,
-                head_center.y + 3.0 * scale,
-                1.0 * scale,
-                shade(skin, 0.62),
-            );
+            let mouth_col = shade(skin, 0.62);
+            let talking = !params.is_walking
+                && matches!(
+                    gesture,
+                    CharacterGesture::Talk
+                        | CharacterGesture::Explain
+                        | CharacterGesture::Laugh
+                        | CharacterGesture::Apologize
+                        | CharacterGesture::Threaten
+                        | CharacterGesture::Argue
+                );
+            if talking {
+                let m = (params.time * 10.0 + record.seed as f32 * 0.0014).sin();
+                if matches!(gesture, CharacterGesture::Laugh) {
+                    let amp = 0.9 + 0.8 * m.abs();
+                    draw_line(
+                        head_center.x - 1.6 * scale,
+                        head_center.y + 3.0 * scale,
+                        head_center.x,
+                        head_center.y + (3.0 + amp) * scale,
+                        1.0 * scale,
+                        mouth_col,
+                    );
+                    draw_line(
+                        head_center.x,
+                        head_center.y + (3.0 + amp) * scale,
+                        head_center.x + 1.6 * scale,
+                        head_center.y + 3.0 * scale,
+                        1.0 * scale,
+                        mouth_col,
+                    );
+                } else if m > 0.0 {
+                    draw_circle(
+                        head_center.x,
+                        head_center.y + 3.2 * scale,
+                        1.05 * scale,
+                        mouth_col,
+                    );
+                } else {
+                    draw_line(
+                        head_center.x - 1.8 * scale,
+                        head_center.y + 3.0 * scale,
+                        head_center.x + 1.8 * scale,
+                        head_center.y + 3.0 * scale,
+                        1.0 * scale,
+                        mouth_col,
+                    );
+                }
+            } else {
+                draw_line(
+                    head_center.x - 1.8 * scale,
+                    head_center.y + 3.0 * scale,
+                    head_center.x + 1.8 * scale,
+                    head_center.y + 3.0 * scale,
+                    1.0 * scale,
+                    mouth_col,
+                );
+            }
         }
         CharacterFacing::Side => {
             let dir = if params.facing_left { -1.0 } else { 1.0 };

@@ -1,6 +1,7 @@
 use super::*;
 use crate::historique::LogCategorie;
-use crate::interactions::SocialActionKind;
+use crate::interactions::{SocialActionKind, SocialEmoteIcon};
+use crate::social::{SocialEmoteView, SocialVisualStage};
 
 // ---------------------------------------------
 // RimWorld-like pawn bar + skill/character sheet
@@ -686,55 +687,248 @@ pub fn hit_test_pawn_world(state: &GameState, world_pos: Vec2) -> Option<PawnKey
     best.map(|(key, _)| key)
 }
 
-pub fn draw_social_bubbles(state: &GameState) {
-    for key in [PawnKey::Player, PawnKey::Npc, PawnKey::SimWorker] {
-        let timer = state.social_state.bubble_timer(key);
-        if timer <= 0.0 {
+pub fn draw_social_emotes(state: &GameState, time: f32) {
+    for pawn in &state.pawns {
+        let key = pawn.key;
+        let Some(view) = state.social_state.emote_view(key) else {
             continue;
-        }
+        };
         let Some(pos) = pawn_world_pos(state, key) else {
             continue;
         };
-        let alpha = (timer / 2.2).clamp(0.0, 1.0);
-        let bubble_w = 34.0;
-        let bubble_h = 19.0;
-        let bx = pos.x - bubble_w * 0.5;
-        let by = pos.y - 42.0;
-        draw_rectangle(
-            bx,
-            by,
-            bubble_w,
-            bubble_h,
-            Color::new(0.95, 0.98, 1.0, 0.9 * alpha),
-        );
-        draw_rectangle_lines(
-            bx,
-            by,
-            bubble_w,
-            bubble_h,
-            1.3,
-            Color::new(0.18, 0.22, 0.30, 0.95 * alpha),
-        );
-        draw_triangle(
-            vec2(pos.x - 3.2, by + bubble_h - 0.5),
-            vec2(pos.x + 3.2, by + bubble_h - 0.5),
-            vec2(pos.x, by + bubble_h + 6.5),
-            Color::new(0.95, 0.98, 1.0, 0.9 * alpha),
-        );
-        draw_text_ex(
-            "...",
-            bx + 10.5,
-            by + 14.4,
-            TextParams {
-                font_size: 18,
-                color: Color::new(0.10, 0.14, 0.21, 0.95 * alpha),
-                ..Default::default()
-            },
-        );
+
+        draw_social_emote_bubble(pos, &view, time, state.debug);
     }
 }
 
+fn draw_social_emote_bubble(pos: Vec2, view: &SocialEmoteView, time: f32, debug: bool) {
+    let base = pos + vec2(0.0, -42.0);
+
+    let wobble = 1.0 + 0.03 * (time * 4.0 + view.phase * 1.7).sin();
+    let speaker_boost = if view.is_speaker && view.stage == SocialVisualStage::Active {
+        1.06
+    } else {
+        1.0
+    };
+    let scale = wobble * speaker_boost;
+
+    let w = 46.0 * scale;
+    let h = 26.0 * scale;
+    let x = base.x - w * 0.5;
+    let y = base.y - h;
+
+    let bg = Color::new(1.0, 1.0, 1.0, 0.85 * view.alpha);
+    let border = Color::new(0.05, 0.05, 0.05, 0.70 * view.alpha);
+
+    draw_rectangle(x, y, w, h, bg);
+    draw_rectangle_lines(x, y, w, h, 1.0, border);
+
+    let tip = vec2(pos.x, pos.y - 16.0);
+    let a = vec2(base.x - 6.0 * scale, y + h);
+    let b = vec2(base.x + 6.0 * scale, y + h);
+    draw_triangle(a, b, tip, bg);
+    draw_triangle_lines(a, b, tip, 1.0, border);
+
+    let icon_center = vec2(base.x, y + h * 0.52);
+    draw_emote_icon(icon_center, view, scale, time);
+
+    if debug {
+        if let Some(kind) = view.kind {
+            draw_text_centered(kind.ui_label(), base.x, y - 4.0, 14.0, border);
+        }
+    } else if view.stage == SocialVisualStage::Active
+        && let Some(kind) = view.kind
+    {
+        let label = short_label(kind);
+        if !label.is_empty() {
+            draw_text_centered(
+                label,
+                base.x,
+                y + h - 2.0,
+                14.0,
+                Color::new(0.08, 0.08, 0.08, 0.75 * view.alpha),
+            );
+        }
+    }
+}
+
+fn short_label(kind: SocialActionKind) -> &'static str {
+    match kind {
+        SocialActionKind::DireBonjour => "Yo",
+        SocialActionKind::SmallTalk => "...",
+        SocialActionKind::Compliment => "Top",
+        SocialActionKind::DemanderAide => "Aide?",
+        SocialActionKind::Blague => "Ha",
+        SocialActionKind::Ragot => "Psst",
+        SocialActionKind::SExcuser => "Pardon",
+        SocialActionKind::Menacer => "!",
+        SocialActionKind::Insulter => "Grr",
+        SocialActionKind::SEngueuler => "!!",
+    }
+}
+
+fn draw_emote_icon(center: Vec2, view: &SocialEmoteView, scale: f32, time: f32) {
+    let col = Color::new(0.1, 0.1, 0.1, 0.85 * view.alpha);
+    let s = 8.5 * scale;
+
+    match view.icon {
+        SocialEmoteIcon::TalkDots => {
+            let speed = if view.is_speaker { 6.0 } else { 3.5 };
+            let step = ((view.phase * speed).floor() as i32).rem_euclid(3);
+
+            for i in 0..3 {
+                let dx = (i as f32 - 1.0) * (s * 0.8);
+                let alpha = if i <= step { 1.0 } else { 0.25 };
+                draw_circle(
+                    center.x + dx,
+                    center.y,
+                    1.4 * scale,
+                    Color::new(col.r, col.g, col.b, col.a * alpha),
+                );
+            }
+        }
+        SocialEmoteIcon::Heart => {
+            let pulse = 1.0 + 0.15 * (time * 8.0 + view.phase * 2.0).sin().abs();
+            let r = s * 0.38 * pulse;
+            let dx = r * 0.9;
+            let top_y = center.y - r * 0.2;
+            draw_circle(center.x - dx, top_y, r, col);
+            draw_circle(center.x + dx, top_y, r, col);
+            let p1 = vec2(center.x - dx - r, top_y);
+            let p2 = vec2(center.x + dx + r, top_y);
+            let p3 = vec2(center.x, center.y + r * 1.9);
+            draw_triangle(p1, p2, p3, col);
+        }
+        SocialEmoteIcon::Question => {
+            draw_line(
+                center.x,
+                center.y - s * 0.7,
+                center.x,
+                center.y + s * 0.2,
+                1.2,
+                col,
+            );
+            draw_circle(center.x, center.y + s * 0.55, 1.2 * scale, col);
+            draw_line(
+                center.x - s * 0.35,
+                center.y - s * 0.7,
+                center.x + s * 0.35,
+                center.y - s * 0.7,
+                1.2,
+                col,
+            );
+        }
+        SocialEmoteIcon::Laugh => {
+            let t = (time * 10.0 + view.phase * 3.0).sin().abs();
+            draw_line(
+                center.x - s * 0.7,
+                center.y + s * 0.15,
+                center.x,
+                center.y + s * (0.55 + 0.2 * t),
+                1.2,
+                col,
+            );
+            draw_line(
+                center.x,
+                center.y + s * (0.55 + 0.2 * t),
+                center.x + s * 0.7,
+                center.y + s * 0.15,
+                1.2,
+                col,
+            );
+            draw_circle(center.x - s * 0.5, center.y - s * 0.25, 1.0 * scale, col);
+            draw_circle(center.x + s * 0.5, center.y - s * 0.25, 1.0 * scale, col);
+        }
+        SocialEmoteIcon::Apology => {
+            draw_line(
+                center.x - s * 0.6,
+                center.y,
+                center.x + s * 0.2,
+                center.y,
+                1.2,
+                col,
+            );
+            draw_line(
+                center.x + s * 0.2,
+                center.y,
+                center.x + s * 0.55,
+                center.y - s * 0.25,
+                1.2,
+                col,
+            );
+            draw_line(
+                center.x + s * 0.2,
+                center.y,
+                center.x + s * 0.55,
+                center.y + s * 0.25,
+                1.2,
+                col,
+            );
+        }
+        SocialEmoteIcon::Exclamation => {
+            draw_line(
+                center.x,
+                center.y - s * 0.7,
+                center.x,
+                center.y + s * 0.2,
+                1.2,
+                col,
+            );
+            draw_circle(center.x, center.y + s * 0.55, 1.3 * scale, col);
+        }
+        SocialEmoteIcon::Anger => {
+            draw_line(
+                center.x - s * 0.7,
+                center.y - s * 0.6,
+                center.x + s * 0.7,
+                center.y + s * 0.6,
+                1.2,
+                col,
+            );
+            draw_line(
+                center.x + s * 0.7,
+                center.y - s * 0.6,
+                center.x - s * 0.7,
+                center.y + s * 0.6,
+                1.2,
+                col,
+            );
+        }
+        SocialEmoteIcon::Scribble => {
+            let t = time * 9.0 + view.phase * 1.5;
+            for i in 0..4 {
+                let dx = (i as f32 - 1.5) * (s * 0.35);
+                let dy = (t + i as f32).sin() * (s * 0.15);
+                draw_line(
+                    center.x + dx - s * 0.15,
+                    center.y + dy,
+                    center.x + dx + s * 0.15,
+                    center.y - dy,
+                    1.1,
+                    col,
+                );
+            }
+        }
+        SocialEmoteIcon::Lightning => {
+            let p1 = vec2(center.x - s * 0.2, center.y - s * 0.8);
+            let p2 = vec2(center.x + s * 0.1, center.y - s * 0.1);
+            let p3 = vec2(center.x - s * 0.1, center.y - s * 0.1);
+            let p4 = vec2(center.x + s * 0.2, center.y + s * 0.8);
+            draw_line(p1.x, p1.y, p2.x, p2.y, 1.3, col);
+            draw_line(p2.x, p2.y, p3.x, p3.y, 1.3, col);
+            draw_line(p3.x, p3.y, p4.x, p4.y, 1.3, col);
+        }
+    }
+}
+
+fn draw_text_centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
+    let metrics = measure_text(text, None, size as u16, 1.0);
+    draw_text(text, x - metrics.width * 0.5, y, size, color);
+}
+
 pub fn draw_pawn_ui(state: &GameState, layout: &PawnUiLayout, mouse: Vec2, time: f32) {
+    ensure_default_material();
+
     // Top bar background.
     draw_rectangle(
         layout.top_bar.x,
@@ -820,6 +1014,7 @@ pub fn draw_pawn_ui(state: &GameState, layout: &PawnUiLayout, mouse: Vec2, time:
                     facing_left: false,
                     is_walking: false,
                     walk_cycle: time * 2.0,
+                    gesture: CharacterGesture::None,
                     time,
                     debug: false,
                 },
@@ -896,6 +1091,8 @@ fn draw_pawn_sheet(
     mouse: Vec2,
     time: f32,
 ) {
+    ensure_default_material();
+
     draw_rectangle(
         panel.x,
         panel.y,
@@ -940,6 +1137,7 @@ fn draw_pawn_sheet(
                 facing_left: false,
                 is_walking: false,
                 walk_cycle: time * 2.0,
+                gesture: CharacterGesture::None,
                 time,
                 debug: false,
             },
@@ -1222,6 +1420,10 @@ fn bar_color(v01: f32) -> Color {
 }
 
 fn context_menu_layout(anchor: Vec2) -> (Rect, Vec<(SocialActionKind, Rect)>) {
+    debug_assert_eq!(
+        SocialActionKind::ALL.len(),
+        SocialActionKind::MENU_DEFAULT.len()
+    );
     let menu_w = 296.0;
     let item_h = 24.0;
     let header_h = 42.0;
@@ -1262,6 +1464,8 @@ fn pawn_label(state: &GameState, key: PawnKey) -> &str {
 }
 
 fn draw_pawn_context_menu(state: &GameState, mouse: Vec2) {
+    ensure_default_material();
+
     let Some(menu) = state.pawn_ui.context_menu else {
         return;
     };

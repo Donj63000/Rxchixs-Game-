@@ -258,7 +258,7 @@ pub(crate) fn run_play_frame(
             },
         );
         update_player(&mut state.player, &state.world, state.last_input, FIXED_DT);
-        update_npc_wanderer(&mut state.npc, &state.world, &state.player, FIXED_DT);
+        update_npc_wanderer(&mut state.npc, &state.world, FIXED_DT);
         *accumulator -= FIXED_DT;
         sim_steps += 1;
     }
@@ -291,48 +291,139 @@ pub(crate) fn run_play_frame(
         Some(visible_bounds),
     );
 
-    // Draw all "pawns" in a stable Y-sorted order.
+    // Draw all pawns in stable Y order, with social animation hints.
     let worker_pos = tile_center(state.sim.primary_agent_tile());
-    let mut draw_order: [(f32, u8); 3] = [
-        (state.player.pos.y, 0),
-        (state.npc.pos.y, 1),
-        (worker_pos.y, 2),
+    let mut draw_order: [(f32, PawnKey); 3] = [
+        (state.player.pos.y, PawnKey::Player),
+        (state.npc.pos.y, PawnKey::Npc),
+        (worker_pos.y, PawnKey::SimWorker),
     ];
     draw_order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
-    for (_, kind) in draw_order {
-        match kind {
-            0 => {
+    for (_, key) in draw_order {
+        let hint = state.social_state.anim_hint(key);
+        let gesture = gesture_from_social(hint.gesture);
+
+        match key {
+            PawnKey::Player => {
                 if let Some(player_character) = state.lineage.get(state.player_lineage_index) {
-                    draw_player(&state.player, player_character, time, state.debug);
+                    let mut facing = state.player.facing;
+                    let mut facing_left = state.player.facing_left;
+                    let mut is_walking = state.player.is_walking;
+                    if hint.force_face_partner
+                        && let Some(partner) = hint.partner
+                        && let Some(target_pos) = ui_pawns::pawn_world_pos(state, partner)
+                    {
+                        let dir = target_pos - state.player.pos;
+                        facing = select_character_facing(dir, facing);
+                        facing_left = dir.x < 0.0;
+                    }
+                    if hint.force_idle {
+                        is_walking = false;
+                    }
+
+                    draw_character(
+                        player_character,
+                        CharacterRenderParams {
+                            center: state.player.pos,
+                            scale: 1.0,
+                            facing,
+                            facing_left,
+                            is_walking,
+                            walk_cycle: state.player.walk_cycle,
+                            gesture,
+                            time,
+                            debug: false,
+                        },
+                    );
+
+                    if state.debug {
+                        draw_rectangle_lines(
+                            state.player.pos.x - state.player.half.x,
+                            state.player.pos.y - state.player.half.y,
+                            state.player.half.x * 2.0,
+                            state.player.half.y * 2.0,
+                            1.5,
+                            GREEN,
+                        );
+                    }
                 }
             }
-            1 => {
-                draw_npc(&state.npc, &state.npc_character, time, state.debug);
+            PawnKey::Npc => {
+                let mut facing = state.npc.facing;
+                let mut facing_left = state.npc.facing_left;
+                let mut is_walking = state.npc.is_walking;
+                if hint.force_face_partner
+                    && let Some(partner) = hint.partner
+                    && let Some(target_pos) = ui_pawns::pawn_world_pos(state, partner)
+                {
+                    let dir = target_pos - state.npc.pos;
+                    facing = select_character_facing(dir, facing);
+                    facing_left = dir.x < 0.0;
+                }
+                if hint.force_idle {
+                    is_walking = false;
+                }
+
+                draw_character(
+                    &state.npc_character,
+                    CharacterRenderParams {
+                        center: state.npc.pos,
+                        scale: 0.96,
+                        facing,
+                        facing_left,
+                        is_walking,
+                        walk_cycle: state.npc.walk_cycle,
+                        gesture,
+                        time,
+                        debug: false,
+                    },
+                );
+
+                if state.debug {
+                    draw_rectangle_lines(
+                        state.npc.pos.x - state.npc.half.x,
+                        state.npc.pos.y - state.npc.half.y,
+                        state.npc.half.x * 2.0,
+                        state.npc.half.y * 2.0,
+                        1.3,
+                        ORANGE,
+                    );
+                }
             }
-            2 => {
-                // Sim worker (visual pawn) tied to the primary sim agent.
+            PawnKey::SimWorker => {
+                let mut facing = CharacterFacing::Front;
+                let mut facing_left = false;
+                if hint.force_face_partner
+                    && let Some(partner) = hint.partner
+                    && let Some(target_pos) = ui_pawns::pawn_world_pos(state, partner)
+                {
+                    let dir = target_pos - worker_pos;
+                    facing = select_character_facing(dir, facing);
+                    facing_left = dir.x < 0.0;
+                }
+
                 draw_character(
                     &state.sim_worker_character,
                     CharacterRenderParams {
                         center: worker_pos,
                         scale: 0.94,
-                        facing: CharacterFacing::Front,
-                        facing_left: false,
+                        facing,
+                        facing_left,
                         is_walking: false,
                         walk_cycle: time * 2.0,
+                        gesture,
                         time,
                         debug: false,
                     },
                 );
             }
-            _ => {}
         }
     }
 
     // Selection ring in world space.
     ui_pawns::draw_selected_world_indicator(state);
-    ui_pawns::draw_social_bubbles(state);
+    ui_pawns::draw_social_emotes(state, time);
 
     if state.debug {
         draw_auto_move_overlay(&state.player);
@@ -399,8 +490,10 @@ pub(crate) fn run_play_frame(
             .target_tile
             .map(|(x, y)| format!("({}, {})", x, y))
             .unwrap_or_else(|| "none".to_string());
+        let npc_hint = state.social_state.anim_hint(PawnKey::Npc);
+        let npc_social = npc_hint.kind.map(|kind| kind.ui_label()).unwrap_or("idle");
         let info = format!(
-            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran\nF1: debug on/off | F2: inspector | F3: regenerate\nbar perso: clic=select/jump | double-clic ou bouton F=follow | bouton Comp=fiche\ncamera: ZQSD/WASD pan | molette zoom | C recentrer\nmouse: click-to-move sur la map | fleches: override manuel\nplayer pos(px)=({:.1},{:.1}) tile=({},{})\nmode={} walking={} frame={} facing={} facing_left={} walk_cycle={:.2}\ninput=({:.2},{:.2}) camera=({:.1},{:.1}) zoom={:.2} fps={}\nplayer_path_nodes={} next_wp={} target_tile={}\nnpc pos=({:.1},{:.1}) walking={} bubble={:.2}s cooldown={:.2}s npc_path_nodes={} npc_target={}\nwall_mask@tile={:04b}\nmutation_permille={} visual={}\n{}",
+            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran\nF1: debug on/off | F2: inspector | F3: regenerate\nbar perso: clic=select/jump | double-clic ou bouton F=follow | bouton Comp=fiche\ncamera: ZQSD/WASD pan | molette zoom | C recentrer\nmouse: click-to-move sur la map | fleches: override manuel\nplayer pos(px)=({:.1},{:.1}) tile=({},{})\nmode={} walking={} frame={} facing={} facing_left={} walk_cycle={:.2}\ninput=({:.2},{:.2}) camera=({:.1},{:.1}) zoom={:.2} fps={}\nplayer_path_nodes={} next_wp={} target_tile={}\nnpc pos=({:.1},{:.1}) walking={} hold={:.2}s social={} npc_path_nodes={} npc_target={}\nwall_mask@tile={:04b}\nmutation_permille={} visual={}\n{}",
             state.player.pos.x,
             state.player.pos.y,
             tx,
@@ -423,8 +516,8 @@ pub(crate) fn run_play_frame(
             state.npc.pos.x,
             state.npc.pos.y,
             state.npc.is_walking,
-            state.npc.bubble_timer,
-            state.npc.bubble_cooldown,
+            state.npc.hold_timer,
+            npc_social,
             state.npc.auto.path_world.len(),
             npc_target_tile,
             mask,
@@ -479,6 +572,19 @@ pub(crate) fn run_play_frame(
     ui_pawns::draw_pawn_ui(state, &ui_layout, mouse, time);
 
     PlayAction::None
+}
+
+fn gesture_from_social(gesture: crate::interactions::SocialGesture) -> CharacterGesture {
+    match gesture {
+        crate::interactions::SocialGesture::None => CharacterGesture::None,
+        crate::interactions::SocialGesture::Talk => CharacterGesture::Talk,
+        crate::interactions::SocialGesture::Wave => CharacterGesture::Wave,
+        crate::interactions::SocialGesture::Explain => CharacterGesture::Explain,
+        crate::interactions::SocialGesture::Laugh => CharacterGesture::Laugh,
+        crate::interactions::SocialGesture::Apologize => CharacterGesture::Apologize,
+        crate::interactions::SocialGesture::Threaten => CharacterGesture::Threaten,
+        crate::interactions::SocialGesture::Argue => CharacterGesture::Argue,
+    }
 }
 
 pub(crate) fn run_editor_frame(

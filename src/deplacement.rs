@@ -165,10 +165,6 @@ pub(crate) fn move_towards_vec2(current: Vec2, target: Vec2, max_delta: f32) -> 
     }
 }
 
-pub(crate) fn aabb_intersects(a: Aabb, b: Aabb) -> bool {
-    a.min.x < b.max.x && a.max.x > b.min.x && a.min.y < b.max.y && a.max.y > b.min.y
-}
-
 pub(crate) fn nearest_walkable_tile(world: &World, desired: (i32, i32)) -> Option<(i32, i32)> {
     let start = (
         clamp_i32(desired.0, 0, world.w - 1),
@@ -582,25 +578,17 @@ pub(crate) fn move_npc_axis(npc: &mut NpcWanderer, world: &World, delta: f32, is
     }
 }
 
-pub(crate) fn update_npc_wanderer(npc: &mut NpcWanderer, world: &World, player: &Player, dt: f32) {
-    npc.bubble_timer = (npc.bubble_timer - dt).max(0.0);
-    npc.bubble_cooldown = (npc.bubble_cooldown - dt).max(0.0);
-
-    let player_aabb = Aabb::from_center(player.pos, player.half);
-    let npc_aabb = Aabb::from_center(npc.pos, npc.half);
-    let close_enough = npc.pos.distance(player.pos) <= NPC_GREETING_RADIUS;
-    let overlap = aabb_intersects(player_aabb, npc_aabb);
-    if (close_enough || overlap) && npc.bubble_cooldown <= 0.0 {
-        npc.bubble_timer = NPC_GREETING_DURATION;
-        npc.bubble_cooldown = NPC_GREETING_COOLDOWN;
-    }
+pub(crate) fn update_npc_wanderer(npc: &mut NpcWanderer, world: &World, dt: f32) {
+    npc.hold_timer = (npc.hold_timer - dt).max(0.0);
 
     let had_active_path =
         !npc.auto.path_world.is_empty() && npc.auto.next_waypoint < npc.auto.path_world.len();
     let path_finished =
         npc.auto.path_world.is_empty() || npc.auto.next_waypoint >= npc.auto.path_world.len();
     if path_finished {
-        if npc.idle_timer > 0.0 {
+        if npc.hold_timer > 0.0 {
+            npc.idle_timer = npc.idle_timer.max(0.2);
+        } else if npc.idle_timer > 0.0 {
             npc.idle_timer = (npc.idle_timer - dt).max(0.0);
         } else if let Some(target_tile) = npc_choose_wander_target(npc, world) {
             if issue_npc_wander_command(npc, world, target_tile) {

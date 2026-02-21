@@ -46,6 +46,7 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
                 facing_left: false,
                 is_walking: i == state.player_lineage_index,
                 walk_cycle: time * 6.5 + i as f32 * 0.8,
+                gesture: CharacterGesture::None,
                 time,
                 debug: false,
             },
@@ -748,90 +749,6 @@ pub(crate) fn draw_vignette(palette: &Palette) {
         draw_rectangle(inset, inset + h - 2.0, w, 2.0, c);
         draw_rectangle(inset, inset, 2.0, h, c);
         draw_rectangle(inset + w - 2.0, inset, 2.0, h, c);
-    }
-}
-
-pub(crate) fn draw_player(player: &Player, character: &CharacterRecord, time: f32, debug: bool) {
-    draw_character(
-        character,
-        CharacterRenderParams {
-            center: player.pos,
-            scale: 1.0,
-            facing: player.facing,
-            facing_left: player.facing_left,
-            is_walking: player.is_walking,
-            walk_cycle: player.walk_cycle,
-            time,
-            debug: false,
-        },
-    );
-
-    if debug {
-        draw_rectangle_lines(
-            player.pos.x - player.half.x,
-            player.pos.y - player.half.y,
-            player.half.x * 2.0,
-            player.half.y * 2.0,
-            1.5,
-            GREEN,
-        );
-    }
-}
-
-pub(crate) fn draw_npc(npc: &NpcWanderer, character: &CharacterRecord, time: f32, debug: bool) {
-    draw_character(
-        character,
-        CharacterRenderParams {
-            center: npc.pos,
-            scale: 0.96,
-            facing: npc.facing,
-            facing_left: npc.facing_left,
-            is_walking: npc.is_walking,
-            walk_cycle: npc.walk_cycle,
-            time,
-            debug: false,
-        },
-    );
-
-    if npc.bubble_timer > 0.0 {
-        let alpha = (npc.bubble_timer / NPC_GREETING_DURATION).clamp(0.0, 1.0);
-        let bubble_w = 44.0;
-        let bubble_h = 22.0;
-        let bx = npc.pos.x - bubble_w * 0.5;
-        let by = npc.pos.y - 40.0;
-        let bg = Color::new(0.95, 0.98, 1.0, 0.92 * alpha);
-        let border = Color::new(0.22, 0.26, 0.34, 0.95 * alpha);
-        let tail = Color::new(0.95, 0.98, 1.0, 0.9 * alpha);
-
-        draw_rectangle(bx, by, bubble_w, bubble_h, bg);
-        draw_rectangle_lines(bx, by, bubble_w, bubble_h, 1.5, border);
-        draw_triangle(
-            vec2(npc.pos.x - 4.0, by + bubble_h - 0.5),
-            vec2(npc.pos.x + 4.0, by + bubble_h - 0.5),
-            vec2(npc.pos.x, by + bubble_h + 8.0),
-            tail,
-        );
-        draw_text_ex(
-            "Yo !",
-            bx + 9.5,
-            by + 15.5,
-            TextParams {
-                font_size: 16,
-                color: Color::new(0.12, 0.15, 0.22, 0.98 * alpha),
-                ..Default::default()
-            },
-        );
-    }
-
-    if debug {
-        draw_rectangle_lines(
-            npc.pos.x - npc.half.x,
-            npc.pos.y - npc.half.y,
-            npc.half.x * 2.0,
-            npc.half.y * 2.0,
-            1.3,
-            ORANGE,
-        );
     }
 }
 

@@ -12,7 +12,7 @@ mod ui_pawns;
 mod utilitaires;
 
 use character::{
-    CharacterCatalog, CharacterFacing, CharacterRecord, CharacterRenderParams,
+    CharacterCatalog, CharacterFacing, CharacterGesture, CharacterRecord, CharacterRenderParams,
     build_lineage_preview, compact_visual_summary, draw_character, inspector_lines,
 };
 use deplacement::*;
@@ -47,9 +47,6 @@ const AUTO_WAYPOINT_REACH: f32 = 5.0;
 const NPC_WANDER_SPEED: f32 = 92.0;
 const NPC_IDLE_MIN: f32 = 0.7;
 const NPC_IDLE_MAX: f32 = 2.0;
-const NPC_GREETING_RADIUS: f32 = 26.0;
-const NPC_GREETING_DURATION: f32 = 1.25;
-const NPC_GREETING_COOLDOWN: f32 = 3.8;
 const MAP_FILE_PATH: &str = "maps/main_map.ron";
 const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
 const MAP_FILE_VERSION: u32 = 3;
@@ -289,9 +286,8 @@ struct NpcWanderer {
     walk_cycle: f32,
     auto: AutoMoveState,
     idle_timer: f32,
+    hold_timer: f32,
     rng_state: u64,
-    bubble_timer: f32,
-    bubble_cooldown: f32,
 }
 
 impl NpcWanderer {
@@ -308,9 +304,8 @@ impl NpcWanderer {
             walk_cycle: 0.0,
             auto: AutoMoveState::default(),
             idle_timer: 1.0,
+            hold_timer: 0.0,
             rng_state: seed ^ 0xC0FF_EE11_D00D_CAFE,
-            bubble_timer: 0.0,
-            bubble_cooldown: 0.8,
         }
     }
 }
@@ -749,24 +744,63 @@ mod tests {
     }
 
     #[test]
-    fn npc_greeting_triggers_when_player_is_close() {
+    fn social_proximity_greeting_creates_emote() {
         let world = World::new_room(25, 15);
-        let mut npc = NpcWanderer::new(tile_center((6, 6)), 99);
+        let sim = sim::FactorySim::new(sim::StarterSimConfig::default(), 25, 15);
         let mut player = Player::new(tile_center((6, 6)));
-        player.half = vec2(10.0, 14.0);
-        npc.bubble_cooldown = 0.0;
+        let mut npc = NpcWanderer::new(tile_center((6, 6)), 99);
 
-        update_npc_wanderer(&mut npc, &world, &player, FIXED_DT);
+        let mut pawns = vec![
+            PawnCard {
+                key: PawnKey::Player,
+                name: "Player".to_string(),
+                role: "Test".to_string(),
+                metrics: PawnMetrics::seeded(1),
+                history: crate::historique::HistoriqueLog::new(64),
+            },
+            PawnCard {
+                key: PawnKey::Npc,
+                name: "NPC".to_string(),
+                role: "Test".to_string(),
+                metrics: PawnMetrics::seeded(2),
+                history: crate::historique::HistoriqueLog::new(64),
+            },
+            PawnCard {
+                key: PawnKey::SimWorker,
+                name: "Worker".to_string(),
+                role: "Test".to_string(),
+                metrics: PawnMetrics::seeded(3),
+                history: crate::historique::HistoriqueLog::new(64),
+            },
+        ];
+        let mut social_state = social::SocialState::new(&pawns, 0x1234);
 
-        assert!(npc.bubble_timer > 0.0);
-        assert!(npc.bubble_cooldown > 0.0);
+        social_state.tick(
+            0.25,
+            0.0,
+            social::SocialTickContext {
+                world: &world,
+                sim: &sim,
+            },
+            social::SocialTickActors {
+                player: &mut player,
+                npc: &mut npc,
+                pawns: &mut pawns,
+            },
+        );
+
+        let view = social_state.emote_view(PawnKey::Npc);
+        assert!(view.is_some());
+        assert_eq!(
+            view.and_then(|entry| entry.kind),
+            Some(interactions::SocialActionKind::DireBonjour)
+        );
     }
 
     #[test]
     fn npc_wanderer_leaves_idle_and_moves_over_time() {
         let world = World::new_room(25, 15);
         let mut npc = NpcWanderer::new(tile_center((6, 6)), 1234);
-        let player = Player::new(tile_center((2, 2)));
         let start = npc.pos;
         npc.idle_timer = 0.0;
 
@@ -774,7 +808,7 @@ mod tests {
         let mut walked = false;
 
         for _ in 0..360 {
-            update_npc_wanderer(&mut npc, &world, &player, FIXED_DT);
+            update_npc_wanderer(&mut npc, &world, FIXED_DT);
             had_path |= !npc.auto.path_world.is_empty();
             walked |= npc.is_walking;
         }
