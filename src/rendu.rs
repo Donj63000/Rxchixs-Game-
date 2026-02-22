@@ -84,9 +84,51 @@ fn main_menu_background_texture() -> Option<Texture2D> {
     MAIN_MENU_BACKGROUND_TEXTURE.with(|slot| slot.borrow().clone())
 }
 
+fn draw_text_lisible(text: &str, x: f32, y: f32, font_size: f32, fill: Color) {
+    draw_text_shadowed(
+        text,
+        x,
+        y,
+        font_size,
+        fill,
+        with_alpha(BLACK, 0.88),
+        ui_shadow_offset(font_size),
+    );
+}
+
+fn draw_text_chip(
+    text: &str,
+    x: f32,
+    y: f32,
+    font_size: f32,
+    fill: Color,
+    bg: Color,
+    border: Color,
+) {
+    let dims = measure_text(text, None, font_size as u16, 1.0);
+    let pad_x = (font_size * 0.32).clamp(3.0, 6.0);
+    let pad_top = (font_size * 0.22).clamp(2.0, 4.0);
+    let rect = Rect::new(
+        x - pad_x,
+        y - font_size - pad_top,
+        dims.width + pad_x * 2.0,
+        font_size + pad_top + 5.0,
+    );
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        (rect.w - 1.0).max(1.0),
+        (rect.h - 1.0).max(1.0),
+        1.0,
+        border,
+    );
+    draw_text_lisible(text, x, y, font_size, fill);
+}
+
 pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
     let panel_w = 380.0;
-    let panel_h = 204.0;
+    let panel_h = 222.0;
     let panel_x = screen_width() - panel_w - 10.0;
     // Keep it below the pawn bar (so the new UI is always usable).
     let panel_y = 10.0 + 74.0 + 10.0;
@@ -107,12 +149,12 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
         Color::from_rgba(90, 120, 140, 220),
     );
 
-    draw_text(
-        "Inspecteur personnage (F2 afficher/masquer, F3 regenerer)",
+    draw_text_lisible(
+        "Inspecteur personnage (F2: afficher/masquer, F3: regenerer)",
         panel_x + 10.0,
         panel_y + 18.0,
-        18.0,
-        WHITE,
+        17.0,
+        Color::from_rgba(240, 248, 255, 255),
     );
 
     for (i, record) in state.lineage.iter().take(5).enumerate() {
@@ -137,9 +179,9 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
         );
 
         let title = format!("{} g{}", record.label, record.generation);
-        draw_text(&title, px - 22.0, py + 26.0, 14.0, WHITE);
+        draw_text_lisible(&title, px - 22.0, py + 26.0, 14.0, WHITE);
         let summary = compact_visual_summary(record);
-        draw_text(
+        draw_text_lisible(
             &summary,
             px - 38.0,
             py + 40.0,
@@ -151,11 +193,11 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
     if let Some(player_record) = state.lineage.get(state.player_lineage_index) {
         let lines = inspector_lines(player_record);
         for (i, line) in lines.iter().take(8).enumerate() {
-            draw_text(
+            draw_text_lisible(
                 line,
                 panel_x + 10.0,
-                panel_y + 120.0 + i as f32 * 11.0,
-                11.0,
+                panel_y + 126.0 + i as f32 * 12.5,
+                12.0,
                 Color::from_rgba(190, 210, 220, 255),
             );
         }
@@ -1098,19 +1140,23 @@ pub(crate) fn draw_sim_blocks_overlay(
         }
         if show_labels {
             let label = format!("#{} {}", block.id, block.kind.label());
-            draw_text(
+            draw_text_chip(
                 &label,
-                rect.x + 2.0,
-                rect.y - 2.0,
-                14.0,
+                rect.x + 3.0,
+                rect.y - 3.0,
+                13.0,
                 Color::from_rgba(232, 240, 248, 255),
+                Color::from_rgba(10, 18, 26, 214),
+                Color::from_rgba(116, 168, 204, 188),
             );
-            draw_text(
+            draw_text_chip(
                 &block.inventory_summary,
-                rect.x + 2.0,
+                rect.x + 3.0,
                 rect.y + rect.h + 13.0,
-                12.0,
+                11.0,
                 Color::from_rgba(180, 215, 232, 255),
+                Color::from_rgba(8, 15, 22, 202),
+                Color::from_rgba(92, 138, 170, 168),
             );
         }
     }
@@ -1142,12 +1188,14 @@ fn draw_storage_raw_stack(rect: Rect, raw_qty: u32, texture: Option<&Texture2D>)
 
     if raw_qty > 1 {
         let count = format!("x{}", raw_qty);
-        draw_text(
+        draw_text_chip(
             &count,
             rect.x + 3.0,
-            rect.y + rect.h - 4.0,
+            rect.y + rect.h - 3.0,
             11.0,
             Color::from_rgba(240, 246, 252, 230),
+            Color::from_rgba(20, 26, 32, 182),
+            Color::from_rgba(142, 176, 196, 170),
         );
     }
 }
@@ -1159,12 +1207,14 @@ pub(crate) fn draw_sim_agent_overlay(sim: &sim::FactorySim, show_label: bool) {
         draw_circle(px, py, 5.5, Color::from_rgba(255, 214, 122, 245));
         draw_circle_lines(px, py, 8.0, 1.6, Color::from_rgba(255, 248, 220, 245));
         if show_label {
-            draw_text(
+            draw_text_chip(
                 &agent.label,
                 px - 42.0,
                 py - 10.0,
                 14.0,
                 Color::from_rgba(255, 244, 218, 255),
+                Color::from_rgba(26, 20, 12, 196),
+                Color::from_rgba(190, 150, 90, 184),
             );
         }
     }

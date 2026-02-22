@@ -597,13 +597,13 @@ pub(crate) fn draw_text_shadowed(
     shadow_color: Color,
     shadow_offset: f32,
 ) {
-    draw_text(
-        text,
-        x + shadow_offset,
-        y + shadow_offset,
-        font_size,
-        shadow_color,
-    );
+    // 4-way outline + diagonal pass: noticeably more readable on busy backgrounds.
+    let off = shadow_offset.max(0.75);
+    draw_text(text, x - off, y, font_size, shadow_color);
+    draw_text(text, x + off, y, font_size, shadow_color);
+    draw_text(text, x, y - off, font_size, shadow_color);
+    draw_text(text, x, y + off, font_size, shadow_color);
+    draw_text(text, x + off, y + off, font_size, shadow_color);
     draw_text(text, x, y, font_size, text_color);
 }
 

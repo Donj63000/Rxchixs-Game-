@@ -1052,7 +1052,7 @@ impl FactorySim {
 
     pub fn short_hud(&self) -> String {
         format!(
-            "Simu {} | Tresorerie {:.0} EUR | Ventes {} | Cadence {:.1}/h | OTIF {:.0}%",
+            "Simulation {} | Tresorerie {:.0} EUR | Ventes {} | Cadence {:.1}/h | Service {:.0}%",
             self.clock.format_hhmm(),
             self.economy.cash,
             self.line.sold_total,
@@ -1073,7 +1073,7 @@ impl FactorySim {
             .map(|id| format!(" source_depl=#{}", id))
             .unwrap_or_default();
         format!(
-            "Construction[{mode}] {paint}{move_hint} | F7 basculer | B bloc | N zone | V peinture | M source-depl | clic appliquer | clic-droit vendre/reinit | F8 sauver"
+            "Construction [{mode}] | {paint}{move_hint} | F7: activer/desactiver | B: bloc | N: zone | V: peinture | M: source deplacement | clic: appliquer | clic droit: vendre/reinitialiser | F8: sauvegarder"
         )
     }
 
@@ -1549,7 +1549,7 @@ impl FactorySim {
             .collect::<Vec<_>>()
             .join(" ");
         format!(
-            "SIM temps=J{day} {} (heures={:.2})\nTresorerie={:.2} | Revenu={:.2} | Cout={:.2} | Profit={:.2}\nLigne mat={} enc={} fini={} ventes_totales={}\nMachineA={} MachineB={}\nTaches attente={} bloquees={} reservations={}\nAgent tuile=({}, {}) fatigue={:.1} stress={:.1} tache_actuelle={:?}\nKPI cadence={:.1}/h rebut={} arret={:.1}m otif={:.0}%\nKPIZones {}\nConstruction {}\nStatut {}",
+            "Simulation J{day} {} ({:.2} h)\nFinances: tresorerie={:.2} | revenu={:.2} | cout={:.2} | profit={:.2}\nFlux ligne: matieres={} en-cours={} finis={} ventes_totales={}\nMachines: A={} | B={}\nJobs: en_attente={} | bloques={} | reservations={}\nAgent: tuile=({}, {}) fatigue={:.1} stress={:.1} job_actuel={:?}\nKPI: cadence={:.1}/h rebut={} arret={:.1}m service={:.0}%\nZones KPI: {}\nConstruction: {}\nStatut: {}",
             self.clock.format_hhmm(),
             self.clock.hours(),
             self.economy.cash,

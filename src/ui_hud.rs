@@ -524,7 +524,13 @@ fn ui_text_and_shadow_for_bg(bg: Color) -> (Color, Color) {
 }
 
 fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: Color, off: Vec2) {
-    draw_text(text, x + off.x, y + off.y, fs, shadow);
+    let ox = off.x.max(0.75);
+    let oy = off.y.max(0.75);
+    draw_text(text, x - ox, y, fs, shadow);
+    draw_text(text, x + ox, y, fs, shadow);
+    draw_text(text, x, y - oy, fs, shadow);
+    draw_text(text, x, y + oy, fs, shadow);
+    draw_text(text, x + ox, y + oy, fs, shadow);
     draw_text(text, x, y, fs, fill);
 }
 
@@ -2103,10 +2109,10 @@ fn info_history_max_scroll(state: &GameState, panel: Rect) -> f32 {
 
 const INFO_SHEET_START_Y: f32 = 42.0;
 const INFO_SHEET_VIEWPORT_TOP_Y: f32 = 28.0;
-const INFO_SHEET_SECTION_HEADER_ADVANCE: f32 = 26.0;
-const INFO_SHEET_ROW_ADVANCE: f32 = 18.0;
+const INFO_SHEET_SECTION_HEADER_ADVANCE: f32 = 30.0;
+const INFO_SHEET_ROW_ADVANCE: f32 = 21.0;
 const INFO_SHEET_SECTION_GAP: f32 = 10.0;
-const INFO_SHEET_WORKER_ADVANCE: f32 = 30.0;
+const INFO_SHEET_WORKER_ADVANCE: f32 = 34.0;
 const INFO_SHEET_BOTTOM_PAD: f32 = 8.0;
 
 fn info_sheet_section_height(rows: usize) -> f32 {
@@ -2367,15 +2373,15 @@ fn trait_color(trait_bar: TraitBar) -> Color {
 }
 
 fn draw_info_section_title(y: f32, viewport: Rect, x: f32, title: &str, shadow: Color) {
-    if y + 24.0 >= viewport.y && y <= viewport.y + viewport.h {
+    if y + 28.0 >= viewport.y && y <= viewport.y + viewport.h {
         draw_text_shadowed(
             title,
             x,
-            y + 20.0,
-            16.0,
+            y + 22.0,
+            18.0,
             rgba(210, 225, 236, 240),
             shadow,
-            ui_shadow_offset(16.0),
+            ui_shadow_offset(18.0),
         );
     }
 }
@@ -2411,7 +2417,7 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
         return;
     };
 
-    let title_fs = 20.0;
+    let title_fs = 22.0;
     let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
     let role = match pawn.key {
         PawnKey::Player => "Patron",
@@ -2440,12 +2446,12 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
     y += INFO_SHEET_SECTION_HEADER_ADVANCE;
     for need in NeedBar::ALL {
         let v = pawn.metrics.needs[need as usize] as f32 / 100.0;
-        if y + 16.0 >= viewport.y && y <= viewport.y + viewport.h {
+        if y + 20.0 >= viewport.y && y <= viewport.y + viewport.h {
             draw_labeled_bar(
                 label_x,
                 y,
                 bar_w,
-                12.0,
+                14.0,
                 need.label(),
                 v,
                 need_color(need),
@@ -2465,8 +2471,8 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
             SynthBar::Fatigue => rgba(210, 180, 120, 240),
             SynthBar::Moral => rgba(120, 170, 230, 240),
         };
-        if y + 16.0 >= viewport.y && y <= viewport.y + viewport.h {
-            draw_labeled_bar(label_x, y, bar_w, 12.0, synth.label(), v, col, bg);
+        if y + 20.0 >= viewport.y && y <= viewport.y + viewport.h {
+            draw_labeled_bar(label_x, y, bar_w, 14.0, synth.label(), v, col, bg);
         }
         y += INFO_SHEET_ROW_ADVANCE;
     }
@@ -2476,12 +2482,12 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
     y += INFO_SHEET_SECTION_HEADER_ADVANCE;
     for skill in SkillBar::ALL {
         let v = pawn.metrics.skills[skill as usize] as f32 / 100.0;
-        if y + 16.0 >= viewport.y && y <= viewport.y + viewport.h {
+        if y + 20.0 >= viewport.y && y <= viewport.y + viewport.h {
             draw_labeled_bar(
                 label_x,
                 y,
                 bar_w,
-                12.0,
+                14.0,
                 skill.label(),
                 v,
                 skill_color(skill),
@@ -2496,12 +2502,12 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
     y += INFO_SHEET_SECTION_HEADER_ADVANCE;
     for trait_bar in TraitBar::ALL {
         let v = pawn.metrics.traits[trait_bar as usize] as f32 / 100.0;
-        if y + 16.0 >= viewport.y && y <= viewport.y + viewport.h {
+        if y + 20.0 >= viewport.y && y <= viewport.y + viewport.h {
             draw_labeled_bar(
                 label_x,
                 y,
                 bar_w,
-                12.0,
+                14.0,
                 trait_bar.label(),
                 v,
                 trait_color(trait_bar),
@@ -2513,7 +2519,7 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
     y += INFO_SHEET_SECTION_GAP;
 
     if pawn.key == PawnKey::SimWorker {
-        let fs = 14.0;
+        let fs = 16.0;
         let activity = state
             .sim
             .primary_agent_current_job_id()
@@ -2524,7 +2530,7 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
             draw_text_shadowed(
                 &t,
                 label_x,
-                y + 24.0,
+                y + 26.0,
                 fs,
                 rgba(220, 235, 242, 240),
                 shadow,
@@ -2544,12 +2550,12 @@ fn draw_info_sheet(state: &GameState, panel: Rect, mouse: Vec2) {
 
 #[allow(clippy::too_many_arguments)]
 fn draw_labeled_bar(x: f32, y: f32, w: f32, h: f32, label: &str, v: f32, col: Color, bg: Color) {
-    let fs = 12.0;
+    let fs = 14.0;
     let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
     draw_text_shadowed(label, x, y + h, fs, fill, shadow, ui_shadow_offset(fs));
-    let bar_x = x + 84.0;
-    let bar_w = (w - 84.0).max(1.0);
-    draw_meter(bar_x, y + 2.0, bar_w, h - 4.0, v, col);
+    let bar_x = x + 96.0;
+    let bar_w = (w - 96.0).max(1.0);
+    draw_meter(bar_x, y + 3.0, bar_w, h - 6.0, v, col);
 }
 
 fn draw_info_history(state: &GameState, panel: Rect, mouse: Vec2) {

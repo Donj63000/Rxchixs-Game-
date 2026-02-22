@@ -19,6 +19,65 @@ fn normalize_wheel_units(raw_delta: f32) -> f32 {
     normalized.clamp(-8.0, 8.0)
 }
 
+fn draw_overlay_panel(rect: Rect) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(7, 12, 18, 198),
+    );
+    draw_rectangle(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.w - 2.0).max(1.0),
+        (rect.h * 0.42).max(1.0),
+        Color::from_rgba(48, 84, 112, 38),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        (rect.w - 1.0).max(1.0),
+        (rect.h - 1.0).max(1.0),
+        1.5,
+        Color::from_rgba(124, 172, 206, 176),
+    );
+    draw_rectangle_lines(
+        rect.x + 1.5,
+        rect.y + 1.5,
+        (rect.w - 3.0).max(1.0),
+        (rect.h - 3.0).max(1.0),
+        1.0,
+        Color::from_rgba(20, 34, 48, 210),
+    );
+}
+
+fn draw_overlay_line(text: &str, x: f32, y: f32, font_size: f32, color: Color) {
+    let shadow = with_alpha(BLACK, 0.88);
+    draw_text_shadowed(
+        text,
+        x,
+        y,
+        font_size,
+        color,
+        shadow,
+        ui_shadow_offset(font_size),
+    );
+}
+
+fn draw_overlay_multiline(
+    text: &str,
+    x: f32,
+    y: f32,
+    font_size: f32,
+    line_height: f32,
+    color: Color,
+) {
+    for (i, line) in text.lines().enumerate() {
+        draw_overlay_line(line, x, y + i as f32 * line_height, font_size, color);
+    }
+}
+
 pub(crate) fn run_play_frame(
     state: &mut GameState,
     frame_dt: f32,
@@ -507,7 +566,7 @@ pub(crate) fn run_play_frame(
             .map(|kind| kind.ui_label())
             .unwrap_or("inactif");
         let info = format!(
-            "Mode Jeu | Echap=menu | F10=editeur | F11=plein ecran\nF1: debogage oui/non | F2: inspecteur | F3: regenerer\nbarre persos: clic=selection/saut | double-clic ou bouton F=suivi | bouton Comp=fiche\ncamera: ZQSD/WASD deplacement | molette zoom | C recentrer\nsouris: clic pour deplacer sur la carte | fleches: controle manuel\njoueur pos(px)=({:.1},{:.1}) tuile=({},{})\nmode={} marche={} image={} orientation={} regarde_gauche={} cycle_marche={:.2}\nentree=({:.2},{:.2}) camera=({:.1},{:.1}) zoom={:.2} ips={}\ntrajet_joueur_noeuds={} prochain_wp={} tuile_cible={}\nnpc pos=({:.1},{:.1}) marche={} attente={:.2}s social={} trajet_npc_noeuds={} cible_npc={}\nmasque_mur@tuile={:04b}\nmutation_permille={} visuel={}\n{}",
+            "Mode jeu | Echap: menu | F10: editeur | F11: plein ecran\nF1: debogage | F2: inspecteur | F3: regenerer les visuels\nBarre basse: equipe, construction, caracteristiques, historique, mini-carte\nCamera: ZQSD/WASD deplacement | molette zoom | C recentrer\nCarte: clic gauche = ordre de deplacement | fleches = controle manuel\nJoueur monde=({:.1}, {:.1}) tuile=({}, {}) mode={} marche={} image={} orientation={} regard_gauche={} cycle={:.2}\nEntree joueur=({:.2}, {:.2}) camera=({:.1}, {:.1}) zoom={:.2} ips={}\nTrajet joueur: noeuds={} prochain_wp={} cible={}\nPNJ monde=({:.1}, {:.1}) marche={} attente={:.2}s social={} trajet={} cible={}\nMasque mur tuile={:04b}\nMutation={}/1000 | visuel={}\n{}",
             state.player.pos.x,
             state.player.pos.y,
             tx,
@@ -539,28 +598,52 @@ pub(crate) fn run_play_frame(
             player_visual,
             state.sim.debug_hud(),
         );
-        draw_text(&info, 12.0, hud_y0, 18.0, WHITE);
-    } else {
-        draw_text(
-            "Mode Jeu | Echap=menu | F10=editeur | F11=plein ecran",
-            12.0,
-            hud_y0 + 4.0,
-            22.0,
-            Color::from_rgba(220, 235, 242, 255),
+        let font_size = 16.0;
+        let line_height = 19.0;
+        let line_count = info.lines().count().max(1) as f32;
+        let panel = Rect::new(
+            8.0,
+            hud_y0 - 12.0,
+            (screen_width() * 0.84).clamp(620.0, 1320.0),
+            14.0 + line_count * line_height,
         );
-        draw_text(
-            "HUD bas: persos/menu construction/fiche/mini-carte | clic mini-carte: deplacer camera | F7 construction | F1 debogage",
-            12.0,
-            hud_y0 + 28.0,
-            18.0,
-            Color::from_rgba(200, 224, 236, 255),
+        draw_overlay_panel(panel);
+        draw_overlay_multiline(
+            &info,
+            panel.x + 10.0,
+            panel.y + 20.0,
+            font_size,
+            line_height,
+            Color::from_rgba(236, 246, 255, 255),
+        );
+    } else {
+        let panel = Rect::new(
+            8.0,
+            hud_y0 - 10.0,
+            (screen_width() * 0.84).clamp(620.0, 1320.0),
+            72.0,
+        );
+        draw_overlay_panel(panel);
+        draw_overlay_line(
+            "Mode jeu | Echap: menu | F10: editeur | F11: plein ecran",
+            panel.x + 10.0,
+            panel.y + 24.0,
+            21.0,
+            Color::from_rgba(224, 240, 250, 255),
+        );
+        draw_overlay_line(
+            "Commandes: ZQSD/WASD deplacer camera, molette zoom, clic carte pour deplacer, mini-carte pour recadrer",
+            panel.x + 10.0,
+            panel.y + 44.0,
+            16.0,
+            Color::from_rgba(204, 228, 242, 255),
         );
         let hud = state.sim.short_hud();
-        draw_text(
+        draw_overlay_line(
             &hud,
-            12.0,
-            hud_y0 + 50.0,
-            18.0,
+            panel.x + 10.0,
+            panel.y + 63.0,
+            16.0,
             Color::from_rgba(196, 224, 236, 255),
         );
     }
@@ -916,9 +999,15 @@ pub(crate) fn run_editor_frame(
         2.2,
         Color::from_rgba(95, 230, 120, 240),
     );
-    draw_text(
-        "P",
-        player_pos.x - 4.5,
+    draw_circle(
+        player_pos.x,
+        player_pos.y,
+        7.0,
+        Color::from_rgba(10, 26, 12, 176),
+    );
+    draw_overlay_line(
+        "J",
+        player_pos.x - 4.0,
         player_pos.y + 5.0,
         18.0,
         Color::from_rgba(95, 230, 120, 240),
@@ -932,7 +1021,8 @@ pub(crate) fn run_editor_frame(
         2.2,
         Color::from_rgba(255, 160, 95, 240),
     );
-    draw_text(
+    draw_circle(npc_pos.x, npc_pos.y, 7.0, Color::from_rgba(32, 18, 10, 176));
+    draw_overlay_line(
         "N",
         npc_pos.x - 5.0,
         npc_pos.y + 5.0,

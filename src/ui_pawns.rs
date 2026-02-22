@@ -1012,7 +1012,7 @@ fn draw_emote_icon(center: Vec2, view: &SocialEmoteView, scale: f32, time: f32) 
 
 fn draw_text_centered(text: &str, x: f32, y: f32, size: f32, color: Color) {
     let metrics = measure_text(text, None, size as u16, 1.0);
-    draw_text(text, x - metrics.width * 0.5, y, size, color);
+    draw_text_shadowed(text, x - metrics.width * 0.5, y, size, color);
 }
 
 pub fn draw_pawn_ui(state: &GameState, layout: &PawnUiLayout, mouse: Vec2, time: f32) {
@@ -1684,7 +1684,13 @@ fn draw_text_ellipsized_shadowed(text: &str, x: f32, y: f32, max_w: f32, size: f
 }
 
 fn draw_text_shadowed(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    draw_text(text, x + 1.0, y + 1.0, size, with_alpha(BLACK, 0.82));
+    let off = (size / 18.0).clamp(0.9, 1.8);
+    let shadow = with_alpha(BLACK, 0.84);
+    draw_text(text, x - off, y, size, shadow);
+    draw_text(text, x + off, y, size, shadow);
+    draw_text(text, x, y - off, size, shadow);
+    draw_text(text, x, y + off, size, shadow);
+    draw_text(text, x + off, y + off, size, shadow);
     draw_text(text, x, y, size, color);
 }
 
