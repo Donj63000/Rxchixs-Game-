@@ -455,23 +455,59 @@ pub fn draw_hud(
 }
 
 fn draw_bar_background(bar: Rect) {
-    let bg0 = rgba(18, 26, 34, 240);
-    let bg1 = rgba(10, 14, 20, 250);
-    draw_rectangle(bar.x, bar.y, bar.w, bar.h, bg0);
-    draw_rectangle(bar.x, bar.y + bar.h * 0.55, bar.w, bar.h * 0.45, bg1);
-    draw_rectangle_lines(bar.x, bar.y, bar.w, bar.h, 2.0, rgba(80, 120, 160, 220));
+    let top = rgba(24, 34, 48, 244);
+    let mid = rgba(14, 20, 30, 248);
+    let bottom = rgba(8, 12, 18, 252);
+    draw_rectangle(bar.x, bar.y, bar.w, bar.h, top);
+    draw_rectangle(bar.x, bar.y + bar.h * 0.28, bar.w, bar.h * 0.4, mid);
+    draw_rectangle(bar.x, bar.y + bar.h * 0.66, bar.w, bar.h * 0.34, bottom);
+
+    draw_rectangle(bar.x, bar.y, bar.w, 2.0, rgba(176, 220, 248, 138));
+    draw_rectangle(bar.x, bar.y + 2.0, bar.w, 2.0, rgba(84, 128, 162, 118));
+    draw_rectangle(
+        bar.x,
+        bar.y + bar.h * 0.52,
+        bar.w,
+        2.0,
+        rgba(92, 132, 162, 70),
+    );
+    draw_rectangle_lines(bar.x, bar.y, bar.w, bar.h, 2.0, rgba(74, 112, 146, 226));
+    draw_rectangle_lines(
+        bar.x + 1.0,
+        bar.y + 1.0,
+        bar.w - 2.0,
+        bar.h - 2.0,
+        1.0,
+        rgba(24, 34, 46, 232),
+    );
 }
 
 fn ui_col_border() -> Color {
-    rgba(78, 118, 150, 210)
+    rgba(94, 142, 176, 214)
 }
 
 fn ui_col_border_hi() -> Color {
-    rgba(160, 210, 250, 235)
+    rgba(208, 236, 255, 245)
 }
 
 fn ui_col_accent() -> Color {
-    rgba(252, 208, 138, 248)
+    rgba(246, 198, 120, 248)
+}
+
+fn ui_col_surface() -> Color {
+    rgba(20, 28, 40, 240)
+}
+
+fn ui_col_surface_hi() -> Color {
+    rgba(32, 44, 60, 236)
+}
+
+fn ui_col_text_primary() -> Color {
+    rgba(236, 246, 255, 248)
+}
+
+fn ui_col_text_secondary() -> Color {
+    rgba(188, 214, 232, 242)
 }
 
 fn ui_shadow_offset(fs: f32) -> Vec2 {
@@ -495,21 +531,50 @@ fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: 
 fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
     let hovered = point_in_rect(mouse, rect);
     let bg = if hovered {
-        rgba(26, 34, 46, 246)
+        ui_col_surface_hi()
     } else {
-        rgba(22, 30, 40, 242)
+        ui_col_surface()
     };
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
-    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, ui_col_border());
+    draw_rectangle(
+        rect.x,
+        rect.y + rect.h * 0.48,
+        rect.w,
+        rect.h * 0.52,
+        rgba(8, 12, 18, 60),
+    );
+    draw_rectangle_lines(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        2.0,
+        if hovered {
+            ui_col_border_hi()
+        } else {
+            ui_col_border()
+        },
+    );
+    draw_rectangle_lines(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        rect.w - 2.0,
+        rect.h - 2.0,
+        1.0,
+        rgba(24, 34, 44, 220),
+    );
 
     let header_h = 24.0;
     let header = Rect::new(rect.x, rect.y, rect.w, header_h);
+    let header_top = rgba(32, 46, 62, 250);
+    let header_bottom = rgba(18, 26, 36, 250);
+    draw_rectangle(header.x, header.y, header.w, header.h * 0.55, header_top);
     draw_rectangle(
         header.x,
-        header.y,
+        header.y + header.h * 0.55,
         header.w,
-        header.h,
-        rgba(18, 24, 32, 250),
+        header.h * 0.45,
+        header_bottom,
     );
     draw_rectangle_lines(
         header.x,
@@ -517,17 +582,24 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         header.w,
         header.h,
         1.0,
-        rgba(110, 170, 220, 150),
+        rgba(126, 182, 220, 172),
+    );
+    draw_rectangle(
+        header.x + 8.0,
+        header.y + 5.0,
+        4.0,
+        header.h - 10.0,
+        ui_col_accent(),
     );
 
     let fs = 16.0;
     let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
     draw_text_shadowed(
         title,
-        rect.x + 10.0,
+        rect.x + 18.0,
         rect.y + 17.5,
         fs,
-        fill,
+        if hovered { ui_col_text_primary() } else { fill },
         shadow,
         ui_shadow_offset(fs),
     );
@@ -663,25 +735,58 @@ fn draw_stat_pill(
     let hovered = point_in_rect(mouse, rect);
     let pad = 10.0;
     let bg = if hovered {
-        rgba(30, 40, 52, 245)
+        rgba(34, 48, 64, 246)
     } else {
-        rgba(24, 34, 44, 242)
+        rgba(22, 32, 44, 242)
     };
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
-    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, ui_col_border());
+    draw_rectangle(
+        rect.x,
+        rect.y + rect.h * 0.52,
+        rect.w,
+        rect.h * 0.48,
+        rgba(8, 12, 18, 80),
+    );
+    draw_rectangle_lines(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        1.8,
+        if hovered {
+            ui_col_border_hi()
+        } else {
+            ui_col_border()
+        },
+    );
+    draw_rectangle_lines(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        rect.w - 2.0,
+        rect.h - 2.0,
+        1.0,
+        rgba(24, 34, 46, 210),
+    );
 
     draw_rectangle(rect.x, rect.y, 6.0, rect.h, accent);
+    draw_rectangle(
+        rect.x + 6.0,
+        rect.y,
+        rect.w - 6.0,
+        2.0,
+        rgba(230, 242, 252, 80),
+    );
 
     let fs = (rect.h * 0.44).clamp(12.0, 18.0);
     let value_fs = (rect.h * 0.54).clamp(13.0, 19.0);
-    let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
+    let (_fill, shadow) = ui_text_and_shadow_for_bg(bg);
 
     draw_text_shadowed(
         label,
         rect.x + 10.0,
-        rect.y + rect.h * 0.63,
+        rect.y + rect.h * 0.58,
         fs,
-        fill,
+        ui_col_text_secondary(),
         shadow,
         ui_shadow_offset(fs),
     );
@@ -708,7 +813,7 @@ fn draw_stat_pill(
         val_x,
         val_y,
         value_fs,
-        fill,
+        ui_col_text_primary(),
         shadow,
         ui_shadow_offset(value_fs),
     );
@@ -759,26 +864,42 @@ fn draw_small_button(rect: Rect, label: &str, hovered: bool, active: bool) {
     let base = if active {
         ui_col_accent()
     } else if hovered {
-        rgba(98, 152, 188, 240)
+        rgba(90, 148, 186, 242)
     } else {
-        rgba(68, 100, 128, 236)
+        rgba(52, 78, 104, 236)
     };
     let border = if active {
-        rgba(252, 208, 138, 252)
+        rgba(252, 224, 164, 252)
     } else if hovered {
         ui_col_border_hi()
     } else {
-        rgba(120, 171, 199, 224)
+        rgba(118, 168, 198, 216)
     };
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h * 0.45,
+        with_alpha(WHITE, if active { 0.16 } else { 0.08 }),
+    );
     draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.5, border);
+    draw_rectangle_lines(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        rect.w - 2.0,
+        rect.h - 2.0,
+        1.0,
+        rgba(18, 26, 36, 160),
+    );
 
     let fs = (rect.h * 0.72).clamp(12.0, 18.0);
     let dims = measure_text(label, None, fs as u16, 1.0);
     let tx = rect.x + rect.w * 0.5 - dims.width * 0.5;
     let ty = rect.y + rect.h * 0.5 + dims.height * 0.34;
     let (fill, shadow) = ui_text_and_shadow_for_bg(base);
-    draw_text_shadowed(label, tx, ty, fs, fill, shadow, ui_shadow_offset(fs));
+    let text_col = if active { rgba(18, 24, 30, 248) } else { fill };
+    draw_text_shadowed(label, tx, ty, fs, text_col, shadow, ui_shadow_offset(fs));
 }
 
 fn rects_intersect(a: Rect, b: Rect) -> bool {
@@ -804,17 +925,17 @@ fn draw_vertical_scrollbar(view: Rect, content_h: f32, scroll_y: f32) {
     if content_h <= view.h + 1.0 || view.h <= 2.0 || view.w <= 2.0 {
         return;
     }
-    let track_w = 4.0;
+    let track_w = 6.0;
     let track_x = view.x + view.w - track_w - 2.0;
     let track = Rect::new(track_x, view.y + 2.0, track_w, (view.h - 4.0).max(1.0));
-    draw_rectangle(track.x, track.y, track.w, track.h, rgba(8, 12, 18, 140));
+    draw_rectangle(track.x, track.y, track.w, track.h, rgba(8, 12, 18, 176));
     draw_rectangle_lines(
         track.x,
         track.y,
         track.w,
         track.h,
         1.0,
-        rgba(120, 171, 199, 120),
+        rgba(120, 171, 199, 160),
     );
 
     let max_scroll = (content_h - view.h).max(1.0);
@@ -822,7 +943,8 @@ fn draw_vertical_scrollbar(view: Rect, content_h: f32, scroll_y: f32) {
     let travel = (track.h - thumb_h).max(0.0);
     let t = (scroll_y / max_scroll).clamp(0.0, 1.0);
     let thumb_y = track.y + travel * t;
-    draw_rectangle(track.x, thumb_y, track.w, thumb_h, rgba(198, 230, 248, 185));
+    draw_rectangle(track.x, thumb_y, track.w, thumb_h, rgba(194, 230, 252, 220));
+    draw_rectangle(track.x, thumb_y, track.w, 2.0, rgba(236, 246, 255, 180));
 }
 
 fn pawn_inner_rect(panel: Rect) -> Rect {
@@ -973,19 +1095,26 @@ fn draw_pawn_slot(state: &GameState, slot: &PawnSlot, mouse: Vec2, time: f32) {
     let following = state.pawn_ui.follow == Some(slot.key);
     let hovered = point_in_rect(mouse, slot.rect);
 
-    let base = if following {
-        rgba(210, 150, 82, 235)
-    } else if selected {
-        rgba(98, 152, 188, 236)
+    let base = if hovered {
+        rgba(40, 58, 78, 236)
     } else {
-        rgba(54, 74, 96, 230)
+        rgba(28, 42, 58, 232)
     };
-    let border = if hovered || selected || following {
+    let border = if selected || following {
         ui_col_border_hi()
+    } else if hovered {
+        rgba(172, 220, 252, 220)
     } else {
         ui_col_border()
     };
     draw_rectangle(slot.rect.x, slot.rect.y, slot.rect.w, slot.rect.h, base);
+    draw_rectangle(
+        slot.rect.x,
+        slot.rect.y + slot.rect.h * 0.52,
+        slot.rect.w,
+        slot.rect.h * 0.48,
+        rgba(8, 12, 18, 78),
+    );
     draw_rectangle_lines(
         slot.rect.x,
         slot.rect.y,
@@ -993,6 +1122,43 @@ fn draw_pawn_slot(state: &GameState, slot: &PawnSlot, mouse: Vec2, time: f32) {
         slot.rect.h,
         2.0,
         border,
+    );
+    draw_rectangle_lines(
+        slot.rect.x + 1.0,
+        slot.rect.y + 1.0,
+        slot.rect.w - 2.0,
+        slot.rect.h - 2.0,
+        1.0,
+        rgba(16, 24, 34, 186),
+    );
+
+    let accent_col = if following {
+        ui_col_accent()
+    } else if selected {
+        rgba(118, 186, 232, 240)
+    } else {
+        rgba(90, 136, 170, 150)
+    };
+    draw_rectangle(
+        slot.rect.x + 2.0,
+        slot.rect.y + 2.0,
+        4.0,
+        slot.rect.h - 4.0,
+        accent_col,
+    );
+
+    let title_bg = Rect::new(
+        slot.rect.x + 40.0,
+        slot.rect.y + 6.0,
+        slot.rect.w - 72.0,
+        18.0,
+    );
+    draw_rectangle(
+        title_bg.x,
+        title_bg.y,
+        title_bg.w.max(1.0),
+        title_bg.h,
+        rgba(8, 12, 18, 126),
     );
 
     let portrait_center = vec2(slot.rect.x + 24.0, slot.rect.y + slot.rect.h * 0.56);
@@ -1017,14 +1183,13 @@ fn draw_pawn_slot(state: &GameState, slot: &PawnSlot, mouse: Vec2, time: f32) {
     let name = pawn
         .map(|p| p.name.as_str())
         .unwrap_or(slot.key.short_label());
-    let bg = base;
-    let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
+    let (_fill, shadow) = ui_text_and_shadow_for_bg(base);
     draw_text_shadowed(
         name,
         slot.rect.x + 44.0,
-        slot.rect.y + 22.0,
+        slot.rect.y + 21.0,
         16.0,
-        fill,
+        ui_col_text_primary(),
         shadow,
         ui_shadow_offset(16.0),
     );
@@ -1038,14 +1203,21 @@ fn draw_pawn_slot(state: &GameState, slot: &PawnSlot, mouse: Vec2, time: f32) {
         let bar_x = slot.rect.x + 44.0;
         let bar_y = slot.rect.y + slot.rect.h - 14.0;
         let hp = pawn.metrics.synth[SynthBar::Sante as usize] as f32 / 100.0;
-        draw_meter(bar_x, bar_y, bar_w, 7.0, hp, rgba(120, 210, 140, 240));
+        draw_meter(bar_x, bar_y, bar_w, 7.0, hp, rgba(124, 226, 156, 240));
     }
 }
 
 fn draw_meter(x: f32, y: f32, w: f32, h: f32, t: f32, col: Color) {
-    draw_rectangle(x, y, w, h, rgba(0, 0, 0, 140));
-    draw_rectangle(x, y, (w * t.clamp(0.0, 1.0)).max(0.0), h, col);
-    draw_rectangle_lines(x, y, w, h, 1.0, rgba(160, 210, 250, 110));
+    draw_rectangle(x, y, w, h, rgba(0, 0, 0, 170));
+    draw_rectangle(x + 1.0, y + 1.0, w - 2.0, h - 2.0, rgba(18, 26, 34, 180));
+    draw_rectangle(
+        x + 1.0,
+        y + 1.0,
+        ((w - 2.0) * t.clamp(0.0, 1.0)).max(0.0),
+        h - 2.0,
+        col,
+    );
+    draw_rectangle_lines(x, y, w, h, 1.0, rgba(170, 216, 248, 140));
 }
 
 fn process_build_panel_input(state: &mut GameState, panel: Rect, mouse: Vec2) -> bool {
@@ -1070,13 +1242,28 @@ fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     let summary = build_panel_summary_rect(panel);
     let bg = rgba(12, 18, 26, 228);
     draw_rectangle(summary.x, summary.y, summary.w, summary.h, bg);
+    draw_rectangle(
+        summary.x,
+        summary.y + summary.h * 0.46,
+        summary.w,
+        summary.h * 0.54,
+        rgba(8, 12, 18, 70),
+    );
     draw_rectangle_lines(
         summary.x,
         summary.y,
         summary.w,
         summary.h,
         1.5,
-        rgba(120, 171, 199, 140),
+        rgba(140, 194, 228, 150),
+    );
+    draw_rectangle_lines(
+        summary.x + 1.0,
+        summary.y + 1.0,
+        summary.w - 2.0,
+        summary.h - 2.0,
+        1.0,
+        rgba(24, 34, 44, 200),
     );
 
     let menu_rect = build_menu_open_button_rect(panel);
@@ -1107,7 +1294,7 @@ fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         .build_menu_selected
         .unwrap_or_else(|| default_build_menu_selection(state, state.hud_ui.build_tab));
     let selected_line = format!("Selection menu: {}", build_menu_selection_title(selected));
-    let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
+    let (_fill, shadow) = ui_text_and_shadow_for_bg(bg);
     let mut y = menu_rect.y + menu_rect.h + 18.0;
     for line in [&selected_line, mode_line, &brush_line] {
         draw_text_shadowed(
@@ -1115,7 +1302,7 @@ fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
             summary.x + 8.0,
             y,
             14.0,
-            fill,
+            ui_col_text_secondary(),
             shadow,
             ui_shadow_offset(14.0),
         );
@@ -1821,17 +2008,18 @@ fn draw_build_footer(panel: Rect, state: &GameState, mouse: Vec2) {
     let r = build_footer_rect(panel);
     let bg = rgba(14, 18, 24, 230);
     draw_rectangle(r.x, r.y, r.w, r.h, bg);
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, rgba(120, 171, 199, 140));
+    draw_rectangle(r.x, r.y + r.h * 0.5, r.w, r.h * 0.5, rgba(8, 12, 18, 80));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, rgba(140, 194, 228, 160));
 
     let fs = 14.0;
-    let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
+    let (_fill, shadow) = ui_text_and_shadow_for_bg(bg);
     let text = state.sim.status_line();
     draw_text_shadowed(
         text,
         r.x + 8.0,
         r.y + r.h * 0.72,
         fs,
-        fill,
+        ui_col_text_primary(),
         shadow,
         ui_shadow_offset(fs),
     );
@@ -1844,7 +2032,7 @@ fn draw_build_footer(panel: Rect, state: &GameState, mouse: Vec2) {
             r.x + r.w - dims.width - 8.0,
             r.y + r.h * 0.72,
             12.0,
-            rgba(200, 224, 236, 240),
+            ui_col_text_secondary(),
             shadow,
             ui_shadow_offset(12.0),
         );
@@ -1964,13 +2152,28 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
 
     let inner = info_inner_rect(panel);
     draw_rectangle(inner.x, inner.y, inner.w, inner.h, rgba(12, 18, 26, 228));
+    draw_rectangle(
+        inner.x,
+        inner.y + inner.h * 0.5,
+        inner.w,
+        inner.h * 0.5,
+        rgba(8, 12, 18, 78),
+    );
     draw_rectangle_lines(
         inner.x,
         inner.y,
         inner.w,
         inner.h,
         1.5,
-        rgba(120, 171, 199, 140),
+        rgba(140, 194, 228, 150),
+    );
+    draw_rectangle_lines(
+        inner.x + 1.0,
+        inner.y + 1.0,
+        inner.w - 2.0,
+        inner.h - 2.0,
+        1.0,
+        rgba(24, 34, 44, 200),
     );
 
     let Some(pawn) = selected_pawn_record(state) else {
@@ -1984,7 +2187,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
             x,
             y,
             fs,
-            rgba(230, 240, 250, 242),
+            ui_col_text_primary(),
             rgba(0, 0, 0, 160),
             ui_shadow_offset(fs),
         );
@@ -2002,7 +2205,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         inner.x + 10.0,
         inner.y + 22.0,
         16.0,
-        rgba(230, 240, 250, 242),
+        ui_col_text_primary(),
         rgba(0, 0, 0, 160),
         ui_shadow_offset(16.0),
     );
@@ -2012,7 +2215,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         inner.x + 10.0,
         inner.y + 44.0,
         13.0,
-        rgba(190, 214, 230, 235),
+        ui_col_text_secondary(),
         rgba(0, 0, 0, 140),
         ui_shadow_offset(13.0),
     );
@@ -2467,13 +2670,28 @@ fn draw_minimap_panel(
     let inner = minimap_inner_rect(panel);
     let bg = rgba(10, 14, 18, 240);
     draw_rectangle(inner.x, inner.y, inner.w, inner.h, bg);
+    draw_rectangle(
+        inner.x,
+        inner.y + inner.h * 0.5,
+        inner.w,
+        inner.h * 0.5,
+        rgba(8, 12, 18, 90),
+    );
     draw_rectangle_lines(
         inner.x,
         inner.y,
         inner.w,
         inner.h,
         1.5,
-        rgba(120, 171, 199, 140),
+        rgba(140, 194, 228, 150),
+    );
+    draw_rectangle_lines(
+        inner.x + 1.0,
+        inner.y + 1.0,
+        inner.w - 2.0,
+        inner.h - 2.0,
+        1.0,
+        rgba(24, 34, 44, 200),
     );
 
     let world_w = state.world.w as f32 * TILE_SIZE;
