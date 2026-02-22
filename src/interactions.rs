@@ -15,6 +15,7 @@ pub enum SocialActionKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SocialEmoteIcon {
     TalkDots,
+    Wave,
     Heart,
     Question,
     Laugh,
@@ -68,8 +69,8 @@ impl SocialActionKind {
         match self {
             SocialActionKind::DireBonjour => "Dire bonjour",
             SocialActionKind::SmallTalk => "Discuter",
-            SocialActionKind::Compliment => "Compliment",
-            SocialActionKind::DemanderAide => "Demander aide",
+            SocialActionKind::Compliment => "Complimenter",
+            SocialActionKind::DemanderAide => "Demander de l'aide",
             SocialActionKind::Blague => "Faire une blague",
             SocialActionKind::Ragot => "Ragot",
             SocialActionKind::SExcuser => "S'excuser",
@@ -115,7 +116,7 @@ impl SocialActionKind {
 
     pub fn emote_icon(self) -> SocialEmoteIcon {
         match self {
-            SocialActionKind::DireBonjour => SocialEmoteIcon::TalkDots,
+            SocialActionKind::DireBonjour => SocialEmoteIcon::Wave,
             SocialActionKind::SmallTalk => SocialEmoteIcon::TalkDots,
             SocialActionKind::Compliment => SocialEmoteIcon::Heart,
             SocialActionKind::DemanderAide => SocialEmoteIcon::Question,
@@ -182,5 +183,13 @@ mod tests {
         );
         assert_eq!(SocialActionKind::SEngueuler.gesture(), SocialGesture::Argue);
         assert_eq!(SocialActionKind::DireBonjour.gesture(), SocialGesture::Wave);
+        assert_eq!(
+            SocialActionKind::DireBonjour.emote_icon(),
+            SocialEmoteIcon::Wave
+        );
+        assert_eq!(
+            SocialActionKind::SmallTalk.emote_icon(),
+            SocialEmoteIcon::TalkDots
+        );
     }
 }

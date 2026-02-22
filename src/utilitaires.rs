@@ -353,6 +353,7 @@ pub(crate) fn build_world_camera_for_viewport(
     (camera, clamped_center, zoom)
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_pannable_world_camera(
     world: &World,
     center: Vec2,

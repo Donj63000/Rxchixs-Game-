@@ -25,6 +25,14 @@ pub(crate) fn run_play_frame(
     accumulator: &mut f32,
 ) -> PlayAction {
     if is_key_pressed(KeyCode::Escape) {
+        if state.hud_ui.build_menu_open {
+            state.hud_ui.build_menu_open = false;
+            return PlayAction::None;
+        }
+        if state.hud_ui.info_window_open {
+            state.hud_ui.info_window_open = false;
+            return PlayAction::None;
+        }
         return PlayAction::BackToMenu;
     }
     if is_key_pressed(KeyCode::F10) {
@@ -73,21 +81,23 @@ pub(crate) fn run_play_frame(
 
     // Keep pawn bars synced with the sim.
     ui_pawns::sync_dynamic_pawn_metrics(state);
-
-    // Hit-test layout for this frame.
-    let ui_layout_pre = ui_pawns::build_pawn_ui_layout(state);
-    let ui_input = ui_pawns::process_pawn_ui_input(
+    let now_sim_s = state.sim.clock.seconds();
+    let mut context_menu_consumed =
+        ui_pawns::process_pawn_context_menu_input(state, mouse, left_click, right_click, now_sim_s);
+    let hud_layout = ui_hud::build_hud_layout(state);
+    let hud_input = ui_hud::process_hud_input(
         state,
-        &ui_layout_pre,
+        &hud_layout,
         mouse,
-        left_click,
+        left_click && !context_menu_consumed,
+        right_click && !context_menu_consumed,
         wheel_y,
         time_now,
     );
 
     // Wheel zoom only if UI didn't consume the wheel.
     let wheel_units = normalize_wheel_units(wheel_y);
-    if !ui_input.consumed_wheel && !ui_input.mouse_over_ui && wheel_units.abs() > f32::EPSILON {
+    if !hud_input.consumed_wheel && !hud_input.mouse_over_ui && wheel_units.abs() > f32::EPSILON {
         // Exponential scaling gives finer, more uniform zoom steps.
         let zoom_factor = (1.0 + PLAY_CAMERA_ZOOM_STEP).powf(wheel_units);
         state.camera_zoom =
@@ -116,26 +126,28 @@ pub(crate) fn run_play_frame(
     }
 
     // --- Build world camera ---
-    let (world_camera, map_view_rect) = if state.world.w <= 36 && state.world.h <= 24 {
-        let (camera, rect) = fit_world_camera_to_screen(&state.world, PLAY_CAMERA_MARGIN);
-        state.camera_center = vec2(
-            state.world.w as f32 * TILE_SIZE * 0.5,
-            state.world.h as f32 * TILE_SIZE * 0.5,
-        );
-        (camera, rect)
-    } else {
-        let (camera, rect, clamped_center) = build_pannable_world_camera(
-            &state.world,
-            state.camera_center,
-            state.camera_zoom,
-            PLAY_CAMERA_MARGIN,
-        );
-        state.camera_center = clamped_center;
-        (camera, rect)
-    };
+    let sw = screen_width();
+    let margin = PLAY_CAMERA_MARGIN;
+    let view_rect = Rect::new(
+        margin,
+        margin,
+        (sw - margin * 2.0).max(1.0),
+        (hud_layout.bar_rect.y - margin * 2.0).max(1.0),
+    );
+    let (world_camera, clamped_center, clamped_zoom) = build_world_camera_for_viewport(
+        &state.world,
+        state.camera_center,
+        state.camera_zoom,
+        view_rect,
+        PLAY_CAMERA_ZOOM_MIN,
+        PLAY_CAMERA_ZOOM_MAX,
+    );
+    state.camera_center = clamped_center;
+    state.camera_zoom = clamped_zoom;
+    let map_view_rect = view_rect;
 
     // Mouse -> world only if cursor is in the map AND not hovering UI.
-    let mouse_in_map = point_in_rect(mouse, map_view_rect) && !ui_input.mouse_over_ui;
+    let mouse_in_map = point_in_rect(mouse, map_view_rect) && !hud_input.mouse_over_ui;
     let mouse_world = if mouse_in_map {
         let mut pos = world_camera.screen_to_world(mouse);
         let world_w = state.world.w as f32 * TILE_SIZE;
@@ -147,14 +159,11 @@ pub(crate) fn run_play_frame(
         None
     };
     let mouse_tile = mouse_world.map(|pos| tile_from_world_clamped(&state.world, pos));
-    let now_sim_s = state.sim.clock.seconds();
-    let mut context_menu_consumed =
-        ui_pawns::process_pawn_context_menu_input(state, mouse, left_click, right_click, now_sim_s);
 
     if !context_menu_consumed
         && right_click
         && mouse_in_map
-        && !ui_input.mouse_over_ui
+        && !hud_input.mouse_over_ui
         && let Some(world_pos) = mouse_world
     {
         if let Some(target) = ui_pawns::hit_test_pawn_world(state, world_pos) {
@@ -169,8 +178,8 @@ pub(crate) fn run_play_frame(
     if !context_menu_consumed
         && left_click
         && mouse_in_map
-        && !ui_input.mouse_over_ui
-        && !ui_input.consumed_click
+        && !hud_input.mouse_over_ui
+        && !hud_input.consumed_click
         && !state.sim.build_mode_enabled()
         && let Some(world_pos) = mouse_world
     {
@@ -239,7 +248,13 @@ pub(crate) fn run_play_frame(
     );
 
     // --- Fixed-step simulation ---
-    *accumulator = (*accumulator + frame_dt).min(FIXED_DT * MAX_SIM_STEPS_PER_FRAME as f32);
+    let sim_factor = state.hud_ui.sim_speed.factor();
+    if sim_factor <= 0.0 {
+        *accumulator = 0.0;
+    } else {
+        *accumulator =
+            (*accumulator + frame_dt * sim_factor).min(FIXED_DT * MAX_SIM_STEPS_PER_FRAME as f32);
+    }
     let mut sim_steps = 0usize;
     while *accumulator >= FIXED_DT && sim_steps < MAX_SIM_STEPS_PER_FRAME {
         state.sim.step(FIXED_DT);
@@ -268,9 +283,6 @@ pub(crate) fn run_play_frame(
 
     // Sync again after sim tick so UI reflects latest fatigue/stress.
     ui_pawns::sync_dynamic_pawn_metrics(state);
-
-    // Rebuild layout for drawing (sheet open/scroll might have changed due to input).
-    let ui_layout = ui_pawns::build_pawn_ui_layout(state);
 
     // --- Render ---
     let time = time_now;
@@ -465,8 +477,7 @@ pub(crate) fn run_play_frame(
         draw_character_inspector_panel(state, time);
     }
 
-    // HUD text starts below the pawn bar.
-    let hud_y0 = ui_layout.top_bar.y + ui_layout.top_bar.h + 18.0;
+    let hud_y0 = 18.0;
 
     if state.debug {
         let tx = (state.player.pos.x / TILE_SIZE).floor() as i32;
@@ -477,23 +488,26 @@ pub(crate) fn run_play_frame(
             .lineage
             .get(state.player_lineage_index)
             .map(compact_visual_summary)
-            .unwrap_or_else(|| "no-character".to_string());
+            .unwrap_or_else(|| "aucun-personnage".to_string());
         let target_tile = state
             .player
             .auto
             .target_tile
             .map(|(x, y)| format!("({}, {})", x, y))
-            .unwrap_or_else(|| "none".to_string());
+            .unwrap_or_else(|| "aucune".to_string());
         let npc_target_tile = state
             .npc
             .auto
             .target_tile
             .map(|(x, y)| format!("({}, {})", x, y))
-            .unwrap_or_else(|| "none".to_string());
+            .unwrap_or_else(|| "aucune".to_string());
         let npc_hint = state.social_state.anim_hint(PawnKey::Npc);
-        let npc_social = npc_hint.kind.map(|kind| kind.ui_label()).unwrap_or("idle");
+        let npc_social = npc_hint
+            .kind
+            .map(|kind| kind.ui_label())
+            .unwrap_or("inactif");
         let info = format!(
-            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran\nF1: debug on/off | F2: inspector | F3: regenerate\nbar perso: clic=select/jump | double-clic ou bouton F=follow | bouton Comp=fiche\ncamera: ZQSD/WASD pan | molette zoom | C recentrer\nmouse: click-to-move sur la map | fleches: override manuel\nplayer pos(px)=({:.1},{:.1}) tile=({},{})\nmode={} walking={} frame={} facing={} facing_left={} walk_cycle={:.2}\ninput=({:.2},{:.2}) camera=({:.1},{:.1}) zoom={:.2} fps={}\nplayer_path_nodes={} next_wp={} target_tile={}\nnpc pos=({:.1},{:.1}) walking={} hold={:.2}s social={} npc_path_nodes={} npc_target={}\nwall_mask@tile={:04b}\nmutation_permille={} visual={}\n{}",
+            "Mode Jeu | Echap=menu | F10=editeur | F11=plein ecran\nF1: debogage oui/non | F2: inspecteur | F3: regenerer\nbarre persos: clic=selection/saut | double-clic ou bouton F=suivi | bouton Comp=fiche\ncamera: ZQSD/WASD deplacement | molette zoom | C recentrer\nsouris: clic pour deplacer sur la carte | fleches: controle manuel\njoueur pos(px)=({:.1},{:.1}) tuile=({},{})\nmode={} marche={} image={} orientation={} regarde_gauche={} cycle_marche={:.2}\nentree=({:.2},{:.2}) camera=({:.1},{:.1}) zoom={:.2} ips={}\ntrajet_joueur_noeuds={} prochain_wp={} tuile_cible={}\nnpc pos=({:.1},{:.1}) marche={} attente={:.2}s social={} trajet_npc_noeuds={} cible_npc={}\nmasque_mur@tuile={:04b}\nmutation_permille={} visuel={}\n{}",
             state.player.pos.x,
             state.player.pos.y,
             tx,
@@ -528,14 +542,14 @@ pub(crate) fn run_play_frame(
         draw_text(&info, 12.0, hud_y0, 18.0, WHITE);
     } else {
         draw_text(
-            "Mode Jeu | Esc=menu | F10=editeur | F11=plein ecran",
+            "Mode Jeu | Echap=menu | F10=editeur | F11=plein ecran",
             12.0,
             hud_y0 + 4.0,
             22.0,
             Color::from_rgba(220, 235, 242, 255),
         );
         draw_text(
-            "Bar perso: clic=select/jump | double-clic ou bouton F=follow | bouton Comp=fiche",
+            "HUD bas: persos/menu construction/fiche/mini-carte | clic mini-carte: deplacer camera | F7 construction | F1 debogage",
             12.0,
             hud_y0 + 28.0,
             18.0,
@@ -545,31 +559,20 @@ pub(crate) fn run_play_frame(
         draw_text(
             &hud,
             12.0,
-            hud_y0 + 52.0,
-            20.0,
-            Color::from_rgba(200, 224, 236, 255),
-        );
-        let build = state.sim.build_hint_line();
-        draw_text(
-            &build,
-            12.0,
-            hud_y0 + 74.0,
+            hud_y0 + 50.0,
             18.0,
-            Color::from_rgba(182, 210, 228, 255),
+            Color::from_rgba(196, 224, 236, 255),
         );
-        if !state.sim.status_line().is_empty() {
-            draw_text(
-                state.sim.status_line(),
-                12.0,
-                hud_y0 + 96.0,
-                18.0,
-                Color::from_rgba(252, 228, 182, 255),
-            );
-        }
     }
 
-    // NEW: pawn bar + sheet drawn last (always on top).
-    ui_pawns::draw_pawn_ui(state, &ui_layout, mouse, time);
+    ui_hud::draw_hud(
+        state,
+        &hud_layout,
+        mouse,
+        map_view_rect,
+        &world_camera,
+        time,
+    );
 
     PlayAction::None
 }
@@ -988,7 +991,7 @@ pub(crate) fn run_editor_frame(
         top_bar_bg,
         Color::from_rgba(176, 206, 223, 255),
         &format!(
-            "{} | {}x{} | props {}",
+            "{} | {}x{} | objets {}",
             map.label,
             map.world.w,
             map.world.h,
@@ -1067,7 +1070,7 @@ pub(crate) fn run_editor_frame(
     draw_ui_text_tinted_on(
         panel_bg,
         Color::from_rgba(214, 232, 244, 255),
-        "TOOLBOX",
+        "BOITE A OUTILS",
         left_panel_rect.x + 14.0,
         left_panel_rect.y + 24.0,
         24.0,
@@ -1151,7 +1154,7 @@ pub(crate) fn run_editor_frame(
         (EditorBrush::Pipe, "Q Tuyau"),
         (EditorBrush::Lamp, "W Lampe"),
         (EditorBrush::Banner, "E Banniere"),
-        (EditorBrush::Plant, "T Plante"),
+        (EditorBrush::Plant, "T Pot de fleur"),
         (EditorBrush::Bench, "Y Banc"),
         (EditorBrush::Crystal, "U Cristal"),
         (EditorBrush::EraseProp, "X Effacer"),
@@ -1205,9 +1208,9 @@ pub(crate) fn run_editor_frame(
     if draw_ui_button_sized(
         toggle_grid_rect,
         if editor.show_grid {
-            "Grille: ON (G)"
+            "Grille: activee (G)"
         } else {
-            "Grille: OFF (G)"
+            "Grille: desactivee (G)"
         },
         mouse,
         left_pressed,
@@ -1220,7 +1223,7 @@ pub(crate) fn run_editor_frame(
     draw_ui_text_tinted_on(
         panel_bg,
         Color::from_rgba(214, 232, 244, 255),
-        "INSPECTOR",
+        "INSPECTEUR",
         right_panel_rect.x + 14.0,
         right_panel_rect.y + 24.0,
         24.0,
@@ -1287,7 +1290,7 @@ pub(crate) fn run_editor_frame(
     );
     if draw_ui_button_sized(
         center_cam_rect,
-        "Centrer camera (Home)",
+        "Centrer camera (Origine)",
         mouse,
         left_pressed,
         false,
@@ -1339,7 +1342,7 @@ pub(crate) fn run_editor_frame(
     draw_ui_text_tinted_on(
         panel_bg,
         Color::from_rgba(160, 186, 202, 255),
-        "Raccourcis:\nCtrl+S/L sauver/charger\nCtrl+Z/Y undo/redo\nF11 plein ecran\nPan: fleches ou Space+ZQSD\nZoom: molette / PageUp/Down\nDrag camera: molette maintenue",
+        "Raccourcis:\nCtrl+S/L sauver/charger\nCtrl+Z/Y annuler/retablir\nF11 plein ecran\nPan: fleches ou Espace+ZQSD\nZoom: molette / PagePrec/PageSuiv\nGlisser camera: molette maintenue",
         right_panel_rect.x + 14.0,
         right_panel_rect.y + right_panel_rect.h - 126.0,
         15.0,

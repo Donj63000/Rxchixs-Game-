@@ -1,7 +1,9 @@
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogCategorie {
     Systeme,
     Deplacement,
@@ -21,7 +23,7 @@ impl LogCategorie {
             Self::Social => "Social",
             Self::Ordre => "Ordre",
             Self::Etat => "Etat",
-            Self::Debug => "Debug",
+            Self::Debug => "Debogage",
         }
     }
 }

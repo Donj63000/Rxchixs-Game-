@@ -8,6 +8,7 @@ mod render_safety;
 mod rendu;
 mod sim;
 mod social;
+mod ui_hud;
 mod ui_pawns;
 mod utilitaires;
 
@@ -30,6 +31,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+use ui_hud::*;
 use ui_pawns::*;
 use utilitaires::*;
 
@@ -49,6 +51,13 @@ const NPC_IDLE_MIN: f32 = 0.7;
 const NPC_IDLE_MAX: f32 = 2.0;
 const MAP_FILE_PATH: &str = "maps/main_map.ron";
 const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
+const FLOOR_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol1.png", "Textures/sol1.png"];
+const FLOOR_METAL_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol2.png", "Textures/sol2.png"];
+const POT_DE_FLEUR_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/pot-fleur.png", "Textures/pot-fleur.png"];
+const INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/caisseboisail1.png", "Textures/caisseboisail1.png"];
+const MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES: [&str; 2] = ["fond1.png", "Fond1.png"];
 const MAP_FILE_VERSION: u32 = 3;
 const EDITOR_UNDO_LIMIT: usize = 160;
 const PLAY_CAMERA_MARGIN: f32 = 10.0;
@@ -69,7 +78,7 @@ const MASK_W: u8 = 1 << 3;
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Rxchixs - Visual Room Prototype".to_string(),
+        window_title: "Rxchixs - Prototype visuel".to_string(),
         window_width: WINDOW_W,
         window_height: WINDOW_H,
         window_resizable: true,
@@ -290,6 +299,35 @@ struct NpcWanderer {
     rng_state: u64,
 }
 
+async fn load_first_available_texture(candidates: &[&str]) -> Option<Texture2D> {
+    for path in candidates {
+        if let Ok(texture) = load_texture(path).await {
+            return Some(texture);
+        }
+    }
+    None
+}
+
+async fn load_floor_tile_texture() -> Option<Texture2D> {
+    load_first_available_texture(&FLOOR_TEXTURE_CANDIDATES).await
+}
+
+async fn load_floor_metal_tile_texture() -> Option<Texture2D> {
+    load_first_available_texture(&FLOOR_METAL_TEXTURE_CANDIDATES).await
+}
+
+async fn load_pot_de_fleur_texture() -> Option<Texture2D> {
+    load_first_available_texture(&POT_DE_FLEUR_TEXTURE_CANDIDATES).await
+}
+
+async fn load_initial_raw_material_texture() -> Option<Texture2D> {
+    load_first_available_texture(&INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES).await
+}
+
+async fn load_main_menu_background_texture() -> Option<Texture2D> {
+    load_first_available_texture(&MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES).await
+}
+
 impl NpcWanderer {
     fn new(pos: Vec2, seed: u64) -> Self {
         Self {
@@ -383,6 +421,7 @@ struct GameState {
     pawns: Vec<PawnCard>,
     social_state: social::SocialState,
     pawn_ui: PawnsUiState,
+    hud_ui: HudUiState,
     show_character_inspector: bool,
     debug: bool,
     last_input: Vec2,
@@ -415,7 +454,7 @@ impl MapAsset {
 
         Self {
             version: MAP_FILE_VERSION,
-            label: "Starter Factory".to_string(),
+            label: "Usine de depart".to_string(),
             world,
             props,
             player_spawn,
@@ -507,6 +546,42 @@ enum EditorAction {
 #[macroquad::main(window_conf)]
 async fn main() {
     let palette = Palette::new();
+    let floor_texture = load_floor_tile_texture().await;
+    let floor_metal_texture = load_floor_metal_tile_texture().await;
+    let pot_de_fleur_texture = load_pot_de_fleur_texture().await;
+    let initial_raw_material_texture = load_initial_raw_material_texture().await;
+    let main_menu_background_texture = load_main_menu_background_texture().await;
+    if floor_texture.is_some() {
+        eprintln!("Texture sol chargee: textures/sol1.png");
+    } else {
+        eprintln!("Texture sol1 introuvable, procedurale active.");
+    }
+    if floor_metal_texture.is_some() {
+        eprintln!("Texture sol chargee: textures/sol2.png");
+    } else {
+        eprintln!("Texture sol2 introuvable, procedurale active.");
+    }
+    if pot_de_fleur_texture.is_some() {
+        eprintln!("Texture prop chargee: textures/pot-fleur.png");
+    } else {
+        eprintln!("Texture pot-fleur introuvable, procedurale active.");
+    }
+    if initial_raw_material_texture.is_some() {
+        eprintln!("Texture matiere premiere initiale chargee: textures/caisseboisail1.png");
+    } else {
+        eprintln!("Texture matiere premiere initiale introuvable, fallback UI actif.");
+    }
+    if main_menu_background_texture.is_some() {
+        eprintln!("Fond menu charge: fond1.png");
+    } else {
+        eprintln!("Fond menu introuvable (fond1.png), fallback procedural actif.");
+    }
+    set_floor_tile_textures(floor_texture, floor_metal_texture);
+    set_pot_de_fleur_texture(pot_de_fleur_texture);
+    set_storage_raw_texture(initial_raw_material_texture.clone());
+    set_initial_raw_material_texture(initial_raw_material_texture);
+    set_main_menu_background_texture(main_menu_background_texture);
+
     let mut map = match load_map_asset(MAP_FILE_PATH) {
         Ok(loaded) => loaded,
         Err(_) => {
@@ -614,6 +689,31 @@ mod tests {
         assert_eq!(tile_hash(3, 7), tile_hash(3, 7));
         assert_ne!(tile_hash(3, 7), tile_hash(4, 7));
         assert_ne!(tile_hash(3, 7), tile_hash(3, 8));
+    }
+
+    #[test]
+    fn floor_texture_candidates_are_stable_and_cover_expected_paths() {
+        assert_eq!(FLOOR_TEXTURE_CANDIDATES.len(), 2);
+        assert!(FLOOR_TEXTURE_CANDIDATES.contains(&"textures/sol1.png"));
+        assert!(FLOOR_TEXTURE_CANDIDATES.contains(&"Textures/sol1.png"));
+        assert_eq!(FLOOR_METAL_TEXTURE_CANDIDATES.len(), 2);
+        assert!(FLOOR_METAL_TEXTURE_CANDIDATES.contains(&"textures/sol2.png"));
+        assert!(FLOOR_METAL_TEXTURE_CANDIDATES.contains(&"Textures/sol2.png"));
+        assert_eq!(POT_DE_FLEUR_TEXTURE_CANDIDATES.len(), 2);
+        assert!(POT_DE_FLEUR_TEXTURE_CANDIDATES.contains(&"textures/pot-fleur.png"));
+        assert!(POT_DE_FLEUR_TEXTURE_CANDIDATES.contains(&"Textures/pot-fleur.png"));
+        assert_eq!(INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES.len(), 2);
+        assert!(INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES.contains(&"textures/caisseboisail1.png"));
+        assert!(INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES.contains(&"Textures/caisseboisail1.png"));
+        assert_eq!(MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES.len(), 2);
+        assert!(MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES.contains(&"fond1.png"));
+        assert!(MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES.contains(&"Fond1.png"));
+    }
+
+    #[test]
+    fn plant_is_exposed_as_pot_de_fleur_in_editor_labels() {
+        assert_eq!(prop_kind_label(PropKind::Plant), "pot de fleur");
+        assert_eq!(editor_brush_label(EditorBrush::Plant), "Pot de fleur");
     }
 
     #[test]
@@ -887,7 +987,7 @@ mod tests {
         assert_eq!(map.version, MAP_FILE_VERSION);
         assert_eq!(map.world.w, MAP_W);
         assert_eq!(map.world.h, MAP_H);
-        assert_eq!(map.label, "Starter Factory");
+        assert_eq!(map.label, "Usine de depart");
     }
 
     #[test]

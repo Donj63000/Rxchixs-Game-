@@ -18,8 +18,9 @@ const MAX_ACTIVE_SEPARATION_PX: f32 = 72.0;
 const REPATH_COOLDOWN_S: f32 = 0.8;
 
 // Auto-social
-const AUTO_SOCIAL_BASE_CHANCE: f32 = 0.11; // par social tick
-const AUTO_SOCIAL_MAX_DIST_PX: f32 = 260.0;
+const AUTO_SOCIAL_BASE_CHANCE: f32 = 0.16; // par social tick
+const AUTO_SOCIAL_MAX_DIST_PX: f32 = 900.0;
+const AUTO_SOCIAL_PLAYER_MAX_DIST_PX: f32 = 900.0;
 
 pub struct SocialTickContext<'a> {
     pub world: &'a World,
@@ -249,8 +250,10 @@ impl SocialState {
             issued_at_s: now_sim_s,
         });
 
-        push_history(
+        push_history_for_pair(
             pawns,
+            actor,
+            target,
             now_sim_s,
             LogCategorie::Social,
             format!(
@@ -345,8 +348,8 @@ impl SocialState {
             let (stage, icon, alpha, speaker) = match e.stage {
                 EncounterStage::Approach => (
                     SocialVisualStage::Approaching,
-                    SocialEmoteIcon::TalkDots,
-                    1.0,
+                    e.kind.emote_icon(),
+                    0.94,
                     false,
                 ),
                 EncounterStage::Active => (
@@ -459,9 +462,15 @@ impl SocialState {
                 self.release_participant(encounter.b);
 
                 if encounter.cancelled {
-                    self.start_personal_cooldown_for(encounter.a, 1.0);
-                    self.start_personal_cooldown_for(encounter.b, 1.0);
-                    self.start_pair_cooldown(encounter.a, encounter.b, 1.5);
+                    let (cancel_personal_cd, cancel_pair_cd) =
+                        if encounter.kind == SocialActionKind::DireBonjour {
+                            (2.5, 10.0)
+                        } else {
+                            (1.5, 4.0)
+                        };
+                    self.start_personal_cooldown_for(encounter.a, cancel_personal_cd);
+                    self.start_personal_cooldown_for(encounter.b, cancel_personal_cd);
+                    self.start_pair_cooldown(encounter.a, encounter.b, cancel_pair_cd);
                 } else {
                     self.start_afterglow_for(encounter.a, encounter.kind);
                     self.start_afterglow_for(encounter.b, encounter.kind);
@@ -565,8 +574,10 @@ impl SocialState {
 
         let elapsed = (now_sim_s - e.stage_started_at_s) as f32;
         if elapsed >= e.duration_s {
-            push_history(
+            push_history_for_pair(
                 pawns,
+                e.a,
+                e.b,
                 now_sim_s,
                 LogCategorie::Social,
                 format!(
@@ -604,8 +615,9 @@ impl SocialState {
 
             if (now_sim_s - order.issued_at_s) as f32 > ORDER_TIMEOUT_S {
                 self.runtime[ai].order = None;
-                push_history(
+                push_history_for_key(
                     pawns,
+                    actor,
                     now_sim_s,
                     LogCategorie::Social,
                     format!(
@@ -646,8 +658,10 @@ impl SocialState {
             ) {
                 self.runtime[ai].order = None;
                 self.attach_encounter(enc);
-                push_history(
+                push_history_for_pair(
                     pawns,
+                    actor,
+                    order.target,
                     now_sim_s,
                     LogCategorie::Social,
                     format!(
@@ -681,7 +695,7 @@ impl SocialState {
 
         let mut candidates = Vec::new();
         for &k in &self.keys {
-            if k == PawnKey::Player {
+            if k == PawnKey::Player || !pawn_can_move(k) {
                 continue;
             }
             if !self.pawn_available_for_social(sim, k) {
@@ -698,7 +712,7 @@ impl SocialState {
 
         let mut best_target: Option<(PawnKey, f32)> = None;
         for &t in &self.keys {
-            if t == initiator || t == PawnKey::Player {
+            if t == initiator {
                 continue;
             }
             if !self.pawn_available_for_social(sim, t) {
@@ -706,7 +720,12 @@ impl SocialState {
             }
 
             let d = initiator_pos.distance(pawn_pos(sim, player, npc, t));
-            if d > AUTO_SOCIAL_MAX_DIST_PX {
+            let max_dist = if t == PawnKey::Player {
+                AUTO_SOCIAL_PLAYER_MAX_DIST_PX
+            } else {
+                AUTO_SOCIAL_MAX_DIST_PX
+            };
+            if d > max_dist {
                 continue;
             }
 
@@ -745,8 +764,10 @@ impl SocialState {
             EncounterSource::Auto,
         ) {
             self.attach_encounter(enc);
-            push_history(
+            push_history_for_pair(
                 pawns,
+                initiator,
+                target,
                 now_sim_s,
                 LogCategorie::Social,
                 format!(
@@ -803,8 +824,10 @@ impl SocialState {
             EncounterSource::Proximity,
         ) {
             self.attach_encounter(enc);
-            push_history(
+            push_history_for_pair(
                 pawns,
+                npc_key,
+                player_key,
                 now_sim_s,
                 LogCategorie::Social,
                 format!("{}: {}", pawn_name(pawns, npc_key), kind.ui_label()),
@@ -858,6 +881,9 @@ impl SocialState {
         let anchor_pos = pawn_pos(sim, player, npc, anchor);
         let mut meet_tile = tile_from_world_clamped(world, anchor_pos);
         meet_tile = nearest_walkable_tile(world, meet_tile).unwrap_or(meet_tile);
+        if !can_actor_reach_tile(world, sim, player, npc, mover, meet_tile) {
+            return None;
+        }
 
         let id = self.next_encounter_id;
         self.next_encounter_id = self.next_encounter_id.wrapping_add(1);
@@ -1135,8 +1161,10 @@ impl SocialState {
         add_synth(pawns, a, SynthBar::Moral, moral_d);
         add_synth(pawns, b, SynthBar::Moral, moral_d);
 
-        push_history(
+        push_history_for_pair(
             pawns,
+            a,
+            b,
             now_sim_s,
             LogCategorie::Social,
             format!(
@@ -1156,8 +1184,10 @@ impl SocialState {
         e: &SocialEncounter,
         reason: &str,
     ) {
-        push_history(
+        push_history_for_pair(
             pawns,
+            e.a,
+            e.b,
             now_sim_s,
             LogCategorie::Social,
             format!(
@@ -1245,15 +1275,18 @@ impl SocialState {
         if self.runtime[wi].last_job_id != current_job {
             self.runtime[wi].last_job_id = current_job;
             let job_text = match current_job {
-                Some(id) => sim.job_brief(id).unwrap_or_else(|| format!("Job #{}", id)),
-                None => "Idle".to_string(),
+                Some(id) => sim
+                    .job_brief(id)
+                    .unwrap_or_else(|| format!("Tache #{}", id)),
+                None => "Inactif".to_string(),
             };
-            push_history(
+            push_history_for_key(
                 pawns,
+                worker_key,
                 now_sim_s,
-                LogCategorie::Social,
+                LogCategorie::Travail,
                 format!(
-                    "{}: changement d'activité ({}) t={:.1}",
+                    "{}: changement d'activite ({}) t={:.1}",
                     pawn_name(pawns, worker_key),
                     job_text,
                     now_sim_s
@@ -1281,9 +1314,29 @@ fn pawn_name(pawns: &[PawnCard], key: PawnKey) -> String {
         .unwrap_or_else(|| format!("{:?}", key))
 }
 
-fn push_history(pawns: &mut [PawnCard], now_sim_s: f64, cat: LogCategorie, msg: String) {
-    for p in pawns {
-        p.history.push(now_sim_s, cat, msg.clone());
+fn push_history_for_key(
+    pawns: &mut [PawnCard],
+    key: PawnKey,
+    now_sim_s: f64,
+    cat: LogCategorie,
+    msg: String,
+) {
+    if let Some(p) = pawns.iter_mut().find(|p| p.key == key) {
+        p.history.push(now_sim_s, cat, msg);
+    }
+}
+
+fn push_history_for_pair(
+    pawns: &mut [PawnCard],
+    a: PawnKey,
+    b: PawnKey,
+    now_sim_s: f64,
+    cat: LogCategorie,
+    msg: String,
+) {
+    push_history_for_key(pawns, a, now_sim_s, cat, msg.clone());
+    if b != a {
+        push_history_for_key(pawns, b, now_sim_s, cat, msg);
     }
 }
 
@@ -1292,6 +1345,38 @@ fn pawn_pos(sim: &sim::FactorySim, player: &Player, npc: &NpcWanderer, key: Pawn
         PawnKey::Player => player.pos,
         PawnKey::Npc => npc.pos,
         PawnKey::SimWorker => tile_center(sim.primary_agent_tile()),
+    }
+}
+
+fn can_actor_reach_tile(
+    world: &World,
+    sim: &sim::FactorySim,
+    player: &Player,
+    npc: &NpcWanderer,
+    actor: PawnKey,
+    target: (i32, i32),
+) -> bool {
+    if !pawn_can_move(actor) {
+        return true;
+    }
+    let start = tile_from_world_clamped(world, pawn_pos(sim, player, npc, actor));
+    if start == target {
+        return true;
+    }
+    let Some(path) = a_star_path(world, start, target) else {
+        return false;
+    };
+    let path_dist_px = (path.len().saturating_sub(1) as f32) * TILE_SIZE;
+    let speed_px_s = actor_move_speed(actor, player, npc).max(1.0);
+    let eta_s = path_dist_px / speed_px_s;
+    eta_s <= ORDER_TIMEOUT_S * 0.85
+}
+
+fn actor_move_speed(actor: PawnKey, player: &Player, npc: &NpcWanderer) -> f32 {
+    match actor {
+        PawnKey::Player => player.speed,
+        PawnKey::Npc => npc.speed,
+        PawnKey::SimWorker => f32::INFINITY,
     }
 }
 
@@ -1469,6 +1554,7 @@ mod tests {
             .expect("first social tick should create a greeting encounter");
         assert_eq!(first.kind, Some(SocialActionKind::DireBonjour));
         assert_eq!(first.stage, SocialVisualStage::Approaching);
+        assert_eq!(first.icon, SocialActionKind::DireBonjour.emote_icon());
 
         social.tick(
             SOCIAL_TICK_DT,
@@ -1518,5 +1604,200 @@ mod tests {
             .expect("player key should exist");
         assert!(social.runtime[ni].encounter_id.is_none());
         assert!(social.pair_cooldown[ni][pi] > 0.0);
+    }
+
+    #[test]
+    fn auto_social_can_target_player_without_manual_order() {
+        let (world, sim, mut player, mut npc, mut pawns, mut social) = social_fixture_same_tile();
+        player.pos = tile_center((12, 6));
+        npc.pos = tile_center((10, 6)); // outside greeting range, close enough for auto
+
+        let mut now = 0.0f64;
+        let mut saw_player_target = false;
+        for _ in 0..220 {
+            social.tick(
+                SOCIAL_TICK_DT,
+                now,
+                SocialTickContext {
+                    world: &world,
+                    sim: &sim,
+                },
+                SocialTickActors {
+                    player: &mut player,
+                    npc: &mut npc,
+                    pawns: &mut pawns,
+                },
+            );
+            let hint = social.anim_hint(PawnKey::Npc);
+            if hint.partner == Some(PawnKey::Player) && hint.kind.is_some() {
+                saw_player_target = true;
+                break;
+            }
+            now += SOCIAL_TICK_DT as f64;
+        }
+
+        assert!(
+            saw_player_target,
+            "auto social should eventually create an NPC->Player interaction"
+        );
+    }
+
+    #[test]
+    fn worker_job_history_is_local_and_travail_category() {
+        let (_, sim, _, _, mut pawns, mut social) = social_fixture_same_tile();
+        let wi = social
+            .idx_of(PawnKey::SimWorker)
+            .expect("worker key should exist");
+        social.runtime[wi].last_job_id = Some(u64::MAX);
+
+        let worker_before = pawns
+            .iter()
+            .find(|p| p.key == PawnKey::SimWorker)
+            .expect("worker pawn should exist")
+            .history
+            .len();
+        let player_before = pawns
+            .iter()
+            .find(|p| p.key == PawnKey::Player)
+            .expect("player pawn should exist")
+            .history
+            .len();
+
+        social.tick_sim_worker_job_history(0.0, &mut pawns, &sim);
+
+        let worker = pawns
+            .iter()
+            .find(|p| p.key == PawnKey::SimWorker)
+            .expect("worker pawn should exist");
+        let player = pawns
+            .iter()
+            .find(|p| p.key == PawnKey::Player)
+            .expect("player pawn should exist");
+
+        assert_eq!(player.history.len(), player_before);
+        assert_eq!(worker.history.len(), worker_before + 1);
+
+        let last = worker
+            .history
+            .iter()
+            .next_back()
+            .expect("worker history should contain one new entry");
+        assert!(matches!(last.cat, LogCategorie::Travail));
+    }
+
+    #[test]
+    fn build_encounter_rejects_unreachable_target_tile() {
+        let (mut world, sim, mut player, mut npc, pawns, mut social) = social_fixture_same_tile();
+
+        // Full vertical barrier that separates NPC and player regions.
+        for y in 1..(world.h - 1) {
+            world.set(12, y, Tile::Wall);
+        }
+
+        npc.pos = tile_center((5, 6));
+        player.pos = tile_center((20, 6));
+
+        let enc = social.build_encounter(
+            0.0,
+            &world,
+            &sim,
+            &mut player,
+            &mut npc,
+            PawnKey::Npc,
+            PawnKey::Player,
+            SocialActionKind::DireBonjour,
+            EncounterSource::Auto,
+        );
+
+        // Keep `pawns` alive to satisfy fixture ownership expectations and avoid accidental drops.
+        let _ = pawns.len();
+
+        assert!(
+            enc.is_none(),
+            "encounter must not start when mover cannot path to the meeting tile"
+        );
+    }
+
+    #[test]
+    fn build_encounter_rejects_target_too_far_for_timeout_budget() {
+        let world = World::new_room(96, 64);
+        let sim = sim::FactorySim::new(sim::StarterSimConfig::default(), 96, 64);
+        let mut player = Player::new(tile_center((86, 32)));
+        let mut npc = NpcWanderer::new(tile_center((8, 32)), 0xA1A2);
+        let pawns = test_pawns();
+        let mut social = SocialState::new(&pawns, 0xCAFE_BABE);
+
+        let enc = social.build_encounter(
+            0.0,
+            &world,
+            &sim,
+            &mut player,
+            &mut npc,
+            PawnKey::Npc,
+            PawnKey::Player,
+            SocialActionKind::DireBonjour,
+            EncounterSource::Auto,
+        );
+        assert!(
+            enc.is_none(),
+            "encounter must not start when estimated travel exceeds timeout budget"
+        );
+    }
+
+    #[test]
+    fn cancelled_greeting_uses_longer_pair_cooldown() {
+        let (world, sim, mut player, mut npc, mut pawns, mut social) = social_fixture_same_tile();
+
+        social.tick(
+            SOCIAL_TICK_DT,
+            0.0,
+            SocialTickContext {
+                world: &world,
+                sim: &sim,
+            },
+            SocialTickActors {
+                player: &mut player,
+                npc: &mut npc,
+                pawns: &mut pawns,
+            },
+        );
+        social.tick(
+            SOCIAL_TICK_DT,
+            SOCIAL_TICK_DT as f64,
+            SocialTickContext {
+                world: &world,
+                sim: &sim,
+            },
+            SocialTickActors {
+                player: &mut player,
+                npc: &mut npc,
+                pawns: &mut pawns,
+            },
+        );
+
+        // Force cancellation during active stage by separating participants.
+        player.pos = tile_center((20, 10));
+        social.tick(
+            SOCIAL_TICK_DT,
+            (SOCIAL_TICK_DT * 2.0) as f64,
+            SocialTickContext {
+                world: &world,
+                sim: &sim,
+            },
+            SocialTickActors {
+                player: &mut player,
+                npc: &mut npc,
+                pawns: &mut pawns,
+            },
+        );
+
+        let ni = social.idx_of(PawnKey::Npc).expect("npc key should exist");
+        let pi = social
+            .idx_of(PawnKey::Player)
+            .expect("player key should exist");
+        assert!(
+            social.pair_cooldown[ni][pi] >= 9.5,
+            "cancelled greeting should not spam-retrigger immediately"
+        );
     }
 }

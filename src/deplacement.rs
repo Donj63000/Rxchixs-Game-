@@ -117,16 +117,16 @@ pub(crate) fn select_character_facing(input: Vec2, current: CharacterFacing) -> 
 
 pub(crate) fn facing_label(facing: CharacterFacing) -> &'static str {
     match facing {
-        CharacterFacing::Front => "front",
-        CharacterFacing::Side => "side",
-        CharacterFacing::Back => "back",
+        CharacterFacing::Front => "avant",
+        CharacterFacing::Side => "cote",
+        CharacterFacing::Back => "dos",
     }
 }
 
 pub(crate) fn control_mode_label(mode: ControlMode) -> &'static str {
     match mode {
-        ControlMode::Manual => "manual",
-        ControlMode::AutoMove => "auto_move",
+        ControlMode::Manual => "manuel",
+        ControlMode::AutoMove => "auto",
     }
 }
 

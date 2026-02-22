@@ -189,3 +189,41 @@ Portee: renforcer les tests unitaires sur les sous-systemes critiques pour accel
   - `cargo fmt`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
+
+# ExecPlan - Correctifs visibilite interactions sociales
+
+Date: 2026-02-22
+Portee: rendre les interactions sociales visibles en partie reelle, reduire le bruit d'historique, renforcer la testabilite.
+
+## Objectifs observables
+- Les interactions sociales automatiques doivent etre perceptibles sans micro-manipulations.
+- L'historique doit prioriser les evenements utiles par personnage.
+- Le joueur doit decouvrir facilement les interactions sociales manuelles.
+- Des tests doivent verrouiller les regressions principales.
+
+## Invariants
+- Determinisme social conserve (seed fixe, tick fixe).
+- Aucune logique metier dependante du framerate.
+- Pas de movement autonome force du joueur via auto-social.
+
+## Milestones
+1. Ajuster le moteur social auto (distance/chance/candidats) pour augmenter la visibilite.
+2. Remplacer les logs sociaux globaux par des logs cibles (acteur/participants).
+3. Basculer les changements d'activite du worker en categorie Travail, localement au worker.
+4. Ameliorer la decouvrabilite en HUD (rappel du clic droit interaction sociale).
+5. Ajouter des tests unitaires sur ciblage auto joueur et hygiene de log.
+
+## Fichiers impactes
+- `src/social.rs`
+- `src/modes.rs`
+- `docs/PLANS.md`
+
+## Risques
+- Interactions trop frequentes si les seuils sont trop permissifs.
+- Regressions sur l'historique si les logs ne couvrent plus certains cas attendus.
+
+## Strategie de verification
+- `cargo fmt`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test`
+- `cargo run` smoke test

@@ -10,7 +10,7 @@ pub(crate) fn prop_kind_label(kind: PropKind) -> &'static str {
         PropKind::Pipe => "tuyau",
         PropKind::Lamp => "lampe",
         PropKind::Banner => "banniere",
-        PropKind::Plant => "plante",
+        PropKind::Plant => "pot de fleur",
         PropKind::Bench => "banc",
         PropKind::Crystal => "cristal",
     }
@@ -31,7 +31,7 @@ pub(crate) fn editor_brush_label(brush: EditorBrush) -> &'static str {
         EditorBrush::Pipe => "Tuyau",
         EditorBrush::Lamp => "Lampe",
         EditorBrush::Banner => "Banniere",
-        EditorBrush::Plant => "Plante",
+        EditorBrush::Plant => "Pot de fleur",
         EditorBrush::Bench => "Banc",
         EditorBrush::Crystal => "Cristal",
         EditorBrush::EraseProp => "Effacer objet",
@@ -280,11 +280,12 @@ pub(crate) fn serialize_map_asset(map: &MapAsset) -> Result<String, String> {
         .depth_limit(4)
         .enumerate_arrays(true)
         .separate_tuple_members(true);
-    ron_to_string_pretty(map, pretty).map_err(|err| format!("serialize map failed: {err}"))
+    ron_to_string_pretty(map, pretty).map_err(|err| format!("echec serialisation carte: {err}"))
 }
 
 pub(crate) fn deserialize_map_asset(raw: &str) -> Result<MapAsset, String> {
-    let mut map: MapAsset = ron_from_str(raw).map_err(|err| format!("parse map failed: {err}"))?;
+    let mut map: MapAsset =
+        ron_from_str(raw).map_err(|err| format!("echec lecture carte: {err}"))?;
     sanitize_map_asset(&mut map);
     Ok(map)
 }
@@ -294,13 +295,14 @@ pub(crate) fn save_map_asset(path: &str, map: &MapAsset) -> Result<(), String> {
     if let Some(parent) = Path::new(path).parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent).map_err(|err| format!("create map dir failed: {err}"))?;
+        fs::create_dir_all(parent).map_err(|err| format!("echec creation dossier carte: {err}"))?;
     }
-    fs::write(path, payload).map_err(|err| format!("write map failed: {err}"))
+    fs::write(path, payload).map_err(|err| format!("echec ecriture carte: {err}"))
 }
 
 pub(crate) fn load_map_asset(path: &str) -> Result<MapAsset, String> {
-    let raw = fs::read_to_string(path).map_err(|err| format!("read map failed: {err}"))?;
+    let raw =
+        fs::read_to_string(path).map_err(|err| format!("echec lecture fichier carte: {err}"))?;
     deserialize_map_asset(&raw)
 }
 
@@ -316,9 +318,9 @@ pub(crate) fn build_game_state_from_map(
     let palette = Palette::new();
     let lineage = build_lineage_preview(character_catalog, lineage_seed);
     let npc_character =
-        character_catalog.spawn_founder("Wanderer", lineage_seed ^ 0x55AA_7788_1133_2244);
+        character_catalog.spawn_founder("Promeneur", lineage_seed ^ 0x55AA_7788_1133_2244);
     let sim_worker_character =
-        character_catalog.spawn_founder("Worker-01", lineage_seed ^ 0xCC11_22DD_33EE_44FF);
+        character_catalog.spawn_founder("Employe-01", lineage_seed ^ 0xCC11_22DD_33EE_44FF);
 
     let sim = sim::FactorySim::load_or_default(SIM_CONFIG_PATH, map_copy.world.w, map_copy.world.h);
 
@@ -326,7 +328,7 @@ pub(crate) fn build_game_state_from_map(
         PawnCard {
             key: PawnKey::Player,
             name: "Patron".to_string(),
-            role: "Management".to_string(),
+            role: "Gestion".to_string(),
             metrics: PawnMetrics::seeded(lineage_seed ^ 0x1111_2222_3333_4444),
             history: crate::historique::HistoriqueLog::new(600),
         },
@@ -378,6 +380,7 @@ pub(crate) fn build_game_state_from_map(
         pawns,
         social_state,
         pawn_ui,
+        hud_ui: HudUiState::default(),
         show_character_inspector: false,
         debug: false,
         last_input: Vec2::ZERO,

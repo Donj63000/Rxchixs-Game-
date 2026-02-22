@@ -1,4 +1,88 @@
 use super::*;
+use std::cell::RefCell;
+
+#[derive(Clone)]
+struct FloorTileTextures {
+    floor: Option<Texture2D>,
+    floor_metal: Option<Texture2D>,
+}
+
+thread_local! {
+    static FLOOR_TILE_TEXTURES: RefCell<FloorTileTextures> = const {
+        RefCell::new(FloorTileTextures {
+            floor: None,
+            floor_metal: None,
+        })
+    };
+    static POT_DE_FLEUR_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static STORAGE_RAW_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static MAIN_MENU_BACKGROUND_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn set_floor_tile_textures(floor: Option<Texture2D>, floor_metal: Option<Texture2D>) {
+    FLOOR_TILE_TEXTURES.with(|slot| {
+        let prepared_floor = floor;
+        if let Some(tex) = prepared_floor.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+
+        let prepared_floor_metal = floor_metal;
+        if let Some(tex) = prepared_floor_metal.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+
+        *slot.borrow_mut() = FloorTileTextures {
+            floor: prepared_floor,
+            floor_metal: prepared_floor_metal,
+        };
+    });
+}
+
+fn floor_tile_textures() -> FloorTileTextures {
+    FLOOR_TILE_TEXTURES.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_pot_de_fleur_texture(texture: Option<Texture2D>) {
+    POT_DE_FLEUR_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn pot_de_fleur_texture() -> Option<Texture2D> {
+    POT_DE_FLEUR_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_storage_raw_texture(texture: Option<Texture2D>) {
+    STORAGE_RAW_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn storage_raw_texture() -> Option<Texture2D> {
+    STORAGE_RAW_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_main_menu_background_texture(texture: Option<Texture2D>) {
+    MAIN_MENU_BACKGROUND_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Linear);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn main_menu_background_texture() -> Option<Texture2D> {
+    MAIN_MENU_BACKGROUND_TEXTURE.with(|slot| slot.borrow().clone())
+}
 
 pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
     let panel_w = 380.0;
@@ -24,7 +108,7 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
     );
 
     draw_text(
-        "Character Inspector (F2 toggle, F3 regenerate)",
+        "Inspecteur personnage (F2 afficher/masquer, F3 regenerer)",
         panel_x + 10.0,
         panel_y + 18.0,
         18.0,
@@ -100,9 +184,44 @@ pub(crate) fn draw_background(palette: &Palette, time: f32) {
     );
 }
 
-pub(crate) fn draw_floor_tile(x: i32, y: i32, tile: Tile, palette: &Palette) {
+pub(crate) fn draw_floor_tile(
+    x: i32,
+    y: i32,
+    tile: Tile,
+    palette: &Palette,
+    floor_texture: Option<&Texture2D>,
+    floor_metal_texture: Option<&Texture2D>,
+) {
     let rect = World::tile_rect(x, y);
     let h = tile_hash(x, y);
+
+    let mapped_texture = match tile {
+        Tile::Floor => floor_texture,
+        Tile::FloorMetal => floor_metal_texture,
+        _ => None,
+    };
+
+    if let Some(texture) = mapped_texture {
+        draw_texture_ex(
+            texture,
+            rect.x,
+            rect.y,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(rect.w, rect.h)),
+                ..Default::default()
+            },
+        );
+        let grime_strength = 0.02 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 380.0);
+        draw_rectangle(
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            with_alpha(palette.floor_grime, grime_strength),
+        );
+        return;
+    }
 
     let (base_a, base_b, panel_tint) = match tile {
         Tile::Floor => (palette.floor_a, palette.floor_b, palette.floor_panel),
@@ -213,11 +332,19 @@ pub(crate) fn draw_floor_layer_region(
     palette: &Palette,
     bounds: (i32, i32, i32, i32),
 ) {
+    let floor_textures = floor_tile_textures();
     for y in bounds.2..=bounds.3 {
         for x in bounds.0..=bounds.1 {
             let tile = world.get(x, y);
             if tile_is_floor(tile) {
-                draw_floor_tile(x, y, tile, palette);
+                draw_floor_tile(
+                    x,
+                    y,
+                    tile,
+                    palette,
+                    floor_textures.floor.as_ref(),
+                    floor_textures.floor_metal.as_ref(),
+                );
             }
         }
     }
@@ -535,6 +662,7 @@ pub(crate) fn draw_props_region(
     time: f32,
     bounds: (i32, i32, i32, i32),
 ) {
+    let pot_texture = pot_de_fleur_texture();
     for prop in props {
         if !tile_in_bounds((prop.tile_x, prop.tile_y), bounds) {
             continue;
@@ -610,29 +738,43 @@ pub(crate) fn draw_props_region(
                 );
             }
             PropKind::Plant => {
-                let sway = (time * 2.1 + prop.phase).sin() * 1.1;
-                let pot = color_lerp(palette.prop_crate_dark, palette.wall_dark, 0.35);
-                draw_rectangle(x + 10.5, y + 17.0, 11.0, 8.0, pot);
-                draw_rectangle_lines(x + 10.5, y + 17.0, 11.0, 8.0, 1.0, palette.wall_outline);
-                let leaf = rgba(92, 162, 104, 255);
-                draw_triangle(
-                    vec2(x + 15.0, y + 18.0),
-                    vec2(x + 10.0 + sway, y + 10.0),
-                    vec2(x + 14.0, y + 20.0),
-                    leaf,
-                );
-                draw_triangle(
-                    vec2(x + 17.0, y + 18.0),
-                    vec2(x + 22.0 + sway, y + 10.0),
-                    vec2(x + 18.0, y + 21.0),
-                    leaf,
-                );
-                draw_triangle(
-                    vec2(x + 16.0, y + 18.0),
-                    vec2(x + 16.0 + sway * 0.7, y + 8.5),
-                    vec2(x + 16.0, y + 22.0),
-                    rgba(114, 188, 122, 255),
-                );
+                if let Some(texture) = pot_texture.as_ref() {
+                    let bob = (time * 1.9 + prop.phase).sin() * 0.35;
+                    draw_texture_ex(
+                        texture,
+                        x + 5.0,
+                        y + 6.0 + bob,
+                        WHITE,
+                        DrawTextureParams {
+                            dest_size: Some(vec2(22.0, 22.0)),
+                            ..Default::default()
+                        },
+                    );
+                } else {
+                    let sway = (time * 2.1 + prop.phase).sin() * 1.1;
+                    let pot = color_lerp(palette.prop_crate_dark, palette.wall_dark, 0.35);
+                    draw_rectangle(x + 10.5, y + 17.0, 11.0, 8.0, pot);
+                    draw_rectangle_lines(x + 10.5, y + 17.0, 11.0, 8.0, 1.0, palette.wall_outline);
+                    let leaf = rgba(92, 162, 104, 255);
+                    draw_triangle(
+                        vec2(x + 15.0, y + 18.0),
+                        vec2(x + 10.0 + sway, y + 10.0),
+                        vec2(x + 14.0, y + 20.0),
+                        leaf,
+                    );
+                    draw_triangle(
+                        vec2(x + 17.0, y + 18.0),
+                        vec2(x + 22.0 + sway, y + 10.0),
+                        vec2(x + 18.0, y + 21.0),
+                        leaf,
+                    );
+                    draw_triangle(
+                        vec2(x + 16.0, y + 18.0),
+                        vec2(x + 16.0 + sway * 0.7, y + 8.5),
+                        vec2(x + 16.0, y + 22.0),
+                        rgba(114, 188, 122, 255),
+                    );
+                }
             }
             PropKind::Bench => {
                 let wood_top = color_lerp(palette.prop_crate_light, palette.floor_b, 0.2);
@@ -827,78 +969,64 @@ pub(crate) fn draw_editor_grid_region(bounds: (i32, i32, i32, i32)) {
 
 pub(crate) fn run_main_menu_frame(map: &MapAsset, palette: &Palette, time: f32) -> Option<AppMode> {
     clear_background(palette.bg_bottom);
-    draw_background(palette, time * 0.6);
-    let (menu_camera, menu_view_rect) = fit_world_camera_to_screen(&map.world, 34.0);
-    let visible_bounds = tile_bounds_from_camera(&map.world, &menu_camera, menu_view_rect, 2);
-    set_camera(&menu_camera);
-    draw_floor_layer_region(&map.world, palette, visible_bounds);
-    draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
-    draw_wall_layer_region(&map.world, palette, visible_bounds);
-    draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
-    draw_props_region(&map.props, palette, time, visible_bounds);
-    draw_lighting_region(&map.props, palette, time, visible_bounds);
     begin_ui_pass();
-    draw_rectangle_lines(
-        menu_view_rect.x + 0.5,
-        menu_view_rect.y + 0.5,
-        menu_view_rect.w - 1.0,
-        menu_view_rect.h - 1.0,
-        2.0,
-        Color::from_rgba(130, 170, 194, 165),
-    );
-    draw_ambient_dust(palette, time);
-    draw_vignette(palette);
+    if let Some(texture) = main_menu_background_texture().as_ref() {
+        draw_texture_ex(
+            texture,
+            0.0,
+            0.0,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(screen_width(), screen_height())),
+                ..Default::default()
+            },
+        );
+        draw_rectangle(
+            0.0,
+            0.0,
+            screen_width(),
+            screen_height(),
+            Color::from_rgba(0, 0, 0, 48),
+        );
+    } else {
+        draw_background(palette, time * 0.6);
+        let (menu_camera, menu_view_rect) = fit_world_camera_to_screen(&map.world, 34.0);
+        let visible_bounds = tile_bounds_from_camera(&map.world, &menu_camera, menu_view_rect, 2);
+        set_camera(&menu_camera);
+        draw_floor_layer_region(&map.world, palette, visible_bounds);
+        draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
+        draw_wall_layer_region(&map.world, palette, visible_bounds);
+        draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
+        draw_props_region(&map.props, palette, time, visible_bounds);
+        draw_lighting_region(&map.props, palette, time, visible_bounds);
+        begin_ui_pass();
+        draw_rectangle_lines(
+            menu_view_rect.x + 0.5,
+            menu_view_rect.y + 0.5,
+            menu_view_rect.w - 1.0,
+            menu_view_rect.h - 1.0,
+            2.0,
+            Color::from_rgba(130, 170, 194, 165),
+        );
+        draw_ambient_dust(palette, time);
+        draw_vignette(palette);
+        draw_rectangle(
+            0.0,
+            0.0,
+            screen_width(),
+            screen_height(),
+            Color::from_rgba(6, 9, 13, 120),
+        );
+    }
 
-    let overlay_bg = Color::from_rgba(6, 9, 13, 165);
-    draw_rectangle(0.0, 0.0, screen_width(), screen_height(), overlay_bg);
-
-    let title = "RXCHIXS";
-    let subtitle = "Prototype Jeu + Editeur de Carte";
-    let title_dims = measure_text(title, None, 74, 1.0);
-    let subtitle_dims = measure_text(subtitle, None, 30, 1.0);
     let center_x = screen_width() * 0.5;
-
-    draw_ui_text_tinted_on(
-        overlay_bg,
-        Color::from_rgba(240, 248, 255, 255),
-        title,
-        center_x - title_dims.width * 0.5,
-        130.0,
-        74.0,
-    );
-    draw_ui_text_tinted_on(
-        overlay_bg,
-        Color::from_rgba(182, 208, 220, 255),
-        subtitle,
-        center_x - subtitle_dims.width * 0.5,
-        168.0,
-        30.0,
-    );
-
     let mouse = vec2(mouse_position().0, mouse_position().1);
     let click = is_mouse_button_pressed(MouseButton::Left);
-    let play_rect = Rect::new(center_x - 140.0, 232.0, 280.0, 58.0);
-    let editor_rect = Rect::new(center_x - 140.0, 306.0, 280.0, 58.0);
+    let play_rect = Rect::new(center_x - 140.0, screen_height() * 0.42, 280.0, 58.0);
+    let editor_rect = Rect::new(center_x - 140.0, play_rect.y + 74.0, 280.0, 58.0);
 
     let play_clicked = draw_ui_button(play_rect, "Jouer", mouse, click, false);
     let editor_clicked = draw_ui_button(editor_rect, "Editeur", mouse, click, false);
-
-    draw_ui_text_tinted_on(
-        overlay_bg,
-        Color::from_rgba(174, 202, 216, 255),
-        "Raccourcis: [Enter]=Jouer  [E]=Editeur  [F11]=Plein ecran  [Esc]=Menu",
-        center_x - 320.0,
-        404.0,
-        24.0,
-    );
-    draw_ui_text_tinted_on(
-        overlay_bg,
-        Color::from_rgba(144, 171, 188, 255),
-        "Objectif: edition rapide, pratique et visuellement claire",
-        center_x - 278.0,
-        434.0,
-        22.0,
-    );
 
     if play_clicked || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
         return Some(AppMode::Playing);
@@ -948,6 +1076,7 @@ pub(crate) fn draw_sim_blocks_overlay(
     show_labels: bool,
     bounds: Option<(i32, i32, i32, i32)>,
 ) {
+    let storage_texture = storage_raw_texture();
     for block in sim.block_debug_views() {
         if let Some(tile_bounds) = bounds
             && !tile_in_bounds(block.tile, tile_bounds)
@@ -964,6 +1093,9 @@ pub(crate) fn draw_sim_blocks_overlay(
             2.0,
             color,
         );
+        if block.kind == sim::BlockKind::Storage && block.raw_qty > 0 {
+            draw_storage_raw_stack(rect, block.raw_qty, storage_texture.as_ref());
+        }
         if show_labels {
             let label = format!("#{} {}", block.id, block.kind.label());
             draw_text(
@@ -981,6 +1113,42 @@ pub(crate) fn draw_sim_blocks_overlay(
                 Color::from_rgba(180, 215, 232, 255),
             );
         }
+    }
+}
+
+fn draw_storage_raw_stack(rect: Rect, raw_qty: u32, texture: Option<&Texture2D>) {
+    let pile = raw_qty.clamp(1, 3) as usize;
+    for i in 0..pile {
+        let s = 14.0;
+        let x = rect.x + rect.w - s - 4.0 - i as f32 * 5.5;
+        let y = rect.y + rect.h - s - 4.0 - i as f32 * 3.2;
+        if let Some(tex) = texture {
+            draw_texture_ex(
+                tex,
+                x,
+                y,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(s, s)),
+                    ..Default::default()
+                },
+            );
+        } else {
+            let col = Color::from_rgba(188, 150, 104, 225);
+            draw_rectangle(x, y, s, s, col);
+            draw_rectangle_lines(x, y, s, s, 1.0, Color::from_rgba(80, 60, 40, 220));
+        }
+    }
+
+    if raw_qty > 1 {
+        let count = format!("x{}", raw_qty);
+        draw_text(
+            &count,
+            rect.x + 3.0,
+            rect.y + rect.h - 4.0,
+            11.0,
+            Color::from_rgba(240, 246, 252, 230),
+        );
     }
 }
 

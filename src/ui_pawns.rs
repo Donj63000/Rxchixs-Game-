@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::*;
 use crate::historique::LogCategorie;
 use crate::interactions::{SocialActionKind, SocialEmoteIcon};
@@ -123,7 +125,7 @@ impl SkillBar {
             Self::Intelligence => "Intelligence",
             Self::Planification => "Planification",
             Self::Sociabilite => "Sociabilite",
-            Self::Management => "Management",
+            Self::Management => "Gestion",
             Self::Securite => "Securite",
             Self::Nettoyage => "Nettoyage",
             Self::Diagnostic => "Diagnostic",
@@ -261,6 +263,7 @@ pub enum PawnSheetTab {
     #[default]
     Fiche,
     Historique,
+    Social,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -452,12 +455,16 @@ pub fn process_pawn_ui_input(
         .unwrap_or(false);
     out.mouse_over_ui = over_top || over_sheet || over_close;
 
-    let (tab_fiche_rect, tab_history_rect) = layout
-        .sheet_rect
-        .map(sheet_tab_rects)
-        .unwrap_or((Rect::new(0.0, 0.0, 0.0, 0.0), Rect::new(0.0, 0.0, 0.0, 0.0)));
+    let (tab_fiche_rect, tab_history_rect, tab_social_rect) =
+        layout.sheet_rect.map(sheet_tab_rects).unwrap_or((
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+        ));
     let over_tabs = state.pawn_ui.sheet_open.is_some()
-        && (point_in_rect(mouse, tab_fiche_rect) || point_in_rect(mouse, tab_history_rect));
+        && (point_in_rect(mouse, tab_fiche_rect)
+            || point_in_rect(mouse, tab_history_rect)
+            || point_in_rect(mouse, tab_social_rect));
     out.mouse_over_ui |= over_tabs;
 
     // Wheel: scroll pawn bar when hovering it.
@@ -478,11 +485,13 @@ pub fn process_pawn_ui_input(
     if !out.consumed_wheel
         && state.pawn_ui.sheet_open.is_some()
         && over_sheet
-        && state.pawn_ui.sheet_tab == PawnSheetTab::Historique
+        && (state.pawn_ui.sheet_tab == PawnSheetTab::Historique
+            || state.pawn_ui.sheet_tab == PawnSheetTab::Social)
         && wheel_y.abs() > f32::EPSILON
         && let (Some(panel), Some(key)) = (layout.sheet_rect, state.pawn_ui.sheet_open)
     {
-        let max_scroll = history_max_scroll_px(state, key, panel);
+        let only_social = state.pawn_ui.sheet_tab == PawnSheetTab::Social;
+        let max_scroll = history_max_scroll_px(state, key, panel, only_social);
         state.pawn_ui.history_scroll_y =
             (state.pawn_ui.history_scroll_y - wheel_y * 32.0).clamp(0.0, max_scroll);
         out.consumed_wheel = true;
@@ -502,6 +511,13 @@ pub fn process_pawn_ui_input(
         }
         if point_in_rect(mouse, tab_history_rect) {
             state.pawn_ui.sheet_tab = PawnSheetTab::Historique;
+            state.pawn_ui.history_scroll_y = 0.0;
+            out.consumed_click = true;
+            return out;
+        }
+        if point_in_rect(mouse, tab_social_rect) {
+            state.pawn_ui.sheet_tab = PawnSheetTab::Social;
+            state.pawn_ui.history_scroll_y = 0.0;
             out.consumed_click = true;
             return out;
         }
@@ -702,23 +718,51 @@ pub fn draw_social_emotes(state: &GameState, time: f32) {
 }
 
 fn draw_social_emote_bubble(pos: Vec2, view: &SocialEmoteView, time: f32, debug: bool) {
-    let base = pos + vec2(0.0, -42.0);
+    let anchor = pos + vec2(0.0, -42.0);
+    let (freq, amp) = match view.stage {
+        SocialVisualStage::Approaching => (5.3, 1.1),
+        SocialVisualStage::Active => (7.2, 1.7),
+        SocialVisualStage::Afterglow => (4.4, 0.9),
+    };
+    let stage_bob = (time * freq + view.phase * 2.1).sin() * amp;
+    let stage_rise = match view.stage {
+        SocialVisualStage::Approaching => -(1.0 - (view.phase * 2.2).min(1.0)) * 4.0,
+        SocialVisualStage::Active => -2.0,
+        SocialVisualStage::Afterglow => -2.0 - (1.0 - view.alpha).clamp(0.0, 1.0) * 10.0,
+    };
+    let base = anchor + vec2(0.0, stage_bob + stage_rise);
 
-    let wobble = 1.0 + 0.03 * (time * 4.0 + view.phase * 1.7).sin();
+    let wobble = 1.0 + 0.025 * (time * 4.4 + view.phase * 1.7).sin();
+    let stage_boost = if view.stage == SocialVisualStage::Active {
+        1.03
+    } else {
+        1.0
+    };
     let speaker_boost = if view.is_speaker && view.stage == SocialVisualStage::Active {
         1.06
     } else {
         1.0
     };
-    let scale = wobble * speaker_boost;
+    let scale = wobble * stage_boost * speaker_boost;
 
     let w = 46.0 * scale;
     let h = 26.0 * scale;
     let x = base.x - w * 0.5;
     let y = base.y - h;
 
-    let bg = Color::new(1.0, 1.0, 1.0, 0.85 * view.alpha);
-    let border = Color::new(0.05, 0.05, 0.05, 0.70 * view.alpha);
+    let (bg_r, bg_g, bg_b) = if let Some(kind) = view.kind {
+        if kind.is_hostile() {
+            (1.0, 0.92, 0.92)
+        } else if kind.is_positive() {
+            (0.92, 1.0, 0.94)
+        } else {
+            (0.96, 0.97, 1.0)
+        }
+    } else {
+        (1.0, 1.0, 1.0)
+    };
+    let bg = Color::new(bg_r, bg_g, bg_b, 0.86 * view.alpha);
+    let border = Color::new(0.05, 0.05, 0.05, 0.72 * view.alpha);
 
     draw_rectangle(x, y, w, h, bg);
     draw_rectangle_lines(x, y, w, h, 1.0, border);
@@ -731,6 +775,16 @@ fn draw_social_emote_bubble(pos: Vec2, view: &SocialEmoteView, time: f32, debug:
 
     let icon_center = vec2(base.x, y + h * 0.52);
     draw_emote_icon(icon_center, view, scale, time);
+    if view.is_speaker && view.stage == SocialVisualStage::Active {
+        let pulse = 0.18 + ((time * 8.2 + view.phase * 1.4).sin() * 0.5 + 0.5) * 0.14;
+        draw_circle_lines(
+            icon_center.x,
+            icon_center.y,
+            8.0 * scale,
+            1.0,
+            Color::new(0.93, 0.66, 0.28, pulse * view.alpha),
+        );
+    }
 
     if debug {
         if let Some(kind) = view.kind {
@@ -754,34 +808,69 @@ fn draw_social_emote_bubble(pos: Vec2, view: &SocialEmoteView, time: f32, debug:
 
 fn short_label(kind: SocialActionKind) -> &'static str {
     match kind {
-        SocialActionKind::DireBonjour => "Yo",
-        SocialActionKind::SmallTalk => "...",
-        SocialActionKind::Compliment => "Top",
+        SocialActionKind::DireBonjour => "Salut",
+        SocialActionKind::SmallTalk => "Parle",
+        SocialActionKind::Compliment => "Bravo",
         SocialActionKind::DemanderAide => "Aide?",
-        SocialActionKind::Blague => "Ha",
+        SocialActionKind::Blague => "Haha",
         SocialActionKind::Ragot => "Psst",
         SocialActionKind::SExcuser => "Pardon",
-        SocialActionKind::Menacer => "!",
+        SocialActionKind::Menacer => "Menace",
         SocialActionKind::Insulter => "Grr",
-        SocialActionKind::SEngueuler => "!!",
+        SocialActionKind::SEngueuler => "Dispute",
     }
 }
 
 fn draw_emote_icon(center: Vec2, view: &SocialEmoteView, scale: f32, time: f32) {
     let col = Color::new(0.1, 0.1, 0.1, 0.85 * view.alpha);
     let s = 8.5 * scale;
+    let motion_amp = match view.stage {
+        SocialVisualStage::Approaching => 0.28,
+        SocialVisualStage::Active => 0.48,
+        SocialVisualStage::Afterglow => 0.22,
+    };
+    let center = center
+        + vec2(
+            0.0,
+            (time * 5.8 + view.phase * 2.0).sin() * motion_amp * scale,
+        );
 
     match view.icon {
+        SocialEmoteIcon::Wave => {
+            let swing = (time * 8.4 + view.phase * 2.5).sin();
+            let hand_x = center.x + s * 0.22 * swing;
+            let hand_y = center.y - s * 0.08;
+            draw_line(
+                center.x - s * 0.55,
+                center.y + s * 0.55,
+                hand_x,
+                hand_y + s * 0.2,
+                1.2,
+                col,
+            );
+            draw_circle(hand_x, hand_y, 1.8 * scale, col);
+            let wave_col = Color::new(col.r, col.g, col.b, col.a * (0.35 + 0.65 * swing.abs()));
+            draw_circle_lines(hand_x + s * 0.30, hand_y, s * 0.35, 1.0, wave_col);
+            draw_circle_lines(
+                hand_x + s * 0.52,
+                hand_y,
+                s * 0.60,
+                1.0,
+                with_alpha(wave_col, 0.75),
+            );
+        }
         SocialEmoteIcon::TalkDots => {
             let speed = if view.is_speaker { 6.0 } else { 3.5 };
             let step = ((view.phase * speed).floor() as i32).rem_euclid(3);
 
             for i in 0..3 {
                 let dx = (i as f32 - 1.0) * (s * 0.8);
+                let bounce =
+                    ((time * (5.2 + i as f32) + view.phase * 1.4).sin() * 0.5 + 0.5) * 1.1 * scale;
                 let alpha = if i <= step { 1.0 } else { 0.25 };
                 draw_circle(
                     center.x + dx,
-                    center.y,
+                    center.y - bounce,
                     1.4 * scale,
                     Color::new(col.r, col.g, col.b, col.a * alpha),
                 );
@@ -1172,7 +1261,7 @@ fn draw_pawn_sheet(
         return;
     };
 
-    let (tab_fiche_rect, tab_history_rect) = sheet_tab_rects(panel);
+    let (tab_fiche_rect, tab_history_rect, tab_social_rect) = sheet_tab_rects(panel);
     draw_small_wide_button(
         tab_fiche_rect,
         "Fiche",
@@ -1185,9 +1274,19 @@ fn draw_pawn_sheet(
         point_in_rect(mouse, tab_history_rect),
         state.pawn_ui.sheet_tab == PawnSheetTab::Historique,
     );
+    draw_small_wide_button(
+        tab_social_rect,
+        "Social",
+        point_in_rect(mouse, tab_social_rect),
+        state.pawn_ui.sheet_tab == PawnSheetTab::Social,
+    );
 
     if state.pawn_ui.sheet_tab == PawnSheetTab::Historique {
-        draw_pawn_sheet_history(state, pawn, panel);
+        draw_pawn_sheet_history(state, pawn, panel, false);
+        return;
+    }
+    if state.pawn_ui.sheet_tab == PawnSheetTab::Social {
+        draw_pawn_sheet_history(state, pawn, panel, true);
         return;
     }
 
@@ -1249,12 +1348,13 @@ fn draw_pawn_sheet(
     }
 }
 
-fn sheet_tab_rects(panel: Rect) -> (Rect, Rect) {
+fn sheet_tab_rects(panel: Rect) -> (Rect, Rect, Rect) {
     let tab_y = panel.y + 100.0;
     let tab_h = 24.0;
     let tab_fiche = Rect::new(panel.x + 14.0, tab_y, 96.0, tab_h);
-    let tab_history = Rect::new(panel.x + 116.0, tab_y, 134.0, tab_h);
-    (tab_fiche, tab_history)
+    let tab_history = Rect::new(panel.x + 116.0, tab_y, 106.0, tab_h);
+    let tab_social = Rect::new(panel.x + 228.0, tab_y, 90.0, tab_h);
+    (tab_fiche, tab_history, tab_social)
 }
 
 fn history_row_color(cat: LogCategorie) -> Color {
@@ -1269,7 +1369,7 @@ fn history_row_color(cat: LogCategorie) -> Color {
     }
 }
 
-fn draw_pawn_sheet_history(state: &GameState, pawn: &PawnCard, panel: Rect) {
+fn draw_pawn_sheet_history(state: &GameState, pawn: &PawnCard, panel: Rect, only_social: bool) {
     let top = panel.y + 132.0;
     let bottom = panel.y + panel.h - 16.0;
     let left = panel.x + 14.0;
@@ -1301,7 +1401,12 @@ fn draw_pawn_sheet_history(state: &GameState, pawn: &PawnCard, panel: Rect) {
     let msg_x = left + time_w + cat_w + 8.0;
     let msg_w = (right - msg_x - 12.0).max(40.0);
 
-    for entry in pawn.history.iter().rev() {
+    for entry in pawn
+        .history
+        .iter()
+        .rev()
+        .filter(|entry| !only_social || matches!(entry.cat, LogCategorie::Social))
+    {
         if y + row_h < top {
             y += row_h;
             continue;
@@ -1349,11 +1454,19 @@ fn draw_pawn_sheet_history(state: &GameState, pawn: &PawnCard, panel: Rect) {
     }
 }
 
-fn history_max_scroll_px(state: &GameState, key: PawnKey, panel: Rect) -> f32 {
+fn history_max_scroll_px(state: &GameState, key: PawnKey, panel: Rect, only_social: bool) -> f32 {
     let Some(pawn) = state.pawns.iter().find(|p| p.key == key) else {
         return 0.0;
     };
-    let content_h = pawn.history.len() as f32 * 22.0 + 8.0;
+    let entry_count = if only_social {
+        pawn.history
+            .iter()
+            .filter(|entry| matches!(entry.cat, LogCategorie::Social))
+            .count()
+    } else {
+        pawn.history.len()
+    };
+    let content_h = entry_count as f32 * 22.0 + 8.0;
     let viewport_h = (panel.y + panel.h - 16.0) - (panel.y + 132.0);
     (content_h - viewport_h).max(0.0)
 }
@@ -1463,7 +1576,7 @@ fn pawn_label(state: &GameState, key: PawnKey) -> &str {
         .unwrap_or(key.short_label())
 }
 
-fn draw_pawn_context_menu(state: &GameState, mouse: Vec2) {
+pub fn draw_pawn_context_menu(state: &GameState, mouse: Vec2) {
     ensure_default_material();
 
     let Some(menu) = state.pawn_ui.context_menu else {

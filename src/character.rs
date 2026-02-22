@@ -67,11 +67,11 @@ pub enum BodyType {
 }
 
 impl BodyType {
-    pub fn as_str(self) -> &'static str {
+    pub fn ui_label(self) -> &'static str {
         match self {
-            Self::Slim => "slim",
+            Self::Slim => "mince",
             Self::Standard => "standard",
-            Self::Broad => "broad",
+            Self::Broad => "costaud",
         }
     }
 }
@@ -86,12 +86,12 @@ pub enum SkinTone {
 }
 
 impl SkinTone {
-    pub fn as_str(self) -> &'static str {
+    pub fn ui_label(self) -> &'static str {
         match self {
-            Self::Porcelain => "porcelain",
-            Self::Warm => "warm",
+            Self::Porcelain => "porcelaine",
+            Self::Warm => "chaud",
             Self::Olive => "olive",
-            Self::Deep => "deep",
+            Self::Deep => "fonce",
         }
     }
 }
@@ -108,14 +108,14 @@ pub enum HairStyle {
 }
 
 impl HairStyle {
-    pub fn as_str(self) -> &'static str {
+    pub fn ui_label(self) -> &'static str {
         match self {
-            Self::Buzz => "buzz",
-            Self::Crew => "crew",
-            Self::Ponytail => "ponytail",
-            Self::Mohawk => "mohawk",
-            Self::Curly => "curly",
-            Self::Braids => "braids",
+            Self::Buzz => "coupe rase",
+            Self::Crew => "courte",
+            Self::Ponytail => "queue de cheval",
+            Self::Mohawk => "iroquoise",
+            Self::Curly => "boucles",
+            Self::Braids => "tresses",
         }
     }
 }
@@ -132,14 +132,14 @@ pub enum HairColor {
 }
 
 impl HairColor {
-    pub fn as_str(self) -> &'static str {
+    pub fn ui_label(self) -> &'static str {
         match self {
-            Self::Black => "black",
-            Self::DarkBrown => "dark_brown",
-            Self::Chestnut => "chestnut",
-            Self::Blonde => "blonde",
-            Self::Silver => "silver",
-            Self::TealDye => "teal_dye",
+            Self::Black => "noir",
+            Self::DarkBrown => "brun fonce",
+            Self::Chestnut => "chatain",
+            Self::Blonde => "blond",
+            Self::Silver => "argent",
+            Self::TealDye => "teinte turquoise",
         }
     }
 }
@@ -154,12 +154,12 @@ pub enum OutfitStyle {
 }
 
 impl OutfitStyle {
-    pub fn as_str(self) -> &'static str {
+    pub fn ui_label(self) -> &'static str {
         match self {
-            Self::Worker => "worker",
-            Self::Engineer => "engineer",
-            Self::Medic => "medic",
-            Self::Scout => "scout",
+            Self::Worker => "ouvrier",
+            Self::Engineer => "ingenieur",
+            Self::Medic => "medecin",
+            Self::Scout => "eclaireur",
         }
     }
 }
@@ -175,12 +175,12 @@ pub enum OutfitPalette {
 }
 
 impl OutfitPalette {
-    pub fn as_str(self) -> &'static str {
+    pub fn ui_label(self) -> &'static str {
         match self {
-            Self::Rust => "rust",
-            Self::Slate => "slate",
-            Self::Moss => "moss",
-            Self::Sand => "sand",
+            Self::Rust => "rouille",
+            Self::Slate => "ardoise",
+            Self::Moss => "mousse",
+            Self::Sand => "sable",
             Self::Cobalt => "cobalt",
         }
     }
@@ -198,14 +198,14 @@ pub enum Accessory {
 }
 
 impl Accessory {
-    pub fn as_str(self) -> &'static str {
+    pub fn ui_label(self) -> &'static str {
         match self {
-            Self::None => "none",
-            Self::Goggles => "goggles",
+            Self::None => "aucun",
+            Self::Goggles => "lunettes",
             Self::Bandana => "bandana",
-            Self::Backpack => "backpack",
-            Self::Toolbelt => "toolbelt",
-            Self::ShoulderPad => "shoulder_pad",
+            Self::Backpack => "sac a dos",
+            Self::Toolbelt => "ceinture outils",
+            Self::ShoulderPad => "epauliere",
         }
     }
 }
@@ -580,9 +580,9 @@ impl CharacterCatalog {
 }
 
 pub fn build_lineage_preview(catalog: &CharacterCatalog, root_seed: u64) -> Vec<CharacterRecord> {
-    let founder_a = catalog.spawn_founder("Founder-A", mix_seed(root_seed, 1));
-    let founder_b = catalog.spawn_founder("Founder-B", mix_seed(root_seed, 2));
-    let player = catalog.spawn_child("Player", &founder_a, &founder_b, mix_seed(root_seed, 3));
+    let founder_a = catalog.spawn_founder("Fondateur-A", mix_seed(root_seed, 1));
+    let founder_b = catalog.spawn_founder("Fondateur-B", mix_seed(root_seed, 2));
+    let player = catalog.spawn_child("Joueur", &founder_a, &founder_b, mix_seed(root_seed, 3));
     let gen2_a = catalog.spawn_child("Gen2-A", &player, &founder_b, mix_seed(root_seed, 4));
     let gen2_b = catalog.spawn_child("Gen2-B", &founder_a, &player, mix_seed(root_seed, 5));
     vec![founder_a, founder_b, player, gen2_a, gen2_b]
@@ -591,10 +591,10 @@ pub fn build_lineage_preview(catalog: &CharacterCatalog, root_seed: u64) -> Vec<
 pub fn compact_visual_summary(record: &CharacterRecord) -> String {
     format!(
         "{} {} {} {}",
-        record.visual.body_type.as_str(),
-        record.visual.hair_style.as_str(),
-        record.visual.outfit_style.as_str(),
-        record.visual.accessory.as_str(),
+        record.visual.body_type.ui_label(),
+        record.visual.hair_style.ui_label(),
+        record.visual.outfit_style.ui_label(),
+        record.visual.accessory.ui_label(),
     )
 }
 
@@ -605,46 +605,46 @@ pub fn inspector_lines(record: &CharacterRecord) -> Vec<String> {
             record.label, record.generation, record.seed
         ),
         gene_line(
-            "body",
+            "corps",
             record.dna.body_type,
             record.visual.body_type,
-            BodyType::as_str,
+            BodyType::ui_label,
         ),
         gene_line(
-            "skin",
+            "peau",
             record.dna.skin_tone,
             record.visual.skin_tone,
-            SkinTone::as_str,
+            SkinTone::ui_label,
         ),
         gene_line(
-            "hair",
+            "coiffure",
             record.dna.hair_style,
             record.visual.hair_style,
-            HairStyle::as_str,
+            HairStyle::ui_label,
         ),
         gene_line(
-            "hair_color",
+            "couleur_cheveux",
             record.dna.hair_color,
             record.visual.hair_color,
-            HairColor::as_str,
+            HairColor::ui_label,
         ),
         gene_line(
-            "outfit",
+            "tenue",
             record.dna.outfit_style,
             record.visual.outfit_style,
-            OutfitStyle::as_str,
+            OutfitStyle::ui_label,
         ),
         gene_line(
             "palette",
             record.dna.outfit_palette,
             record.visual.outfit_palette,
-            OutfitPalette::as_str,
+            OutfitPalette::ui_label,
         ),
         gene_line(
-            "accessory",
+            "accessoire",
             record.dna.accessory,
             record.visual.accessory,
-            Accessory::as_str,
+            Accessory::ui_label,
         ),
     ]
 }

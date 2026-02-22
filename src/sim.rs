@@ -127,21 +127,23 @@ impl StarterSimConfig {
     }
 
     pub fn load(path: &str) -> Result<Self, String> {
-        let raw = fs::read_to_string(path).map_err(|e| format!("read sim config failed: {e}"))?;
-        ron_from_str(&raw).map_err(|e| format!("parse sim config failed: {e}"))
+        let raw =
+            fs::read_to_string(path).map_err(|e| format!("echec lecture config simu: {e}"))?;
+        ron_from_str(&raw).map_err(|e| format!("echec lecture RON config simu: {e}"))
     }
 
     pub fn save(&self, path: &str) -> Result<(), String> {
         let payload = ron_to_string_pretty(self, Self::pretty_config())
-            .map_err(|e| format!("serialize sim config failed: {e}"))?;
+            .map_err(|e| format!("echec serialisation config simu: {e}"))?;
 
         if let Some(parent) = Path::new(path).parent()
             && !parent.as_os_str().is_empty()
         {
-            fs::create_dir_all(parent).map_err(|e| format!("create sim config dir failed: {e}"))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("echec creation dossier config simu: {e}"))?;
         }
 
-        fs::write(path, payload).map_err(|e| format!("write sim config failed: {e}"))
+        fs::write(path, payload).map_err(|e| format!("echec ecriture config simu: {e}"))
     }
 
     pub fn load_or_create(path: &str) -> Self {
@@ -262,13 +264,17 @@ impl BlockKind {
         }
     }
 
+    pub fn capex_eur(self) -> f64 {
+        self.capex()
+    }
+
     pub fn label(self) -> &'static str {
         match self {
-            Self::Storage => "storage",
+            Self::Storage => "stockage",
             Self::MachineA => "machine_a",
             Self::MachineB => "machine_b",
-            Self::Buffer => "buffer",
-            Self::Seller => "seller",
+            Self::Buffer => "tampon",
+            Self::Seller => "vente",
         }
     }
 }
@@ -337,10 +343,10 @@ pub enum ZoneKind {
 impl ZoneKind {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Neutral => "neutral",
-            Self::Receiving => "receiving",
-            Self::Processing => "processing",
-            Self::Shipping => "shipping",
+            Self::Neutral => "neutre",
+            Self::Receiving => "reception",
+            Self::Processing => "production",
+            Self::Shipping => "expedition",
             Self::Support => "support",
         }
     }
@@ -498,6 +504,7 @@ pub struct BlockDebugView {
     pub id: BlockId,
     pub kind: BlockKind,
     pub tile: (i32, i32),
+    pub raw_qty: u32,
     pub inventory_summary: String,
 }
 
@@ -624,7 +631,7 @@ impl FactorySim {
                 stress: 7.0,
                 current_job: None,
                 job_progress_s: 0.0,
-                decision_debug: "idle".to_string(),
+                decision_debug: "inactif".to_string(),
             },
             kpi: FactoryKpi::default(),
             zone_kpi,
@@ -730,9 +737,9 @@ impl FactorySim {
     pub fn toggle_zone_overlay(&mut self) {
         self.show_zone_overlay = !self.show_zone_overlay;
         self.build_status = if self.show_zone_overlay {
-            "Zone overlay ON".to_string()
+            "Surcouche zones : activee".to_string()
         } else {
-            "Zone overlay OFF".to_string()
+            "Surcouche zones : desactivee".to_string()
         };
     }
 
@@ -777,6 +784,28 @@ impl FactorySim {
         Some(brief)
     }
 
+    fn job_kind_label(&self, kind: &JobKind) -> String {
+        match *kind {
+            JobKind::Haul {
+                from_block,
+                to_block,
+                item_kind,
+                qty,
+            } => {
+                let item_label = match item_kind {
+                    ItemKind::Raw => "matiere",
+                    ItemKind::Wip => "encours",
+                    ItemKind::Finished => "produit fini",
+                    ItemKind::Scrap => "rebut",
+                };
+                format!("transport {qty}x {item_label} (B{from_block}->B{to_block})")
+            }
+            JobKind::OperateMachine { block_id } => {
+                format!("operation machine (B{block_id})")
+            }
+        }
+    }
+
     pub fn zone_overlay_enabled(&self) -> bool {
         self.show_zone_overlay
     }
@@ -787,9 +816,9 @@ impl FactorySim {
             self.pending_move_block = None;
         }
         self.build_status = if self.build_mode {
-            "Build mode ON".to_string()
+            "Mode construction : actif".to_string()
         } else {
-            "Build mode OFF".to_string()
+            "Mode construction : arret".to_string()
         };
     }
 
@@ -805,7 +834,7 @@ impl FactorySim {
             BlockKind::Buffer => BlockKind::Seller,
             BlockKind::Seller => BlockKind::Storage,
         };
-        self.build_status = format!("Block brush={}", self.block_brush.label());
+        self.build_status = format!("Brosse blocs : {}", self.block_brush.label());
     }
 
     pub fn cycle_zone_brush(&mut self) {
@@ -816,24 +845,96 @@ impl FactorySim {
             ZoneKind::Shipping => ZoneKind::Support,
             ZoneKind::Support => ZoneKind::Neutral,
         };
-        self.build_status = format!("Zone brush={}", self.zone_brush.label());
+        self.build_status = format!("Brosse zones : {}", self.zone_brush.label());
     }
 
     pub fn toggle_zone_paint_mode(&mut self) {
         self.zone_paint_mode = !self.zone_paint_mode;
         self.build_status = if self.zone_paint_mode {
-            "Zone paint mode ON".to_string()
+            "Peinture zones : activee".to_string()
         } else {
-            "Zone paint mode OFF".to_string()
+            "Peinture zones : desactivee".to_string()
         };
+    }
+
+    pub fn cash(&self) -> f64 {
+        self.economy.cash
+    }
+
+    pub fn revenue_total(&self) -> f64 {
+        self.economy.revenue_total
+    }
+
+    pub fn cost_total(&self) -> f64 {
+        self.economy.cost_total
+    }
+
+    pub fn profit_total(&self) -> f64 {
+        self.economy.profit()
+    }
+
+    pub fn sold_total(&self) -> u32 {
+        self.line.sold_total
+    }
+
+    pub fn throughput_per_hour(&self) -> f64 {
+        self.kpi.throughput_per_hour
+    }
+
+    pub fn otif(&self) -> f64 {
+        self.kpi.otif
+    }
+
+    pub fn blocks(&self) -> &[BlockInstance] {
+        &self.blocks
+    }
+
+    pub fn block_brush(&self) -> BlockKind {
+        self.block_brush
+    }
+
+    pub fn set_block_brush(&mut self, kind: BlockKind) {
+        self.block_brush = kind;
+        self.build_status = format!("Brosse blocs : {}", self.block_brush.label());
+    }
+
+    pub fn zone_brush(&self) -> ZoneKind {
+        self.zone_brush
+    }
+
+    pub fn set_zone_brush(&mut self, kind: ZoneKind) {
+        self.zone_brush = kind;
+        self.build_status = format!("Brosse zones : {}", self.zone_brush.label());
+    }
+
+    pub fn zone_paint_mode_enabled(&self) -> bool {
+        self.zone_paint_mode
+    }
+
+    pub fn set_zone_paint_mode(&mut self, enabled: bool) {
+        self.zone_paint_mode = enabled;
+        self.build_status = if self.zone_paint_mode {
+            "Peinture zones : activee".to_string()
+        } else {
+            "Peinture zones : desactivee".to_string()
+        };
+    }
+
+    pub fn pending_move_block(&self) -> Option<BlockId> {
+        self.pending_move_block
+    }
+
+    pub fn clear_pending_move_block(&mut self) {
+        self.pending_move_block = None;
+        self.build_status = "Deplacement annule".to_string();
     }
 
     pub fn select_move_source(&mut self, tile: (i32, i32)) {
         if let Some((block_id, block_kind)) = self.block_at_tile(tile).map(|b| (b.id, b.kind)) {
             self.pending_move_block = Some(block_id);
-            self.build_status = format!("Move source=#{} {}", block_id, block_kind.label());
+            self.build_status = format!("Source deplacement=#{} {}", block_id, block_kind.label());
         } else {
-            self.build_status = "Move source: no block here".to_string();
+            self.build_status = "Source deplacement: aucun bloc ici".to_string();
         }
     }
 
@@ -866,9 +967,9 @@ impl FactorySim {
             if let Some(index) = self.block_index_at_tile(tile) {
                 let removed = self.blocks.remove(index);
                 self.economy.earn(removed.kind.capex() * 0.6);
-                self.build_status = format!("Sold #{} {}", removed.id, removed.kind.label());
+                self.build_status = format!("Vendu #{} {}", removed.id, removed.kind.label());
             } else {
-                self.build_status = "No block to sell".to_string();
+                self.build_status = "Aucun bloc a vendre".to_string();
             }
             return;
         }
@@ -878,19 +979,19 @@ impl FactorySim {
                 if self.block_index_at_tile(tile).is_none() {
                     self.blocks[idx].origin_tile = tile;
                     self.pending_move_block = None;
-                    self.build_status = format!("Moved #{} -> ({}, {})", move_id, tile.0, tile.1);
+                    self.build_status = format!("Deplace #{} -> ({}, {})", move_id, tile.0, tile.1);
                 } else {
-                    self.build_status = "Move failed: destination occupied".to_string();
+                    self.build_status = "Deplacement impossible: destination occupee".to_string();
                 }
             } else {
                 self.pending_move_block = None;
-                self.build_status = "Move canceled: source missing".to_string();
+                self.build_status = "Deplacement annule: source introuvable".to_string();
             }
             return;
         }
 
         if self.block_index_at_tile(tile).is_some() {
-            self.build_status = "Build failed: destination occupied".to_string();
+            self.build_status = "Construction impossible: destination occupee".to_string();
             return;
         }
 
@@ -899,7 +1000,7 @@ impl FactorySim {
         self.economy.spend(self.block_brush.capex());
         self.blocks
             .push(self.make_block(id, self.block_brush, tile));
-        self.build_status = format!("Placed {} #{}", self.block_brush.label(), id);
+        self.build_status = format!("Place {} #{}", self.block_brush.label(), id);
     }
 
     pub fn save_layout(&mut self) -> Result<(), String> {
@@ -912,7 +1013,7 @@ impl FactorySim {
             agent_tile: self.agent.tile,
         };
         self.save_layout_asset(&layout)?;
-        self.build_status = format!("Factory layout saved: {FACTORY_LAYOUT_PATH}");
+        self.build_status = format!("Layout usine sauvegarde: {FACTORY_LAYOUT_PATH}");
         Ok(())
     }
 
@@ -924,11 +1025,12 @@ impl FactorySim {
         self.blocks
             .iter()
             .map(|block| BlockDebugView {
+                raw_qty: block.inventory.total_of(ItemKind::Raw),
                 id: block.id,
                 kind: block.kind,
                 tile: block.origin_tile,
                 inventory_summary: format!(
-                    "raw:{} wip:{} fin:{} scrap:{}",
+                    "mat:{} enc:{} fini:{} rebut:{}",
                     block.inventory.total_of(ItemKind::Raw),
                     block.inventory.total_of(ItemKind::Wip),
                     block.inventory.total_of(ItemKind::Finished),
@@ -950,7 +1052,7 @@ impl FactorySim {
 
     pub fn short_hud(&self) -> String {
         format!(
-            "Sim {} | Cash {:.0} EUR | Sold {} | KPI {:.1}/h | OTIF {:.0}%",
+            "Simu {} | Tresorerie {:.0} EUR | Ventes {} | Cadence {:.1}/h | OTIF {:.0}%",
             self.clock.format_hhmm(),
             self.economy.cash,
             self.line.sold_total,
@@ -960,18 +1062,18 @@ impl FactorySim {
     }
 
     pub fn build_hint_line(&self) -> String {
-        let mode = if self.build_mode { "ON" } else { "OFF" };
+        let mode = if self.build_mode { "ACTIF" } else { "ARRET" };
         let paint = if self.zone_paint_mode {
             format!("zone={}", self.zone_brush.label())
         } else {
-            format!("block={}", self.block_brush.label())
+            format!("bloc={}", self.block_brush.label())
         };
         let move_hint = self
             .pending_move_block
-            .map(|id| format!(" move_from=#{}", id))
+            .map(|id| format!(" source_depl=#{}", id))
             .unwrap_or_default();
         format!(
-            "Build[{mode}] {paint}{move_hint} | F7 toggle | B block | N zone | V paint | M move-src | click apply | right sell/reset | F8 save"
+            "Construction[{mode}] {paint}{move_hint} | F7 basculer | B bloc | N zone | V peinture | M source-depl | clic appliquer | clic-droit vendre/reinit | F8 sauver"
         )
     }
 
@@ -1144,14 +1246,14 @@ impl FactorySim {
                     qty: 1,
                 },
                 50,
-                "feed machine A",
+                "alimenter machine A",
             );
             self.ensure_job(
                 JobKind::OperateMachine {
                     block_id: machine_a,
                 },
                 60,
-                "operate A",
+                "operer A",
             );
         }
         if let Some(machine_b) = machine_b_id
@@ -1162,7 +1264,7 @@ impl FactorySim {
                     block_id: machine_b,
                 },
                 70,
-                "operate B",
+                "operer B",
             );
         }
         if let (Some(machine_b), Some(seller)) = (machine_b_id, seller_id)
@@ -1176,7 +1278,7 @@ impl FactorySim {
                     qty: 1,
                 },
                 80,
-                "dispatch finished",
+                "expedier produits finis",
             );
         }
     }
@@ -1221,7 +1323,7 @@ impl FactorySim {
                     self.agent.current_job = None;
                     self.agent.job_progress_s = 0.0;
                     self.release_reservations(job_id);
-                    self.agent.decision_debug = "job complete".to_string();
+                    self.agent.decision_debug = "tache terminee".to_string();
                 }
                 return;
             }
@@ -1244,21 +1346,22 @@ impl FactorySim {
                 self.jobs[job_idx].state = JobState::Claimed;
                 self.jobs[job_idx].assigned_agent = Some(agent_id);
                 self.jobs[job_idx].score_debug = format!(
-                    "priority={} fatigue={:.1} stress={:.1}",
+                    "priorite={} fatigue={:.1} stress={:.1}",
                     self.jobs[job_idx].priority, self.agent.fatigue, self.agent.stress
                 );
                 self.agent.current_job = Some(job_id);
                 self.agent.job_progress_s = 0.0;
                 self.agent.decision_debug = format!(
-                    "{:?} score:{}",
-                    self.jobs[job_idx].kind, self.jobs[job_idx].score_debug
+                    "{} score:{}",
+                    self.job_kind_label(&self.jobs[job_idx].kind),
+                    self.jobs[job_idx].score_debug
                 );
             } else {
-                self.jobs[job_idx].state = JobState::Blocked("reservation conflict".to_string());
-                self.agent.decision_debug = "blocked: reservation conflict".to_string();
+                self.jobs[job_idx].state = JobState::Blocked("conflit reservation".to_string());
+                self.agent.decision_debug = "bloque: conflit reservation".to_string();
             }
         } else {
-            self.agent.decision_debug = "idle(no pending jobs)".to_string();
+            self.agent.decision_debug = "inactif(aucune tache en attente)".to_string();
             self.agent.fatigue = (self.agent.fatigue - dt_sim / 3600.0).clamp(0.0, 100.0);
             self.agent.stress = (self.agent.stress - dt_sim / 3600.0 * 0.8).clamp(0.0, 100.0);
         }
@@ -1380,8 +1483,8 @@ impl FactorySim {
 
     fn load_layout_asset() -> Result<FactoryLayoutAsset, String> {
         let raw = fs::read_to_string(FACTORY_LAYOUT_PATH)
-            .map_err(|e| format!("read factory layout failed: {e}"))?;
-        ron_from_str(&raw).map_err(|e| format!("parse factory layout failed: {e}"))
+            .map_err(|e| format!("echec lecture layout usine: {e}"))?;
+        ron_from_str(&raw).map_err(|e| format!("echec lecture RON layout usine: {e}"))
     }
 
     fn save_layout_asset(&self, layout: &FactoryLayoutAsset) -> Result<(), String> {
@@ -1390,28 +1493,28 @@ impl FactorySim {
 
     fn save_layout_static(layout: &FactoryLayoutAsset) -> Result<(), String> {
         let payload = ron_to_string_pretty(layout, PrettyConfig::new().depth_limit(4))
-            .map_err(|e| format!("serialize factory layout failed: {e}"))?;
+            .map_err(|e| format!("echec serialisation layout usine: {e}"))?;
         if let Some(parent) = Path::new(FACTORY_LAYOUT_PATH).parent()
             && !parent.as_os_str().is_empty()
         {
             fs::create_dir_all(parent)
-                .map_err(|e| format!("create factory layout dir failed: {e}"))?;
+                .map_err(|e| format!("echec creation dossier layout usine: {e}"))?;
         }
         fs::write(FACTORY_LAYOUT_PATH, payload)
-            .map_err(|e| format!("write factory layout failed: {e}"))
+            .map_err(|e| format!("echec ecriture layout usine: {e}"))
     }
 
     pub fn debug_hud(&self) -> String {
         let day = self.clock.day_index();
         let machine_a = if self.line.machine_a_busy {
-            "busy"
+            "actif"
         } else {
-            "idle"
+            "inactif"
         };
         let machine_b = if self.line.machine_b_busy {
-            "busy"
+            "actif"
         } else {
-            "idle"
+            "inactif"
         };
         let pending_jobs = self
             .jobs
@@ -1428,7 +1531,7 @@ impl FactorySim {
             .collect::<Vec<_>>()
             .join(" | ");
         let blocked_label = if blocked_jobs.is_empty() {
-            "none"
+            "aucun"
         } else {
             blocked_jobs.as_str()
         };
@@ -1437,7 +1540,7 @@ impl FactorySim {
             .iter()
             .map(|(zone, kpi)| {
                 format!(
-                    "{}={}/tgt{:.0}",
+                    "{}={}/obj{:.0}",
                     zone.label(),
                     kpi.produced_total,
                     kpi.target_per_hour
@@ -1446,7 +1549,7 @@ impl FactorySim {
             .collect::<Vec<_>>()
             .join(" ");
         format!(
-            "SIM time=D{day} {} (hours={:.2})\nCash={:.2} | Rev={:.2} | Cost={:.2} | Profit={:.2}\nLine raw={} wip={} finished={} sold_total={}\nMachineA={} MachineB={}\nJobs pending={} blocked={} reservations={}\nAgent tile=({}, {}) fatigue={:.1} stress={:.1} current_job={:?}\nKPI throughput={:.1}/h scrap={} downtime={:.1}m otif={:.0}%\nZoneKPI {}\nBuild {}\nStatus {}",
+            "SIM temps=J{day} {} (heures={:.2})\nTresorerie={:.2} | Revenu={:.2} | Cout={:.2} | Profit={:.2}\nLigne mat={} enc={} fini={} ventes_totales={}\nMachineA={} MachineB={}\nTaches attente={} bloquees={} reservations={}\nAgent tuile=({}, {}) fatigue={:.1} stress={:.1} tache_actuelle={:?}\nKPI cadence={:.1}/h rebut={} arret={:.1}m otif={:.0}%\nKPIZones {}\nConstruction {}\nStatut {}",
             self.clock.format_hhmm(),
             self.clock.hours(),
             self.economy.cash,
@@ -1528,5 +1631,20 @@ mod tests {
 
         sim.apply_build_click(tile, true);
         assert!(sim.block_at_tile(tile).is_none());
+    }
+
+    #[test]
+    fn storage_debug_view_exposes_raw_quantity() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        sim.line.raw = 12;
+        sim.sync_blocks_from_line();
+
+        let storage = sim
+            .block_debug_views()
+            .into_iter()
+            .find(|block| block.kind == BlockKind::Storage)
+            .expect("storage block should exist");
+
+        assert_eq!(storage.raw_qty, 12);
     }
 }
