@@ -2,8 +2,31 @@ use super::*;
 
 pub(crate) enum PlayAction {
     None,
-    BackToMenu,
     OpenEditor,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum EscapeIntent {
+    ClosePause,
+    CloseBuildMenu,
+    ExitBuildMode,
+    OpenPause,
+}
+
+fn resolve_escape_intent(
+    pause_menu_open: bool,
+    build_menu_open: bool,
+    build_mode_enabled: bool,
+) -> EscapeIntent {
+    if pause_menu_open {
+        EscapeIntent::ClosePause
+    } else if build_menu_open {
+        EscapeIntent::CloseBuildMenu
+    } else if build_mode_enabled {
+        EscapeIntent::ExitBuildMode
+    } else {
+        EscapeIntent::OpenPause
+    }
 }
 
 fn normalize_wheel_units(raw_delta: f32) -> f32 {
@@ -78,25 +101,931 @@ fn draw_overlay_multiline(
     }
 }
 
+fn read_chariot_fork_input() -> f32 {
+    let monte = is_key_down(KeyCode::E);
+    let descend = is_key_down(KeyCode::A);
+    match (monte, descend) {
+        (true, false) => 1.0,
+        (false, true) => -1.0,
+        _ => 0.0,
+    }
+}
+
+fn draw_clark_status_panel(state: &GameState) {
+    if !state.chariot.pilote_a_bord {
+        return;
+    }
+
+    let rect = Rect::new((screen_width() - 280.0).max(12.0), 14.0, 268.0, 188.0);
+    draw_overlay_panel(rect);
+    draw_overlay_line(
+        "Clark C500 - Fiche conduite",
+        rect.x + 12.0,
+        rect.y + 24.0,
+        18.0,
+        Color::from_rgba(240, 248, 255, 255),
+    );
+
+    let battery = state.chariot.batterie_pct.clamp(0.0, 100.0);
+    let battery_ratio = state.chariot.batterie_ratio();
+    let bar_rect = Rect::new(rect.x + 12.0, rect.y + 36.0, rect.w - 24.0, 16.0);
+    draw_rectangle(
+        bar_rect.x,
+        bar_rect.y,
+        bar_rect.w,
+        bar_rect.h,
+        Color::from_rgba(18, 28, 40, 214),
+    );
+    let battery_col = if battery_ratio > 0.5 {
+        Color::from_rgba(96, 214, 132, 236)
+    } else if battery_ratio > 0.2 {
+        Color::from_rgba(232, 198, 92, 236)
+    } else {
+        Color::from_rgba(226, 98, 88, 240)
+    };
+    draw_rectangle(
+        bar_rect.x + 1.0,
+        bar_rect.y + 1.0,
+        (bar_rect.w - 2.0) * battery_ratio,
+        (bar_rect.h - 2.0).max(1.0),
+        battery_col,
+    );
+    draw_rectangle_lines(
+        bar_rect.x + 0.5,
+        bar_rect.y + 0.5,
+        bar_rect.w - 1.0,
+        bar_rect.h - 1.0,
+        1.0,
+        Color::from_rgba(170, 200, 220, 190),
+    );
+
+    draw_overlay_line(
+        &format!("Batterie: {:.0}%", battery),
+        rect.x + 14.0,
+        rect.y + 66.0,
+        15.0,
+        Color::from_rgba(222, 236, 248, 255),
+    );
+    draw_overlay_line(
+        &format!(
+            "Etat Clark: {:.0}%",
+            state.chariot.etat_pct.clamp(0.0, 100.0)
+        ),
+        rect.x + 14.0,
+        rect.y + 84.0,
+        15.0,
+        Color::from_rgba(198, 222, 236, 250),
+    );
+    draw_overlay_line(
+        &format!("Statut: {}", state.chariot.statut_label()),
+        rect.x + 14.0,
+        rect.y + 102.0,
+        15.0,
+        if state.chariot.est_en_charge {
+            Color::from_rgba(144, 220, 154, 250)
+        } else {
+            Color::from_rgba(204, 224, 238, 250)
+        },
+    );
+
+    let cable_state = if state.chargeur_clark.cable_branche {
+        "branche"
+    } else if state.chargeur_clark.cable_tenu {
+        "en main"
+    } else {
+        "range"
+    };
+    draw_overlay_line(
+        &format!("Cable chargeur: {}", cable_state),
+        rect.x + 14.0,
+        rect.y + 120.0,
+        15.0,
+        Color::from_rgba(196, 220, 234, 245),
+    );
+    draw_overlay_line(
+        &format!(
+            "Conduite: {} | Vitesse {:.1}",
+            if state.chariot.est_en_charge {
+                "verrouillee"
+            } else {
+                "active"
+            },
+            state.chariot.velocity.length()
+        ),
+        rect.x + 14.0,
+        rect.y + 138.0,
+        15.0,
+        Color::from_rgba(188, 212, 226, 242),
+    );
+    let rack_niveau = sim::FactorySim::rack_niveau_depuis_fourche(state.chariot.fourche_hauteur);
+    draw_overlay_line(
+        &format!(
+            "Niveau rack cible: {}",
+            sim::FactorySim::rack_niveau_label(rack_niveau)
+        ),
+        rect.x + 14.0,
+        rect.y + 156.0,
+        15.0,
+        Color::from_rgba(186, 228, 204, 242),
+    );
+    draw_overlay_line(
+        "A/E mat bas/haut | R descendre | F caisses",
+        rect.x + 14.0,
+        rect.y + 174.0,
+        14.0,
+        Color::from_rgba(244, 214, 146, 255),
+    );
+}
+
+fn push_player_history(
+    state: &mut GameState,
+    sim_time_s: f64,
+    cat: crate::historique::LogCategorie,
+    msg: impl Into<String>,
+) {
+    if let Some(player_card) = state.pawns.iter_mut().find(|p| p.key == PawnKey::Player) {
+        player_card.history.push(sim_time_s, cat, msg.into());
+    }
+}
+
+fn tick_pause_status(state: &mut GameState, frame_dt: f32) {
+    if state.pause_status_timer <= 0.0 {
+        return;
+    }
+    state.pause_status_timer = (state.pause_status_timer - frame_dt).max(0.0);
+    if state.pause_status_timer <= f32::EPSILON {
+        state.pause_status_text = None;
+    }
+}
+
+fn set_pause_status(state: &mut GameState, message: impl Into<String>) {
+    state.pause_status_text = Some(message.into());
+    state.pause_status_timer = 3.2;
+}
+
+fn snapshot_map_from_state(state: &GameState) -> MapAsset {
+    MapAsset {
+        version: MAP_FILE_VERSION,
+        label: "Partie en cours".to_string(),
+        world: state.world.clone(),
+        props: state.props.clone(),
+        player_spawn: tile_from_world_clamped(&state.world, state.player.pos),
+        npc_spawn: tile_from_world_clamped(&state.world, state.npc.pos),
+    }
+}
+
+fn rebuild_state_from_map(state: &mut GameState, mut map: MapAsset, lineage_seed: u64) {
+    sanitize_map_asset(&mut map);
+    let catalog = state.character_catalog.clone();
+    let mut rebuilt = build_game_state_from_map(&map, &catalog, lineage_seed);
+    rebuilt.pause_menu_open = false;
+    rebuilt.pause_panel = PausePanel::Aucun;
+    rebuilt.pause_status_text = None;
+    rebuilt.pause_status_timer = 0.0;
+    rebuilt.pause_save_name = String::new();
+    rebuilt.pause_sauvegardes.clear();
+    rebuilt.pause_sauvegardes_warning = None;
+    rebuilt.pause_sauvegardes_offset = 0;
+    rebuilt.pause_selected_sauvegarde = None;
+    *state = rebuilt;
+}
+
+fn refresh_pause_sauvegardes(state: &mut GameState) {
+    match lister_sauvegardes() {
+        Ok(listing) => {
+            state.pause_sauvegardes = listing.slots;
+            state.pause_sauvegardes_warning = if listing.warnings.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{} sauvegarde(s) ignoree(s): {}",
+                    listing.warnings.len(),
+                    listing.warnings[0]
+                ))
+            };
+            if state.pause_sauvegardes.is_empty() {
+                state.pause_selected_sauvegarde = None;
+                state.pause_sauvegardes_offset = 0;
+            } else {
+                if state.pause_selected_sauvegarde.is_none() {
+                    state.pause_selected_sauvegarde = Some(0);
+                }
+                let max_index = state.pause_sauvegardes.len() - 1;
+                if let Some(selected) = state.pause_selected_sauvegarde {
+                    state.pause_selected_sauvegarde = Some(selected.min(max_index));
+                }
+                state.pause_sauvegardes_offset = state.pause_sauvegardes_offset.min(max_index);
+            }
+        }
+        Err(err) => {
+            state.pause_sauvegardes.clear();
+            state.pause_selected_sauvegarde = None;
+            state.pause_sauvegardes_offset = 0;
+            state.pause_sauvegardes_warning = Some(err);
+        }
+    }
+}
+
+fn ouvrir_pause_panel(state: &mut GameState, panel: PausePanel) {
+    state.pause_panel = panel;
+    if matches!(panel, PausePanel::Sauvegarder | PausePanel::Charger) {
+        refresh_pause_sauvegardes(state);
+    }
+    if panel == PausePanel::Sauvegarder && state.pause_save_name.trim().is_empty() {
+        state.pause_save_name = proposer_nom_sauvegarde(now_unix_seconds());
+    }
+}
+
+fn update_pause_save_name_input(state: &mut GameState) {
+    const MAX_NAME_LEN: usize = 64;
+    while let Some(ch) = get_char_pressed() {
+        let keep = ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '_' | '-' | '.');
+        if keep && state.pause_save_name.len() < MAX_NAME_LEN {
+            state.pause_save_name.push(ch);
+        }
+    }
+    if is_key_pressed(KeyCode::Backspace) {
+        let _ = state.pause_save_name.pop();
+    }
+}
+
+fn draw_pause_sauvegardes_list(
+    state: &mut GameState,
+    rect: Rect,
+    mouse: Vec2,
+    left_click: bool,
+    wheel_y: f32,
+) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(10, 18, 28, 220),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.2,
+        Color::from_rgba(96, 138, 168, 210),
+    );
+
+    let row_h = 34.0;
+    let visible_rows = ((rect.h - 8.0) / row_h).floor().max(1.0) as usize;
+    let max_offset = state.pause_sauvegardes.len().saturating_sub(visible_rows);
+    state.pause_sauvegardes_offset = state.pause_sauvegardes_offset.min(max_offset);
+
+    if point_in_rect(mouse, rect) && wheel_y.abs() > f32::EPSILON {
+        if wheel_y > 0.0 {
+            state.pause_sauvegardes_offset = state.pause_sauvegardes_offset.saturating_sub(1);
+        } else if wheel_y < 0.0 {
+            state.pause_sauvegardes_offset = (state.pause_sauvegardes_offset + 1).min(max_offset);
+        }
+    }
+
+    if state.pause_sauvegardes.is_empty() {
+        draw_overlay_line(
+            "Aucune sauvegarde dans le dossier saves/",
+            rect.x + 10.0,
+            rect.y + 24.0,
+            15.0,
+            Color::from_rgba(178, 206, 224, 255),
+        );
+        return;
+    }
+
+    let start = state.pause_sauvegardes_offset;
+    let end = (start + visible_rows).min(state.pause_sauvegardes.len());
+    let mut y = rect.y + 4.0;
+    for index in start..end {
+        let slot = &state.pause_sauvegardes[index];
+        let row_rect = Rect::new(rect.x + 4.0, y, rect.w - 8.0, row_h - 2.0);
+        let hovered = point_in_rect(mouse, row_rect);
+        let selected = state.pause_selected_sauvegarde == Some(index);
+        let row_color = if selected {
+            Color::from_rgba(80, 124, 156, 228)
+        } else if hovered {
+            Color::from_rgba(56, 88, 114, 220)
+        } else {
+            Color::from_rgba(30, 48, 64, 210)
+        };
+        draw_rectangle(row_rect.x, row_rect.y, row_rect.w, row_rect.h, row_color);
+        draw_rectangle_lines(
+            row_rect.x + 0.5,
+            row_rect.y + 0.5,
+            row_rect.w - 1.0,
+            row_rect.h - 1.0,
+            1.0,
+            if selected {
+                Color::from_rgba(220, 238, 250, 240)
+            } else {
+                Color::from_rgba(116, 156, 182, 192)
+            },
+        );
+        draw_overlay_line(
+            &slot.save_name,
+            row_rect.x + 8.0,
+            row_rect.y + 16.0,
+            14.0,
+            Color::from_rgba(236, 246, 255, 255),
+        );
+        draw_overlay_line(
+            &slot.saved_at_label,
+            row_rect.x + 8.0,
+            row_rect.y + 30.0,
+            12.0,
+            Color::from_rgba(192, 220, 238, 248),
+        );
+        if left_click && hovered {
+            state.pause_selected_sauvegarde = Some(index);
+        }
+        y += row_h;
+    }
+}
+
+fn draw_pause_panel_details(
+    state: &mut GameState,
+    rect: Rect,
+    mouse: Vec2,
+    left_click: bool,
+    wheel_y: f32,
+) -> PlayAction {
+    draw_overlay_panel(rect);
+    let title = match state.pause_panel {
+        PausePanel::Aucun => "Infos",
+        PausePanel::Aide => "Aide",
+        PausePanel::Options => "Options",
+        PausePanel::Sauvegarder => "Sauvegarder",
+        PausePanel::Charger => "Charger",
+    };
+    draw_overlay_line(
+        title,
+        rect.x + 10.0,
+        rect.y + 22.0,
+        20.0,
+        Color::from_rgba(236, 246, 255, 255),
+    );
+
+    match state.pause_panel {
+        PausePanel::Aucun => {
+            draw_overlay_multiline(
+                "Utilise les boutons a gauche.\n\nSauvegarder:\n- saisir un nom\n- creer une sauvegarde horodatee\n\nCharger:\n- selectionner une sauvegarde\n- charger la selection",
+                rect.x + 10.0,
+                rect.y + 50.0,
+                15.0,
+                19.0,
+                Color::from_rgba(204, 228, 242, 255),
+            );
+        }
+        PausePanel::Aide => {
+            draw_overlay_multiline(
+                "Objectif: piloter l'usine en continu.\nLe menu pause stoppe toute simulation.\nSauvegarder cree des fichiers nommes + horodates dans saves/.\nCharger restaure la partie depuis la sauvegarde selectionnee.\nEditeur ouvre l'outil map en conservant l'etat courant.",
+                rect.x + 10.0,
+                rect.y + 50.0,
+                14.0,
+                18.0,
+                Color::from_rgba(204, 228, 242, 255),
+            );
+        }
+        PausePanel::Options => {
+            let sim_speed_label = match state.hud_ui.sim_speed {
+                SimSpeed::Pause => "Pause",
+                SimSpeed::X1 => "1x",
+                SimSpeed::X2 => "2x",
+                SimSpeed::X4 => "4x",
+            };
+            let options_text = format!(
+                "Simulation: {}\nZoom camera: {:.2}\nPlein ecran: F11\nDebug: {}\nInspecteur perso: {}\nDossier sauvegardes: {}/",
+                sim_speed_label,
+                state.camera_zoom,
+                if state.debug { "ON" } else { "OFF" },
+                if state.show_character_inspector {
+                    "ON"
+                } else {
+                    "OFF"
+                },
+                SAVE_DIR_PATH
+            );
+            draw_overlay_multiline(
+                &options_text,
+                rect.x + 10.0,
+                rect.y + 50.0,
+                15.0,
+                19.0,
+                Color::from_rgba(204, 228, 242, 255),
+            );
+        }
+        PausePanel::Sauvegarder => {
+            update_pause_save_name_input(state);
+            let now_s = now_unix_seconds();
+            let input_rect = Rect::new(rect.x + 10.0, rect.y + 48.0, rect.w - 20.0, 36.0);
+            draw_rectangle(
+                input_rect.x,
+                input_rect.y,
+                input_rect.w,
+                input_rect.h,
+                Color::from_rgba(16, 28, 40, 232),
+            );
+            draw_rectangle_lines(
+                input_rect.x + 0.5,
+                input_rect.y + 0.5,
+                input_rect.w - 1.0,
+                input_rect.h - 1.0,
+                1.2,
+                Color::from_rgba(116, 166, 198, 236),
+            );
+
+            let mut shown_name = state.pause_save_name.clone();
+            if (get_time() as i32) % 2 == 0 {
+                shown_name.push('_');
+            }
+            draw_overlay_line(
+                &format!("Nom: {}", shown_name),
+                input_rect.x + 8.0,
+                input_rect.y + 23.0,
+                16.0,
+                Color::from_rgba(236, 246, 255, 255),
+            );
+
+            draw_overlay_line(
+                &format!("Horodate (UTC): {}", format_horodate_utc(now_s)),
+                rect.x + 12.0,
+                rect.y + 104.0,
+                14.0,
+                Color::from_rgba(192, 220, 238, 248),
+            );
+
+            let controls_gap = 8.0;
+            let controls_w = ((rect.w - 20.0 - controls_gap * 2.0) / 3.0).max(120.0);
+            let save_now_rect = Rect::new(rect.x + 10.0, rect.y + 116.0, controls_w, 32.0);
+            let refresh_rect = Rect::new(
+                save_now_rect.x + save_now_rect.w + controls_gap,
+                rect.y + 116.0,
+                controls_w,
+                32.0,
+            );
+            let default_name_rect = Rect::new(
+                refresh_rect.x + refresh_rect.w + controls_gap,
+                rect.y + 116.0,
+                controls_w,
+                32.0,
+            );
+            let save_requested =
+                draw_ui_button_sized(save_now_rect, "Enregistrer", mouse, left_click, false, 15.0)
+                    || is_key_pressed(KeyCode::Enter);
+            if save_requested {
+                let snapshot = snapshot_map_from_state(state);
+                match enregistrer_sauvegarde(&snapshot, &state.pause_save_name) {
+                    Ok(slot) => {
+                        set_pause_status(
+                            state,
+                            format!(
+                                "Sauvegarde creee: {} ({})",
+                                slot.save_name, slot.saved_at_label
+                            ),
+                        );
+                        refresh_pause_sauvegardes(state);
+                        if let Some(index) = state
+                            .pause_sauvegardes
+                            .iter()
+                            .position(|it| it.file_name == slot.file_name)
+                        {
+                            state.pause_selected_sauvegarde = Some(index);
+                        }
+                    }
+                    Err(err) => set_pause_status(state, format!("Sauvegarde echouee: {err}")),
+                }
+            }
+            if draw_ui_button_sized(
+                refresh_rect,
+                "Rafraichir liste",
+                mouse,
+                left_click,
+                false,
+                15.0,
+            ) {
+                refresh_pause_sauvegardes(state);
+            }
+            if draw_ui_button_sized(
+                default_name_rect,
+                "Nom auto",
+                mouse,
+                left_click,
+                false,
+                15.0,
+            ) {
+                state.pause_save_name = proposer_nom_sauvegarde(now_s);
+            }
+
+            let list_rect = Rect::new(rect.x + 10.0, rect.y + 160.0, rect.w - 20.0, rect.h - 170.0);
+            draw_pause_sauvegardes_list(state, list_rect, mouse, left_click, wheel_y);
+        }
+        PausePanel::Charger => {
+            let controls_gap = 10.0;
+            let controls_w = ((rect.w - 20.0 - controls_gap) * 0.5).max(140.0);
+            let load_rect = Rect::new(rect.x + 10.0, rect.y + 48.0, controls_w, 34.0);
+            let refresh_rect = Rect::new(
+                load_rect.x + load_rect.w + controls_gap,
+                rect.y + 48.0,
+                controls_w,
+                34.0,
+            );
+            if draw_ui_button_sized(
+                load_rect,
+                "Charger la selection",
+                mouse,
+                left_click,
+                false,
+                15.0,
+            ) {
+                if let Some(selected) = state.pause_selected_sauvegarde {
+                    if let Some(slot) = state.pause_sauvegardes.get(selected) {
+                        match charger_sauvegarde(&slot.file_name) {
+                            Ok(map) => {
+                                let seed = state.lineage_seed;
+                                rebuild_state_from_map(state, map, seed);
+                                return PlayAction::None;
+                            }
+                            Err(err) => {
+                                set_pause_status(state, format!("Chargement echoue: {err}"))
+                            }
+                        }
+                    }
+                } else {
+                    set_pause_status(state, "Selectionne une sauvegarde d'abord.");
+                }
+            }
+            if draw_ui_button_sized(
+                refresh_rect,
+                "Rafraichir liste",
+                mouse,
+                left_click,
+                false,
+                15.0,
+            ) {
+                refresh_pause_sauvegardes(state);
+            }
+
+            let list_rect = Rect::new(rect.x + 10.0, rect.y + 92.0, rect.w - 20.0, rect.h - 102.0);
+            draw_pause_sauvegardes_list(state, list_rect, mouse, left_click, wheel_y);
+        }
+    }
+
+    if let Some(warn) = state.pause_sauvegardes_warning.as_deref() {
+        draw_overlay_line(
+            warn,
+            rect.x + 12.0,
+            rect.y + rect.h - 12.0,
+            13.0,
+            Color::from_rgba(244, 214, 146, 255),
+        );
+    }
+
+    PlayAction::None
+}
+
+fn draw_pause_menu_overlay(state: &mut GameState, mouse: Vec2, left_click: bool) -> PlayAction {
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::from_rgba(4, 8, 14, 178),
+    );
+
+    let panel_w = (screen_width() * 0.86).clamp(780.0, 1180.0);
+    let panel_h = (screen_height() * 0.86).clamp(560.0, 760.0);
+    let panel = Rect::new(
+        (screen_width() - panel_w) * 0.5,
+        (screen_height() - panel_h) * 0.5,
+        panel_w,
+        panel_h,
+    );
+    draw_overlay_panel(panel);
+
+    draw_overlay_line(
+        "PAUSE",
+        panel.x + 14.0,
+        panel.y + 32.0,
+        28.0,
+        Color::from_rgba(245, 252, 255, 255),
+    );
+    draw_overlay_line(
+        "Menu partie",
+        panel.x + 16.0,
+        panel.y + 52.0,
+        15.0,
+        Color::from_rgba(184, 214, 232, 255),
+    );
+
+    let menu_col_rect = Rect::new(panel.x + 14.0, panel.y + 68.0, 240.0, panel.h - 82.0);
+    let details_rect = Rect::new(
+        menu_col_rect.x + menu_col_rect.w + 14.0,
+        panel.y + 68.0,
+        panel.w - menu_col_rect.w - 42.0,
+        panel.h - 82.0,
+    );
+    draw_overlay_panel(menu_col_rect);
+
+    let button_w = menu_col_rect.w - 16.0;
+    let button_h = 36.0;
+    let button_gap = 8.0;
+    let mut button_y = menu_col_rect.y + 8.0;
+    let button_x = menu_col_rect.x + 8.0;
+
+    let new_rect = Rect::new(button_x, button_y, button_w, button_h);
+    button_y += button_h + button_gap;
+    let continue_rect = Rect::new(button_x, button_y, button_w, button_h);
+    button_y += button_h + button_gap;
+    let save_rect = Rect::new(button_x, button_y, button_w, button_h);
+    button_y += button_h + button_gap;
+    let load_rect = Rect::new(button_x, button_y, button_w, button_h);
+    button_y += button_h + button_gap;
+    let help_rect = Rect::new(button_x, button_y, button_w, button_h);
+    button_y += button_h + button_gap;
+    let options_rect = Rect::new(button_x, button_y, button_w, button_h);
+    button_y += button_h + button_gap;
+    let editor_rect = Rect::new(button_x, button_y, button_w, button_h);
+
+    if draw_ui_button_sized(new_rect, "Nouvelle partie", mouse, left_click, false, 16.0) {
+        let next_seed = advance_seed(state.lineage_seed);
+        rebuild_state_from_map(state, MapAsset::new_default(), next_seed);
+        return PlayAction::None;
+    }
+
+    if draw_ui_button_sized(continue_rect, "Continuer", mouse, left_click, false, 16.0) {
+        state.pause_menu_open = false;
+        state.pause_panel = PausePanel::Aucun;
+        return PlayAction::None;
+    }
+
+    if draw_ui_button_sized(
+        save_rect,
+        "Sauvegarder",
+        mouse,
+        left_click,
+        state.pause_panel == PausePanel::Sauvegarder,
+        16.0,
+    ) {
+        ouvrir_pause_panel(state, PausePanel::Sauvegarder);
+    }
+
+    if draw_ui_button_sized(
+        load_rect,
+        "Charger",
+        mouse,
+        left_click,
+        state.pause_panel == PausePanel::Charger,
+        16.0,
+    ) {
+        ouvrir_pause_panel(state, PausePanel::Charger);
+    }
+
+    if draw_ui_button_sized(
+        help_rect,
+        "Aide",
+        mouse,
+        left_click,
+        state.pause_panel == PausePanel::Aide,
+        16.0,
+    ) {
+        ouvrir_pause_panel(state, PausePanel::Aide);
+    }
+
+    if draw_ui_button_sized(
+        options_rect,
+        "Options",
+        mouse,
+        left_click,
+        state.pause_panel == PausePanel::Options,
+        16.0,
+    ) {
+        ouvrir_pause_panel(state, PausePanel::Options);
+    }
+
+    if draw_ui_button_sized(editor_rect, "Editeur", mouse, left_click, false, 16.0) {
+        state.pause_menu_open = false;
+        state.pause_panel = PausePanel::Aucun;
+        return PlayAction::OpenEditor;
+    }
+
+    let wheel_y = mouse_wheel().1;
+    if details_rect.h > 40.0 {
+        let panel_action =
+            draw_pause_panel_details(state, details_rect, mouse, left_click, wheel_y);
+        match panel_action {
+            PlayAction::None => {}
+            _ => return panel_action,
+        }
+    }
+
+    if let Some(status) = state.pause_status_text.as_deref()
+        && state.pause_status_timer > 0.0
+    {
+        draw_overlay_line(
+            status,
+            panel.x + 16.0,
+            panel.y + panel.h - 14.0,
+            14.0,
+            Color::from_rgba(244, 216, 144, 255),
+        );
+    }
+
+    PlayAction::None
+}
+
+fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -> PlayAction {
+    tick_pause_status(state, frame_dt);
+    *accumulator = 0.0;
+
+    ui_pawns::sync_dynamic_pawn_metrics(state);
+    let time = get_time() as f32;
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    let left_click = is_mouse_button_pressed(MouseButton::Left);
+    let hud_layout = ui_hud::build_hud_layout(state);
+
+    let sw = screen_width();
+    let margin = PLAY_CAMERA_MARGIN;
+    let map_view_rect = Rect::new(
+        margin,
+        margin,
+        (sw - margin * 2.0).max(1.0),
+        (hud_layout.bar_rect.y - margin * 2.0).max(1.0),
+    );
+    let (world_camera, clamped_center, clamped_zoom) = build_world_camera_for_viewport(
+        &state.world,
+        state.camera_center,
+        state.camera_zoom,
+        map_view_rect,
+        PLAY_CAMERA_ZOOM_MIN,
+        PLAY_CAMERA_ZOOM_MAX,
+    );
+    state.camera_center = clamped_center;
+    state.camera_zoom = clamped_zoom;
+    let visible_bounds = tile_bounds_from_camera(&state.world, &world_camera, map_view_rect, 2);
+
+    clear_background(state.palette.bg_bottom);
+    draw_background(&state.palette, time);
+    set_camera(&world_camera);
+    draw_floor_layer_region(&state.world, &state.palette, visible_bounds);
+    draw_exterior_ground_ambiance_region(&state.world, &state.palette, time, visible_bounds);
+    draw_sim_zone_overlay_region(&state.sim, visible_bounds);
+    draw_wall_cast_shadows_region(&state.world, &state.palette, visible_bounds);
+    draw_wall_layer_region(&state.world, &state.palette, visible_bounds);
+    draw_exterior_trees_region(&state.world, &state.palette, time, visible_bounds);
+    draw_prop_shadows_region(&state.props, &state.palette, time, visible_bounds);
+    draw_props_region(&state.props, &state.palette, time, visible_bounds);
+    draw_chargeur_clark(
+        &state.chargeur_clark,
+        &state.chariot,
+        state.player.pos,
+        &state.palette,
+        time,
+        state.debug,
+    );
+    draw_sim_blocks_overlay(&state.sim, state.debug, Some(visible_bounds));
+
+    let worker_pos = tile_center(state.sim.primary_agent_tile());
+    if !state.chariot.pilote_a_bord
+        && let Some(player_character) = state.lineage.get(state.player_lineage_index)
+    {
+        draw_character(
+            player_character,
+            CharacterRenderParams {
+                center: state.player.pos,
+                scale: 1.0,
+                facing: state.player.facing,
+                facing_left: state.player.facing_left,
+                is_walking: state.player.is_walking,
+                walk_cycle: state.player.walk_cycle,
+                gesture: CharacterGesture::None,
+                time,
+                debug: false,
+            },
+        );
+    }
+    draw_character(
+        &state.npc_character,
+        CharacterRenderParams {
+            center: state.npc.pos,
+            scale: 0.96,
+            facing: state.npc.facing,
+            facing_left: state.npc.facing_left,
+            is_walking: state.npc.is_walking,
+            walk_cycle: state.npc.walk_cycle,
+            gesture: CharacterGesture::None,
+            time,
+            debug: false,
+        },
+    );
+    draw_character(
+        &state.sim_worker_character,
+        CharacterRenderParams {
+            center: worker_pos,
+            scale: 0.94,
+            facing: CharacterFacing::Front,
+            facing_left: false,
+            is_walking: false,
+            walk_cycle: time * 2.0,
+            gesture: CharacterGesture::None,
+            time,
+            debug: false,
+        },
+    );
+
+    let driver = if state.chariot.pilote_a_bord {
+        state.lineage.get(state.player_lineage_index)
+    } else {
+        None
+    };
+    draw_chariot_elevateur(&state.chariot, &state.palette, time, driver, state.debug);
+
+    draw_lighting_region(&state.props, &state.palette, time, visible_bounds);
+    begin_ui_pass();
+    draw_clark_status_panel(state);
+    draw_rectangle_lines(
+        map_view_rect.x + 0.5,
+        map_view_rect.y + 0.5,
+        map_view_rect.w - 1.0,
+        map_view_rect.h - 1.0,
+        2.0,
+        Color::from_rgba(170, 213, 237, 135),
+    );
+    draw_ambient_dust(&state.palette, time);
+    draw_vignette(&state.palette);
+    if state.show_character_inspector && state.pawn_ui.sheet_open.is_none() {
+        draw_character_inspector_panel(state, time);
+    }
+    ui_hud::draw_hud(
+        state,
+        &hud_layout,
+        mouse,
+        map_view_rect,
+        &world_camera,
+        time,
+    );
+
+    draw_pause_menu_overlay(state, mouse, left_click)
+}
+
 pub(crate) fn run_play_frame(
     state: &mut GameState,
     frame_dt: f32,
     accumulator: &mut f32,
 ) -> PlayAction {
     if is_key_pressed(KeyCode::Escape) {
-        if state.hud_ui.build_menu_open {
-            state.hud_ui.build_menu_open = false;
-            return PlayAction::None;
+        match resolve_escape_intent(
+            state.pause_menu_open,
+            state.hud_ui.build_menu_open,
+            state.sim.build_mode_enabled(),
+        ) {
+            EscapeIntent::ClosePause => {
+                state.pause_menu_open = false;
+                state.pause_panel = PausePanel::Aucun;
+                state.pause_status_text = None;
+                state.pause_status_timer = 0.0;
+            }
+            EscapeIntent::CloseBuildMenu => {
+                state.hud_ui.build_menu_open = false;
+                state.hud_ui.build_menu_selected = None;
+                return PlayAction::None;
+            }
+            EscapeIntent::ExitBuildMode => {
+                if state.sim.zone_paint_mode_enabled() {
+                    state.sim.set_zone_paint_mode(false);
+                }
+                if state.sim.floor_paint_mode_enabled() {
+                    state.sim.set_floor_paint_mode(false);
+                }
+                state.sim.toggle_build_mode();
+                state.hud_ui.build_menu_open = false;
+                return PlayAction::None;
+            }
+            EscapeIntent::OpenPause => {
+                state.pause_menu_open = true;
+                state.pause_panel = PausePanel::Aucun;
+                state.pause_status_text = None;
+                state.pause_status_timer = 0.0;
+                state.hud_ui.build_menu_open = false;
+                state.hud_ui.info_window_open = false;
+                state.pawn_ui.context_menu = None;
+                refresh_pause_sauvegardes(state);
+                if state.pause_save_name.trim().is_empty() {
+                    state.pause_save_name = proposer_nom_sauvegarde(now_unix_seconds());
+                }
+            }
         }
-        if state.hud_ui.info_window_open {
-            state.hud_ui.info_window_open = false;
-            return PlayAction::None;
-        }
-        return PlayAction::BackToMenu;
+    }
+
+    if state.pause_menu_open {
+        return run_play_pause_frame(state, frame_dt, accumulator);
     }
     if is_key_pressed(KeyCode::F10) {
         return PlayAction::OpenEditor;
     }
+    tick_pause_status(state, frame_dt);
 
     if is_key_pressed(KeyCode::F1) {
         state.debug = !state.debug;
@@ -121,11 +1050,18 @@ pub(crate) fn run_play_frame(
     if is_key_pressed(KeyCode::B) {
         state.sim.cycle_block_brush();
     }
+    if is_key_pressed(KeyCode::T) {
+        let next = state.sim.block_orientation().next();
+        state.sim.set_block_orientation(next);
+    }
     if is_key_pressed(KeyCode::N) {
         state.sim.cycle_zone_brush();
     }
     if is_key_pressed(KeyCode::V) {
         state.sim.toggle_zone_paint_mode();
+    }
+    if is_key_pressed(KeyCode::K) {
+        state.sim.cycle_floor_brush();
     }
     if is_key_pressed(KeyCode::F8) {
         let _ = state.sim.save_layout();
@@ -137,6 +1073,7 @@ pub(crate) fn run_play_frame(
     let wheel_y = mouse_wheel().1;
     let left_click = is_mouse_button_pressed(MouseButton::Left);
     let right_click = is_mouse_button_pressed(MouseButton::Right);
+    let middle_click = is_mouse_button_pressed(MouseButton::Middle);
 
     // Keep pawn bars synced with the sim.
     ui_pawns::sync_dynamic_pawn_metrics(state);
@@ -153,10 +1090,41 @@ pub(crate) fn run_play_frame(
         wheel_y,
         time_now,
     );
+    let sw = screen_width();
+    let margin = PLAY_CAMERA_MARGIN;
+    let input_view_rect = Rect::new(
+        margin,
+        margin,
+        (sw - margin * 2.0).max(1.0),
+        (hud_layout.bar_rect.y - margin * 2.0).max(1.0),
+    );
+    let mouse_in_map_input = point_in_rect(mouse, input_view_rect) && !hud_input.mouse_over_ui;
 
-    // Wheel zoom only if UI didn't consume the wheel.
+    // Wheel: rotate build blocks with mouse in construction mode, otherwise zoom camera.
     let wheel_units = normalize_wheel_units(wheel_y);
-    if !hud_input.consumed_wheel && !hud_input.mouse_over_ui && wheel_units.abs() > f32::EPSILON {
+    let wheel_rotates_blocks = state.sim.build_mode_enabled()
+        && mouse_in_map_input
+        && !hud_input.mouse_over_ui
+        && !hud_input.consumed_wheel
+        && !state.sim.zone_paint_mode_enabled()
+        && !state.sim.floor_paint_mode_enabled()
+        && wheel_units.abs() > f32::EPSILON;
+    if wheel_rotates_blocks {
+        let mut orientation = state.sim.block_orientation();
+        let steps = wheel_units.abs().round().max(1.0) as i32;
+        for _ in 0..steps {
+            orientation = if wheel_units > 0.0 {
+                orientation.next()
+            } else {
+                // reverse rotation without adding an extra orientation API
+                orientation.next().next().next()
+            };
+        }
+        state.sim.set_block_orientation(orientation);
+    } else if !hud_input.consumed_wheel
+        && !hud_input.mouse_over_ui
+        && wheel_units.abs() > f32::EPSILON
+    {
         // Exponential scaling gives finer, more uniform zoom steps.
         let zoom_factor = (1.0 + PLAY_CAMERA_ZOOM_STEP).powf(wheel_units);
         state.camera_zoom =
@@ -176,7 +1144,11 @@ pub(crate) fn run_play_frame(
         state.camera_center = pos;
     }
 
-    let pan = read_camera_pan_input();
+    let mut pan = read_camera_pan_input();
+    if state.chariot.pilote_a_bord && is_key_down(KeyCode::A) {
+        // A is reserved for mast down while driving.
+        pan.x = pan.x.max(0.0);
+    }
     if pan.length_squared() > 0.0 {
         // User intent: moving camera manually => stop following.
         state.pawn_ui.follow = None;
@@ -185,8 +1157,6 @@ pub(crate) fn run_play_frame(
     }
 
     // --- Build world camera ---
-    let sw = screen_width();
-    let margin = PLAY_CAMERA_MARGIN;
     let view_rect = Rect::new(
         margin,
         margin,
@@ -259,21 +1229,265 @@ pub(crate) fn run_play_frame(
         state.sim.select_move_source(tile);
     }
 
+    if !state.chariot.pilote_a_bord && is_key_pressed(KeyCode::E) {
+        let charger_result = interagir_chargeur_clark(
+            &mut state.chariot,
+            &mut state.chargeur_clark,
+            state.player.pos,
+        );
+        match charger_result {
+            Ok(ActionChargeurClark::Pris) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    "Chargeur Clark: cable pris a la base.",
+                );
+            }
+            Ok(ActionChargeurClark::Range) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    "Chargeur Clark: cable range a la base.",
+                );
+            }
+            Ok(ActionChargeurClark::Branche) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    "Chargeur Clark: cable branche, charge active.",
+                );
+            }
+            Ok(ActionChargeurClark::Debranche) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    "Chargeur Clark: cable debranche du chariot.",
+                );
+            }
+            Err(ErreurChargeurClark::AucuneInteractionPossible)
+            | Err(ErreurChargeurClark::TropLoinBase) => {
+                match basculer_conduite_chariot(&mut state.chariot, &mut state.player, &state.world)
+                {
+                    Ok(ActionConduiteChariot::Monte) => {
+                        push_player_history(
+                            state,
+                            now_sim_s,
+                            crate::historique::LogCategorie::Deplacement,
+                            "Montee dans le Clark jaune.",
+                        );
+                    }
+                    Ok(ActionConduiteChariot::Descend) => {
+                        push_player_history(
+                            state,
+                            now_sim_s,
+                            crate::historique::LogCategorie::Deplacement,
+                            "Descente du Clark jaune.",
+                        );
+                    }
+                    Err(ErreurConduiteChariot::TropLoin) => {
+                        push_player_history(
+                            state,
+                            now_sim_s,
+                            crate::historique::LogCategorie::Etat,
+                            "Impossible de monter: Clark trop loin.",
+                        );
+                    }
+                    Err(ErreurConduiteChariot::AucuneSortieValide) => {
+                        push_player_history(
+                            state,
+                            now_sim_s,
+                            crate::historique::LogCategorie::Etat,
+                            "Impossible de descendre: aucune tuile libre autour du Clark.",
+                        );
+                    }
+                    Err(ErreurConduiteChariot::EnCharge) => {
+                        push_player_history(
+                            state,
+                            now_sim_s,
+                            crate::historique::LogCategorie::Etat,
+                            "Clark indisponible: charge en cours (debranchez d'abord le cable).",
+                        );
+                    }
+                }
+            }
+            Err(ErreurChargeurClark::ClarkOccupe) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Action chargeur impossible: descendez du Clark d'abord.",
+                );
+            }
+        }
+    } else if state.chariot.pilote_a_bord && is_key_pressed(KeyCode::R) {
+        match basculer_conduite_chariot(&mut state.chariot, &mut state.player, &state.world) {
+            Ok(ActionConduiteChariot::Descend) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Deplacement,
+                    "Descente du Clark jaune.",
+                );
+            }
+            Err(ErreurConduiteChariot::AucuneSortieValide) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Impossible de descendre: aucune tuile libre autour du Clark.",
+                );
+            }
+            Err(ErreurConduiteChariot::TropLoin | ErreurConduiteChariot::EnCharge) => {}
+            Ok(ActionConduiteChariot::Monte) => {}
+        }
+    }
+
+    if is_key_pressed(KeyCode::F) {
+        match actionner_fourches_chariot(
+            &mut state.chariot,
+            &state.world,
+            &mut state.props,
+            &mut state.sim,
+        ) {
+            Ok(ActionCaisseChariot::Chargee { kind, from }) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    format!(
+                        "Fourches: caisse chargee ({}) depuis ({}, {}).",
+                        prop_kind_label(kind),
+                        from.0,
+                        from.1
+                    ),
+                );
+            }
+            Ok(ActionCaisseChariot::Deposee { kind, to }) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    format!(
+                        "Fourches: caisse dechargee ({}) vers ({}, {}).",
+                        prop_kind_label(kind),
+                        to.0,
+                        to.1
+                    ),
+                );
+            }
+            Ok(ActionCaisseChariot::ChargeeDepuisRack { niveau, from }) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    format!(
+                        "Fourches: palette chargee depuis rack ({}, {}) niveau {}.",
+                        from.0,
+                        from.1,
+                        sim::FactorySim::rack_niveau_label(niveau)
+                    ),
+                );
+            }
+            Ok(ActionCaisseChariot::DeposeeDansRack { niveau, to }) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Travail,
+                    format!(
+                        "Fourches: palette deposee en rack ({}, {}) niveau {}.",
+                        to.0,
+                        to.1,
+                        sim::FactorySim::rack_niveau_label(niveau)
+                    ),
+                );
+            }
+            Err(ErreurCaisseChariot::HorsConduite) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Impossible d'utiliser les fourches: montez d'abord dans le Clark (E).",
+                );
+            }
+            Err(ErreurCaisseChariot::AucuneCaisseProche) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Aucune caisse transportable proche des fourches.",
+                );
+            }
+            Err(ErreurCaisseChariot::TuileDepotBloquee) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Depot impossible: tuile devant le Clark occupee ou bloquee.",
+                );
+            }
+            Err(ErreurCaisseChariot::RackNiveauOccupe) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Depot rack impossible: niveau deja occupe.",
+                );
+            }
+            Err(ErreurCaisseChariot::RackNiveauVide) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Prise rack impossible: niveau vide.",
+                );
+            }
+            Err(ErreurCaisseChariot::RackSansPalette) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Seule une palette logistique peut etre deposee dans un rack.",
+                );
+            }
+            Err(ErreurCaisseChariot::RackIntrouvable) => {
+                push_player_history(
+                    state,
+                    now_sim_s,
+                    crate::historique::LogCategorie::Etat,
+                    "Rack introuvable sur la tuile cible.",
+                );
+            }
+        }
+    }
+
     // Build mode clicks only if click was not on UI.
     if state.sim.build_mode_enabled() {
+        if middle_click
+            && mouse_in_map
+            && !hud_input.mouse_over_ui
+            && !state.sim.zone_paint_mode_enabled()
+            && !state.sim.floor_paint_mode_enabled()
+        {
+            let next = state.sim.block_orientation().next();
+            state.sim.set_block_orientation(next);
+        }
         if left_click
             && mouse_in_map
             && !context_menu_consumed
             && let Some(tile) = mouse_tile
         {
-            state.sim.apply_build_click(tile, false);
+            state.sim.apply_build_click(&mut state.world, tile, false);
         }
         if right_click
             && mouse_in_map
             && !context_menu_consumed
             && let Some(tile) = mouse_tile
         {
-            state.sim.apply_build_click(tile, true);
+            state.sim.apply_build_click(&mut state.world, tile, true);
         }
     }
 
@@ -282,16 +1496,16 @@ pub(crate) fn run_play_frame(
         && !state.sim.build_mode_enabled()
         && !context_menu_consumed
         && clicked_pawn.is_none()
+        && !state.chariot.pilote_a_bord
     {
         mouse_tile
     } else {
         None
     };
 
-    if let Some(tile) = click_tile
-        && let Some(player_card) = state.pawns.iter_mut().find(|p| p.key == PawnKey::Player)
-    {
-        player_card.history.push(
+    if let Some(tile) = click_tile {
+        push_player_history(
+            state,
             now_sim_s,
             crate::historique::LogCategorie::Deplacement,
             format!("Ordre de deplacement vers ({}, {}).", tile.0, tile.1),
@@ -299,12 +1513,16 @@ pub(crate) fn run_play_frame(
     }
 
     state.last_input = read_input_dir();
-    apply_control_inputs(
-        &mut state.player,
-        &state.world,
-        state.last_input,
-        click_tile,
-    );
+    if !state.chariot.pilote_a_bord {
+        apply_control_inputs(
+            &mut state.player,
+            &state.world,
+            state.last_input,
+            click_tile,
+        );
+    } else {
+        state.player.control_mode = ControlMode::Manual;
+    }
 
     // --- Fixed-step simulation ---
     let sim_factor = state.hud_ui.sim_speed.factor();
@@ -315,8 +1533,42 @@ pub(crate) fn run_play_frame(
             (*accumulator + frame_dt * sim_factor).min(FIXED_DT * MAX_SIM_STEPS_PER_FRAME as f32);
     }
     let mut sim_steps = 0usize;
+    let fork_input = if state.chariot.pilote_a_bord {
+        read_chariot_fork_input()
+    } else {
+        0.0
+    };
     while *accumulator >= FIXED_DT && sim_steps < MAX_SIM_STEPS_PER_FRAME {
         state.sim.step(FIXED_DT);
+        let drive_input = if state.chariot.pilote_a_bord {
+            state.last_input
+        } else {
+            Vec2::ZERO
+        };
+        mettre_a_jour_chariot(
+            &mut state.chariot,
+            &state.world,
+            drive_input,
+            fork_input,
+            FIXED_DT,
+        );
+        if state.chariot.pilote_a_bord {
+            state.player.pos = state.chariot.pos;
+            state.player.control_mode = ControlMode::Manual;
+            state.player.facing = state.chariot.orientation.to_character_facing();
+            state.player.facing_left = state.chariot.orientation.is_left();
+            state.player.velocity = state.chariot.velocity;
+            state.player.is_walking = state.chariot.velocity.length_squared() > 0.25;
+            if state.player.is_walking {
+                state.player.walk_cycle += FIXED_DT * WALK_CYCLE_SPEED * 0.82;
+                if state.player.walk_cycle > std::f32::consts::TAU {
+                    state.player.walk_cycle -= std::f32::consts::TAU;
+                }
+            } else {
+                state.player.walk_cycle *= 0.82;
+            }
+            state.player.anim_frame = 0;
+        }
         let sim_now_s = state.sim.clock.seconds();
         state.social_state.tick(
             FIXED_DT,
@@ -331,7 +1583,11 @@ pub(crate) fn run_play_frame(
                 pawns: &mut state.pawns,
             },
         );
-        update_player(&mut state.player, &state.world, state.last_input, FIXED_DT);
+        if !state.chariot.pilote_a_bord {
+            update_player(&mut state.player, &state.world, state.last_input, FIXED_DT);
+        } else {
+            state.player.pos = state.chariot.pos;
+        }
         update_npc_wanderer(&mut state.npc, &state.world, FIXED_DT);
         *accumulator -= FIXED_DT;
         sim_steps += 1;
@@ -351,33 +1607,70 @@ pub(crate) fn run_play_frame(
     draw_background(&state.palette, time);
     set_camera(&world_camera);
     draw_floor_layer_region(&state.world, &state.palette, visible_bounds);
+    draw_exterior_ground_ambiance_region(&state.world, &state.palette, time, visible_bounds);
     draw_sim_zone_overlay_region(&state.sim, visible_bounds);
     draw_wall_cast_shadows_region(&state.world, &state.palette, visible_bounds);
     draw_wall_layer_region(&state.world, &state.palette, visible_bounds);
+    draw_exterior_trees_region(&state.world, &state.palette, time, visible_bounds);
     draw_prop_shadows_region(&state.props, &state.palette, time, visible_bounds);
     draw_props_region(&state.props, &state.palette, time, visible_bounds);
-    draw_sim_blocks_overlay(
-        &state.sim,
-        state.debug || state.sim.build_mode_enabled(),
-        Some(visible_bounds),
+    draw_chargeur_clark(
+        &state.chargeur_clark,
+        &state.chariot,
+        state.player.pos,
+        &state.palette,
+        time,
+        state.debug,
     );
+    draw_sim_blocks_overlay(&state.sim, state.debug, Some(visible_bounds));
+    draw_build_block_preview(&state.sim, &state.world, mouse_tile);
 
-    // Draw all pawns in stable Y order, with social animation hints.
+    // Draw world actors in stable Y order (pawns + parked forklift).
+    #[derive(Copy, Clone)]
+    enum DrawEntity {
+        Player,
+        Npc,
+        SimWorker,
+        Chariot,
+    }
+
     let worker_pos = tile_center(state.sim.primary_agent_tile());
-    let mut draw_order: [(f32, PawnKey); 3] = [
-        (state.player.pos.y, PawnKey::Player),
-        (state.npc.pos.y, PawnKey::Npc),
-        (worker_pos.y, PawnKey::SimWorker),
+    let mut draw_order: Vec<(f32, DrawEntity)> = vec![
+        (state.player.pos.y, DrawEntity::Player),
+        (state.npc.pos.y, DrawEntity::Npc),
+        (worker_pos.y, DrawEntity::SimWorker),
     ];
+    if !state.chariot.pilote_a_bord {
+        draw_order.push((state.chariot.pos.y, DrawEntity::Chariot));
+    }
     draw_order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
-    for (_, key) in draw_order {
-        let hint = state.social_state.anim_hint(key);
-        let gesture = gesture_from_social(hint.gesture);
-
-        match key {
-            PawnKey::Player => {
-                if let Some(player_character) = state.lineage.get(state.player_lineage_index) {
+    for (_, entity) in draw_order {
+        match entity {
+            DrawEntity::Player => {
+                let hint = state.social_state.anim_hint(PawnKey::Player);
+                let gesture = gesture_from_social(hint.gesture);
+                if state.chariot.pilote_a_bord {
+                    let driver_character = state.lineage.get(state.player_lineage_index);
+                    draw_chariot_elevateur(
+                        &state.chariot,
+                        &state.palette,
+                        time,
+                        driver_character,
+                        state.debug,
+                    );
+                    if state.debug {
+                        draw_rectangle_lines(
+                            state.chariot.pos.x - state.chariot.half.x,
+                            state.chariot.pos.y - state.chariot.half.y,
+                            state.chariot.half.x * 2.0,
+                            state.chariot.half.y * 2.0,
+                            1.5,
+                            Color::from_rgba(250, 214, 120, 245),
+                        );
+                    }
+                } else if let Some(player_character) = state.lineage.get(state.player_lineage_index)
+                {
                     let mut facing = state.player.facing;
                     let mut facing_left = state.player.facing_left;
                     let mut is_walking = state.player.is_walking;
@@ -420,7 +1713,9 @@ pub(crate) fn run_play_frame(
                     }
                 }
             }
-            PawnKey::Npc => {
+            DrawEntity::Npc => {
+                let hint = state.social_state.anim_hint(PawnKey::Npc);
+                let gesture = gesture_from_social(hint.gesture);
                 let mut facing = state.npc.facing;
                 let mut facing_left = state.npc.facing_left;
                 let mut is_walking = state.npc.is_walking;
@@ -462,7 +1757,9 @@ pub(crate) fn run_play_frame(
                     );
                 }
             }
-            PawnKey::SimWorker => {
+            DrawEntity::SimWorker => {
+                let hint = state.social_state.anim_hint(PawnKey::SimWorker);
+                let gesture = gesture_from_social(hint.gesture);
                 let mut facing = CharacterFacing::Front;
                 let mut facing_left = false;
                 if hint.force_face_partner
@@ -489,6 +1786,19 @@ pub(crate) fn run_play_frame(
                     },
                 );
             }
+            DrawEntity::Chariot => {
+                draw_chariot_elevateur(&state.chariot, &state.palette, time, None, state.debug);
+                if state.debug {
+                    draw_rectangle_lines(
+                        state.chariot.pos.x - state.chariot.half.x,
+                        state.chariot.pos.y - state.chariot.half.y,
+                        state.chariot.half.x * 2.0,
+                        state.chariot.half.y * 2.0,
+                        1.1,
+                        Color::from_rgba(250, 214, 120, 190),
+                    );
+                }
+            }
         }
     }
 
@@ -512,12 +1822,14 @@ pub(crate) fn run_play_frame(
         );
     }
 
-    // Sim agent overlay is helpful in debug/build mode (otherwise we already have the worker pawn).
-    if state.debug || state.sim.build_mode_enabled() {
-        draw_sim_agent_overlay(&state.sim, state.debug || state.sim.build_mode_enabled());
+    // Sim agent overlay is kept debug-only to avoid clutter during construction.
+    if state.debug {
+        draw_sim_agent_overlay(&state.sim, true);
     }
     draw_lighting_region(&state.props, &state.palette, time, visible_bounds);
     begin_ui_pass();
+
+    draw_clark_status_panel(state);
 
     draw_rectangle_lines(
         map_view_rect.x + 0.5,
@@ -565,8 +1877,19 @@ pub(crate) fn run_play_frame(
             .kind
             .map(|kind| kind.ui_label())
             .unwrap_or("inactif");
+        let chariot_tile = tile_from_world_clamped(&state.world, state.chariot.pos);
+        let chariot_charge = state
+            .chariot
+            .caisse_chargee
+            .map(prop_kind_label)
+            .unwrap_or("aucune");
+        let chariot_speed = state.chariot.velocity.length();
+        let chariot_v_long = state.chariot.vitesse_longitudinale;
+        let chariot_cap_deg = state.chariot.heading_rad.to_degrees();
+        let chariot_braquage = state.chariot.angle_braquage * 100.0;
+        let chariot_fourche = state.chariot.fourche_hauteur;
         let info = format!(
-            "Mode jeu | Echap: menu | F10: editeur | F11: plein ecran\nF1: debogage | F2: inspecteur | F3: regenerer les visuels\nBarre basse: equipe, construction, caracteristiques, historique, mini-carte\nCamera: ZQSD/WASD deplacement | molette zoom | C recentrer\nCarte: clic gauche = ordre de deplacement | fleches = controle manuel\nJoueur monde=({:.1}, {:.1}) tuile=({}, {}) mode={} marche={} image={} orientation={} regard_gauche={} cycle={:.2}\nEntree joueur=({:.2}, {:.2}) camera=({:.1}, {:.1}) zoom={:.2} ips={}\nTrajet joueur: noeuds={} prochain_wp={} cible={}\nPNJ monde=({:.1}, {:.1}) marche={} attente={:.2}s social={} trajet={} cible={}\nMasque mur tuile={:04b}\nMutation={}/1000 | visuel={}\n{}",
+            "Mode jeu | Echap: pause | F10: editeur | F11: plein ecran\nF1: debogage | F2: inspecteur | F3: regenerer les visuels\nBarre basse: equipe, construction, caracteristiques, historique, mini-carte\nCamera: ZQSD/WASD deplacement | molette zoom | C recentrer\nBuild: F7 mode | B blocs | N zones | V peinture zones | K sols\nCarte: clic gauche = ordre de deplacement | fleches = controle manuel\nClark: E interaction/monter | R descendre | F caisses | A/E mat bas/haut\nJoueur monde=({:.1}, {:.1}) tuile=({}, {}) mode={} marche={} image={} orientation={} regard_gauche={} cycle={:.2}\nEntree joueur=({:.2}, {:.2}) camera=({:.1}, {:.1}) zoom={:.2} ips={}\nTrajet joueur: noeuds={} prochain_wp={} cible={}\nClark monde=({:.1}, {:.1}) tuile=({}, {}) conduite={} orientation={} charge={} vitesse={:.1} v_long={:.1} cap={:.1}deg braquage={:.0}% fourche={:.2}\nPNJ monde=({:.1}, {:.1}) marche={} attente={:.2}s social={} trajet={} cible={}\nMasque mur tuile={:04b}\nMutation={}/1000 | visuel={}\n{}",
             state.player.pos.x,
             state.player.pos.y,
             tx,
@@ -586,6 +1909,18 @@ pub(crate) fn run_play_frame(
             state.player.auto.path_world.len(),
             state.player.auto.next_waypoint,
             target_tile,
+            state.chariot.pos.x,
+            state.chariot.pos.y,
+            chariot_tile.0,
+            chariot_tile.1,
+            state.chariot.pilote_a_bord,
+            state.chariot.orientation.label(),
+            chariot_charge,
+            chariot_speed,
+            chariot_v_long,
+            chariot_cap_deg,
+            chariot_braquage,
+            chariot_fourche,
             state.npc.pos.x,
             state.npc.pos.y,
             state.npc.is_walking,
@@ -625,14 +1960,14 @@ pub(crate) fn run_play_frame(
         );
         draw_overlay_panel(panel);
         draw_overlay_line(
-            "Mode jeu | Echap: menu | F10: editeur | F11: plein ecran",
+            "Mode jeu | Echap: pause | F10: editeur | F11: plein ecran",
             panel.x + 10.0,
             panel.y + 24.0,
             21.0,
             Color::from_rgba(224, 240, 250, 255),
         );
         draw_overlay_line(
-            "Commandes: ZQSD/WASD deplacer camera, molette zoom, clic carte pour deplacer, mini-carte pour recadrer",
+            "Commandes: ZQSD/WASD camera, molette zoom, clic carte deplacement, E interaction/monter, R descendre, F charger/decharger caisse, A/E mât",
             panel.x + 10.0,
             panel.y + 44.0,
             16.0,
@@ -945,8 +2280,10 @@ pub(crate) fn run_editor_frame(
     set_camera(&world_camera);
 
     draw_floor_layer_region(&map.world, palette, visible_bounds);
+    draw_exterior_ground_ambiance_region(&map.world, palette, time, visible_bounds);
     draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
     draw_wall_layer_region(&map.world, palette, visible_bounds);
+    draw_exterior_trees_region(&map.world, palette, time, visible_bounds);
     draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
     draw_props_region(&map.props, palette, time, visible_bounds);
     draw_lighting_region(&map.props, palette, time, visible_bounds);
@@ -1247,6 +2584,16 @@ pub(crate) fn run_editor_frame(
         (EditorBrush::Plant, "T Pot de fleur"),
         (EditorBrush::Bench, "Y Banc"),
         (EditorBrush::Crystal, "U Cristal"),
+        (EditorBrush::BoxCartonVide, "Box carton vide"),
+        (EditorBrush::BoxSacBleu, "Box sac bleu"),
+        (EditorBrush::BoxSacRouge, "Box sac rouge"),
+        (EditorBrush::BoxSacVert, "Box sac vert"),
+        (EditorBrush::PaletteLogistique, "Palette logistique"),
+        (EditorBrush::BureauPcOn, "Bureau PC ON"),
+        (EditorBrush::BureauPcOff, "Bureau PC OFF"),
+        (EditorBrush::CaisseAilBrut, "Caisse d'ail brut"),
+        (EditorBrush::CaisseAilCasse, "Caisse d'ail cassé"),
+        (EditorBrush::Lavabo, "Lavabo"),
         (EditorBrush::EraseProp, "X Effacer"),
     ];
 
@@ -1453,4 +2800,39 @@ pub(crate) fn run_editor_frame(
     );
 
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_priority_is_pause_then_build_menu_then_build_mode_then_pause_open() {
+        assert_eq!(
+            resolve_escape_intent(true, true, true),
+            EscapeIntent::ClosePause
+        );
+        assert_eq!(
+            resolve_escape_intent(false, true, true),
+            EscapeIntent::CloseBuildMenu
+        );
+        assert_eq!(
+            resolve_escape_intent(false, false, true),
+            EscapeIntent::ExitBuildMode
+        );
+        assert_eq!(
+            resolve_escape_intent(false, false, false),
+            EscapeIntent::OpenPause
+        );
+    }
+
+    #[test]
+    fn escape_sequence_matches_expected_user_flow() {
+        let first = resolve_escape_intent(false, true, true);
+        assert_eq!(first, EscapeIntent::CloseBuildMenu);
+        let second = resolve_escape_intent(false, false, true);
+        assert_eq!(second, EscapeIntent::ExitBuildMode);
+        let third = resolve_escape_intent(false, false, false);
+        assert_eq!(third, EscapeIntent::OpenPause);
+    }
 }

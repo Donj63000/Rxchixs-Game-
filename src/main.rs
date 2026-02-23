@@ -1,11 +1,14 @@
 mod character;
+mod chariot_elevateur;
 mod deplacement;
 mod edition;
+mod four_texture;
 mod historique;
 mod interactions;
 mod modes;
 mod render_safety;
 mod rendu;
+mod sauvegarde;
 mod sim;
 mod social;
 mod ui_hud;
@@ -16,6 +19,7 @@ use character::{
     CharacterCatalog, CharacterFacing, CharacterGesture, CharacterRecord, CharacterRenderParams,
     build_lineage_preview, compact_visual_summary, draw_character, inspector_lines,
 };
+use chariot_elevateur::*;
 use deplacement::*;
 use edition::*;
 use macroquad::prelude::*;
@@ -26,6 +30,7 @@ use ron::{
     de::from_str as ron_from_str,
     ser::{PrettyConfig, to_string_pretty as ron_to_string_pretty},
 };
+use sauvegarde::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet, VecDeque};
@@ -36,8 +41,8 @@ use ui_pawns::*;
 use utilitaires::*;
 
 const TILE_SIZE: f32 = 32.0;
-const MAP_W: i32 = 96;
-const MAP_H: i32 = 64;
+const MAP_W: i32 = 168;
+const MAP_H: i32 = 108;
 const WINDOW_W: i32 = 1600;
 const WINDOW_H: i32 = 900;
 const FIXED_DT: f32 = 1.0 / 60.0;
@@ -50,6 +55,8 @@ const NPC_WANDER_SPEED: f32 = 92.0;
 const NPC_IDLE_MIN: f32 = 0.7;
 const NPC_IDLE_MAX: f32 = 2.0;
 const MAP_FILE_PATH: &str = "maps/main_map.ron";
+const SAVE_DIR_PATH: &str = "saves";
+const SAVE_SCHEMA_VERSION: u32 = 1;
 const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
 const FLOOR_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol1.png", "Textures/sol1.png"];
 const FLOOR_METAL_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol2.png", "Textures/sol2.png"];
@@ -57,8 +64,33 @@ const POT_DE_FLEUR_TEXTURE_CANDIDATES: [&str; 2] =
     ["textures/pot-fleur.png", "Textures/pot-fleur.png"];
 const INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES: [&str; 2] =
     ["textures/caisseboisail1.png", "Textures/caisseboisail1.png"];
+const BROKEN_GARLIC_CRATE_TEXTURE_CANDIDATES: [&str; 4] = [
+    "textures/caisseail1.png",
+    "Textures/caisseail1.png",
+    "textures/caisseailail1.png",
+    "Textures/caisseailail1.png",
+];
+const BOX_CARTON_VIDE_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/boxcartonvide.png", "Textures/boxcartonvide.png"];
+const BOX_SAC_BLEU_TEXTURE_CANDIDATES: [&str; 4] = [
+    "textures/boxsacbleu1.png",
+    "Textures/boxsacbleu1.png",
+    "textures/boxsableu1.png",
+    "Textures/boxsableu1.png",
+];
+const BOX_SAC_ROUGE_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/boxsacrouge1.png", "Textures/boxsacrouge1.png"];
+const BOX_SAC_VERT_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/boxsacvert1.png", "Textures/boxsacvert1.png"];
+const PALETTE_LOGISTIQUE_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/palette1.png", "Textures/palette1.png"];
+const BUREAU_PC_ON_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/bureaupc1.png", "Textures/bureaupc1.png"];
+const BUREAU_PC_OFF_TEXTURE_CANDIDATES: [&str; 2] =
+    ["textures/bureaupc2.png", "Textures/bureaupc2.png"];
+const LAVABO_TEXTURE_CANDIDATES: [&str; 2] = ["textures/lavabo1.png", "Textures/lavabo1.png"];
 const MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES: [&str; 2] = ["fond1.png", "Fond1.png"];
-const MAP_FILE_VERSION: u32 = 3;
+const MAP_FILE_VERSION: u32 = 4;
 const EDITOR_UNDO_LIMIT: usize = 160;
 const PLAY_CAMERA_MARGIN: f32 = 10.0;
 const PLAY_CAMERA_PAN_SPEED: f32 = 880.0;
@@ -199,8 +231,6 @@ struct Palette {
     floor_b: Color,
     floor_c: Color,
     floor_edge: Color,
-    floor_panel: Color,
-    floor_rivet: Color,
     floor_grime: Color,
     wall_top: Color,
     wall_mid: Color,
@@ -228,8 +258,6 @@ impl Palette {
             floor_b: rgba(62, 72, 83, 255),
             floor_c: rgba(49, 60, 69, 255),
             floor_edge: rgba(28, 34, 42, 180),
-            floor_panel: rgba(83, 98, 112, 115),
-            floor_rivet: rgba(116, 130, 143, 170),
             floor_grime: rgba(8, 10, 14, 255),
             wall_top: rgba(126, 142, 154, 255),
             wall_mid: rgba(88, 102, 116, 255),
@@ -249,7 +277,7 @@ impl Palette {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum PropKind {
     Crate,
     Pipe,
@@ -258,6 +286,16 @@ enum PropKind {
     Plant,
     Bench,
     Crystal,
+    BoxCartonVide,
+    BoxSacBleu,
+    BoxSacRouge,
+    BoxSacVert,
+    PaletteLogistique,
+    BureauPcOn,
+    BureauPcOff,
+    CaisseAilBrut,
+    CaisseAilCasse,
+    Lavabo,
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
@@ -322,6 +360,42 @@ async fn load_pot_de_fleur_texture() -> Option<Texture2D> {
 
 async fn load_initial_raw_material_texture() -> Option<Texture2D> {
     load_first_available_texture(&INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES).await
+}
+
+async fn load_broken_garlic_crate_texture() -> Option<Texture2D> {
+    load_first_available_texture(&BROKEN_GARLIC_CRATE_TEXTURE_CANDIDATES).await
+}
+
+async fn load_box_carton_vide_texture() -> Option<Texture2D> {
+    load_first_available_texture(&BOX_CARTON_VIDE_TEXTURE_CANDIDATES).await
+}
+
+async fn load_box_sac_bleu_texture() -> Option<Texture2D> {
+    load_first_available_texture(&BOX_SAC_BLEU_TEXTURE_CANDIDATES).await
+}
+
+async fn load_box_sac_rouge_texture() -> Option<Texture2D> {
+    load_first_available_texture(&BOX_SAC_ROUGE_TEXTURE_CANDIDATES).await
+}
+
+async fn load_box_sac_vert_texture() -> Option<Texture2D> {
+    load_first_available_texture(&BOX_SAC_VERT_TEXTURE_CANDIDATES).await
+}
+
+async fn load_palette_logistique_texture() -> Option<Texture2D> {
+    load_first_available_texture(&PALETTE_LOGISTIQUE_TEXTURE_CANDIDATES).await
+}
+
+async fn load_bureau_pc_on_texture() -> Option<Texture2D> {
+    load_first_available_texture(&BUREAU_PC_ON_TEXTURE_CANDIDATES).await
+}
+
+async fn load_bureau_pc_off_texture() -> Option<Texture2D> {
+    load_first_available_texture(&BUREAU_PC_OFF_TEXTURE_CANDIDATES).await
+}
+
+async fn load_lavabo_texture() -> Option<Texture2D> {
+    load_first_available_texture(&LAVABO_TEXTURE_CANDIDATES).await
 }
 
 async fn load_main_menu_background_texture() -> Option<Texture2D> {
@@ -406,6 +480,8 @@ impl Player {
 struct GameState {
     world: World,
     player: Player,
+    chariot: ChariotElevateur,
+    chargeur_clark: ChargeurClark,
     npc: NpcWanderer,
     camera_center: Vec2,
     camera_zoom: f32,
@@ -422,9 +498,27 @@ struct GameState {
     social_state: social::SocialState,
     pawn_ui: PawnsUiState,
     hud_ui: HudUiState,
+    pause_menu_open: bool,
+    pause_panel: PausePanel,
+    pause_status_text: Option<String>,
+    pause_status_timer: f32,
+    pause_save_name: String,
+    pause_sauvegardes: Vec<SauvegardeInfo>,
+    pause_sauvegardes_warning: Option<String>,
+    pause_sauvegardes_offset: usize,
+    pause_selected_sauvegarde: Option<usize>,
     show_character_inspector: bool,
     debug: bool,
     last_input: Vec2,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum PausePanel {
+    Aucun,
+    Aide,
+    Options,
+    Sauvegarder,
+    Charger,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -432,6 +526,99 @@ enum AppMode {
     MainMenu,
     Playing,
     Editor,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum MainMenuView {
+    Principal,
+    Charger,
+    Options,
+}
+
+struct MainMenuState {
+    view: MainMenuView,
+    saves: Vec<SauvegardeInfo>,
+    saves_warning: Option<String>,
+    selected_save: Option<usize>,
+    saves_offset: usize,
+    status_text: Option<String>,
+    status_timer: f32,
+    show_fps: bool,
+    ambiance_motion: bool,
+}
+
+impl MainMenuState {
+    fn new() -> Self {
+        Self {
+            view: MainMenuView::Principal,
+            saves: Vec::new(),
+            saves_warning: None,
+            selected_save: None,
+            saves_offset: 0,
+            status_text: None,
+            status_timer: 0.0,
+            show_fps: false,
+            ambiance_motion: true,
+        }
+    }
+}
+
+enum MainMenuAction {
+    None,
+    StartNewGame,
+    StartFromSave(String),
+    OpenEditor,
+    Quit,
+}
+
+fn set_main_menu_status(menu: &mut MainMenuState, msg: impl Into<String>) {
+    menu.status_text = Some(msg.into());
+    menu.status_timer = 4.0;
+}
+
+fn tick_main_menu_status(menu: &mut MainMenuState, frame_dt: f32) {
+    if menu.status_timer <= 0.0 {
+        return;
+    }
+    menu.status_timer = (menu.status_timer - frame_dt).max(0.0);
+    if menu.status_timer <= f32::EPSILON {
+        menu.status_text = None;
+    }
+}
+
+fn refresh_main_menu_saves(menu: &mut MainMenuState) {
+    match lister_sauvegardes() {
+        Ok(listing) => {
+            menu.saves = listing.slots;
+            menu.saves_warning = if listing.warnings.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{} sauvegarde(s) ignoree(s): {}",
+                    listing.warnings.len(),
+                    listing.warnings[0]
+                ))
+            };
+            if menu.saves.is_empty() {
+                menu.selected_save = None;
+                menu.saves_offset = 0;
+            } else {
+                let max_index = menu.saves.len() - 1;
+                if menu.selected_save.is_none() {
+                    menu.selected_save = Some(0);
+                } else if let Some(selected) = menu.selected_save {
+                    menu.selected_save = Some(selected.min(max_index));
+                }
+                menu.saves_offset = menu.saves_offset.min(max_index);
+            }
+        }
+        Err(err) => {
+            menu.saves.clear();
+            menu.selected_save = None;
+            menu.saves_offset = 0;
+            menu.saves_warning = Some(err);
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -448,9 +635,13 @@ impl MapAsset {
     fn new_default() -> Self {
         let world = generate_starter_factory_world(MAP_W, MAP_H);
         let props = default_props(&world);
-        let player_spawn = nearest_walkable_tile(&world, (8, MAP_H / 2)).unwrap_or((2, 2));
-        let npc_spawn = nearest_walkable_tile(&world, (MAP_W - 10, MAP_H / 2))
-            .unwrap_or((MAP_W - 4, MAP_H / 2));
+        let (fx0, fx1, fy0, fy1) = starter_factory_bounds(MAP_W, MAP_H);
+        let span_y = (fy1 - fy0).max(6);
+        let road_y = clamp_i32(fy0 + span_y / 2, fy0 + 2, fy1 - 2);
+        let ship_y = clamp_i32(fy0 + (span_y * 3) / 4, fy0 + 2, fy1 - 2);
+        let player_spawn = nearest_walkable_tile(&world, (fx0 - 11, road_y)).unwrap_or((2, 2));
+        let npc_spawn =
+            nearest_walkable_tile(&world, (fx1 + 10, ship_y + 2)).unwrap_or((MAP_W - 4, MAP_H / 2));
 
         Self {
             version: MAP_FILE_VERSION,
@@ -481,6 +672,16 @@ enum EditorBrush {
     Plant,
     Bench,
     Crystal,
+    BoxCartonVide,
+    BoxSacBleu,
+    BoxSacRouge,
+    BoxSacVert,
+    PaletteLogistique,
+    BureauPcOn,
+    BureauPcOff,
+    CaisseAilBrut,
+    CaisseAilCasse,
+    Lavabo,
     EraseProp,
 }
 
@@ -550,6 +751,15 @@ async fn main() {
     let floor_metal_texture = load_floor_metal_tile_texture().await;
     let pot_de_fleur_texture = load_pot_de_fleur_texture().await;
     let initial_raw_material_texture = load_initial_raw_material_texture().await;
+    let broken_garlic_crate_texture = load_broken_garlic_crate_texture().await;
+    let box_carton_vide_texture = load_box_carton_vide_texture().await;
+    let box_sac_bleu_texture = load_box_sac_bleu_texture().await;
+    let box_sac_rouge_texture = load_box_sac_rouge_texture().await;
+    let box_sac_vert_texture = load_box_sac_vert_texture().await;
+    let palette_logistique_texture = load_palette_logistique_texture().await;
+    let bureau_pc_on_texture = load_bureau_pc_on_texture().await;
+    let bureau_pc_off_texture = load_bureau_pc_off_texture().await;
+    let lavabo_texture = load_lavabo_texture().await;
     let main_menu_background_texture = load_main_menu_background_texture().await;
     if floor_texture.is_some() {
         eprintln!("Texture sol chargee: textures/sol1.png");
@@ -571,6 +781,33 @@ async fn main() {
     } else {
         eprintln!("Texture matiere premiere initiale introuvable, fallback UI actif.");
     }
+    if broken_garlic_crate_texture.is_some() {
+        eprintln!("Texture caisse d'ail cassé chargee: textures/caisseail1.png");
+    }
+    if box_carton_vide_texture.is_some() {
+        eprintln!("Texture box carton vide chargee: textures/boxcartonvide.png");
+    }
+    if box_sac_bleu_texture.is_some() {
+        eprintln!("Texture box sac bleu chargee: textures/boxsacbleu1.png");
+    }
+    if box_sac_rouge_texture.is_some() {
+        eprintln!("Texture box sac rouge chargee: textures/boxsacrouge1.png");
+    }
+    if box_sac_vert_texture.is_some() {
+        eprintln!("Texture box sac vert chargee: textures/boxsacvert1.png");
+    }
+    if palette_logistique_texture.is_some() {
+        eprintln!("Texture palette logistique chargee: textures/palette1.png");
+    }
+    if bureau_pc_on_texture.is_some() {
+        eprintln!("Texture bureau PC ON chargee: textures/bureaupc1.png");
+    }
+    if bureau_pc_off_texture.is_some() {
+        eprintln!("Texture bureau PC OFF chargee: textures/bureaupc2.png");
+    }
+    if lavabo_texture.is_some() {
+        eprintln!("Texture lavabo chargee: textures/lavabo1.png");
+    }
     if main_menu_background_texture.is_some() {
         eprintln!("Fond menu charge: fond1.png");
     } else {
@@ -580,6 +817,15 @@ async fn main() {
     set_pot_de_fleur_texture(pot_de_fleur_texture);
     set_storage_raw_texture(initial_raw_material_texture.clone());
     set_initial_raw_material_texture(initial_raw_material_texture);
+    set_broken_garlic_crate_texture(broken_garlic_crate_texture);
+    set_box_carton_vide_texture(box_carton_vide_texture);
+    set_box_sac_bleu_texture(box_sac_bleu_texture);
+    set_box_sac_rouge_texture(box_sac_rouge_texture);
+    set_box_sac_vert_texture(box_sac_vert_texture);
+    set_palette_logistique_texture(palette_logistique_texture);
+    set_bureau_pc_on_texture(bureau_pc_on_texture);
+    set_bureau_pc_off_texture(bureau_pc_off_texture);
+    set_lavabo_texture(lavabo_texture);
     set_main_menu_background_texture(main_menu_background_texture);
 
     let mut map = match load_map_asset(MAP_FILE_PATH) {
@@ -601,6 +847,8 @@ async fn main() {
     let mut lineage_seed = 0x51A7_2026_D00D_F00D;
     let mut game_state = build_game_state_from_map(&map, &character_catalog, lineage_seed);
     let mut editor_state = EditorState::new();
+    let mut main_menu_state = MainMenuState::new();
+    refresh_main_menu_saves(&mut main_menu_state);
     let mut mode = AppMode::MainMenu;
     let mut accumulator = 0.0;
     let mut is_fullscreen_mode = false;
@@ -619,29 +867,56 @@ async fn main() {
 
         let frame_dt = get_frame_time().min(0.25);
         let time = get_time() as f32;
+        let mut should_quit = false;
 
         mode = match mode {
             AppMode::MainMenu => {
-                if let Some(next_mode) = run_main_menu_frame(&map, &palette, time) {
-                    match next_mode {
-                        AppMode::Playing => {
-                            sanitize_map_asset(&mut map);
-                            lineage_seed = advance_seed(lineage_seed);
-                            game_state =
-                                build_game_state_from_map(&map, &character_catalog, lineage_seed);
-                            accumulator = 0.0;
-                            AppMode::Playing
-                        }
-                        AppMode::Editor => AppMode::Editor,
-                        AppMode::MainMenu => AppMode::MainMenu,
+                match run_main_menu_frame(&map, &palette, time, frame_dt, &mut main_menu_state) {
+                    MainMenuAction::None => AppMode::MainMenu,
+                    MainMenuAction::StartNewGame => {
+                        map = MapAsset::new_default();
+                        sanitize_map_asset(&mut map);
+                        lineage_seed = advance_seed(lineage_seed);
+                        game_state =
+                            build_game_state_from_map(&map, &character_catalog, lineage_seed);
+                        accumulator = 0.0;
+                        main_menu_state.view = MainMenuView::Principal;
+                        AppMode::Playing
                     }
-                } else {
-                    AppMode::MainMenu
+                    MainMenuAction::OpenEditor => AppMode::Editor,
+                    MainMenuAction::Quit => {
+                        should_quit = true;
+                        AppMode::MainMenu
+                    }
+                    MainMenuAction::StartFromSave(file_name) => {
+                        match charger_sauvegarde(&file_name) {
+                            Ok(mut loaded_map) => {
+                                sanitize_map_asset(&mut loaded_map);
+                                map = loaded_map;
+                                lineage_seed = advance_seed(lineage_seed);
+                                game_state = build_game_state_from_map(
+                                    &map,
+                                    &character_catalog,
+                                    lineage_seed,
+                                );
+                                accumulator = 0.0;
+                                main_menu_state.view = MainMenuView::Principal;
+                                AppMode::Playing
+                            }
+                            Err(err) => {
+                                set_main_menu_status(
+                                    &mut main_menu_state,
+                                    format!("Chargement echoue: {err}"),
+                                );
+                                refresh_main_menu_saves(&mut main_menu_state);
+                                AppMode::MainMenu
+                            }
+                        }
+                    }
                 }
             }
             AppMode::Playing => match run_play_frame(&mut game_state, frame_dt, &mut accumulator) {
                 PlayAction::None => AppMode::Playing,
-                PlayAction::BackToMenu => AppMode::MainMenu,
                 PlayAction::OpenEditor => {
                     map.world = game_state.world.clone();
                     map.props = game_state.props.clone();
@@ -655,7 +930,11 @@ async fn main() {
             AppMode::Editor => {
                 match run_editor_frame(&mut editor_state, &mut map, &palette, time) {
                     EditorAction::None => AppMode::Editor,
-                    EditorAction::BackToMenu => AppMode::MainMenu,
+                    EditorAction::BackToMenu => {
+                        refresh_main_menu_saves(&mut main_menu_state);
+                        main_menu_state.view = MainMenuView::Principal;
+                        AppMode::MainMenu
+                    }
                     EditorAction::StartPlay => {
                         lineage_seed = advance_seed(lineage_seed);
                         game_state =
@@ -666,6 +945,10 @@ async fn main() {
                 }
             }
         };
+
+        if should_quit {
+            break;
+        }
 
         if is_key_pressed(KeyCode::F12) {
             sanitize_map_asset(&mut map);
@@ -705,6 +988,15 @@ mod tests {
         assert_eq!(INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES.len(), 2);
         assert!(INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES.contains(&"textures/caisseboisail1.png"));
         assert!(INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES.contains(&"Textures/caisseboisail1.png"));
+        assert!(BROKEN_GARLIC_CRATE_TEXTURE_CANDIDATES.contains(&"textures/caisseail1.png"));
+        assert!(BOX_CARTON_VIDE_TEXTURE_CANDIDATES.contains(&"textures/boxcartonvide.png"));
+        assert!(BOX_SAC_BLEU_TEXTURE_CANDIDATES.contains(&"textures/boxsacbleu1.png"));
+        assert!(BOX_SAC_ROUGE_TEXTURE_CANDIDATES.contains(&"textures/boxsacrouge1.png"));
+        assert!(BOX_SAC_VERT_TEXTURE_CANDIDATES.contains(&"textures/boxsacvert1.png"));
+        assert!(PALETTE_LOGISTIQUE_TEXTURE_CANDIDATES.contains(&"textures/palette1.png"));
+        assert!(BUREAU_PC_ON_TEXTURE_CANDIDATES.contains(&"textures/bureaupc1.png"));
+        assert!(BUREAU_PC_OFF_TEXTURE_CANDIDATES.contains(&"textures/bureaupc2.png"));
+        assert!(LAVABO_TEXTURE_CANDIDATES.contains(&"textures/lavabo1.png"));
         assert_eq!(MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES.len(), 2);
         assert!(MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES.contains(&"fond1.png"));
         assert!(MAIN_MENU_BACKGROUND_TEXTURE_CANDIDATES.contains(&"Fond1.png"));
@@ -714,6 +1006,27 @@ mod tests {
     fn plant_is_exposed_as_pot_de_fleur_in_editor_labels() {
         assert_eq!(prop_kind_label(PropKind::Plant), "pot de fleur");
         assert_eq!(editor_brush_label(EditorBrush::Plant), "Pot de fleur");
+    }
+
+    #[test]
+    fn logistic_props_use_expected_editor_labels() {
+        assert_eq!(prop_kind_label(PropKind::BureauPcOn), "bureau PC ON");
+        assert_eq!(prop_kind_label(PropKind::BureauPcOff), "bureau PC OFF");
+        assert_eq!(prop_kind_label(PropKind::Lavabo), "lavabo");
+        assert_eq!(
+            prop_kind_label(PropKind::CaisseAilCasse),
+            "caisse d'ail cassé"
+        );
+        assert_eq!(
+            editor_brush_label(EditorBrush::CaisseAilCasse),
+            "Caisse d'ail cassé"
+        );
+        assert_eq!(editor_brush_label(EditorBrush::BureauPcOn), "Bureau PC ON");
+        assert_eq!(
+            editor_brush_label(EditorBrush::BureauPcOff),
+            "Bureau PC OFF"
+        );
+        assert_eq!(editor_brush_label(EditorBrush::Lavabo), "Lavabo");
     }
 
     #[test]
@@ -831,6 +1144,19 @@ mod tests {
         }
 
         assert!(player.pos.distance(before) > TILE_SIZE);
+    }
+
+    #[test]
+    fn game_state_initializes_forklift_on_walkable_tile() {
+        let map = MapAsset::new_default();
+        let catalog = CharacterCatalog::load_default().expect("default catalog should parse");
+        let state = build_game_state_from_map(&map, &catalog, 0xABCD_1234_5678_90EF);
+
+        let tile = tile_from_world_clamped(&state.world, state.chariot.pos);
+        assert!(state.world.in_bounds(tile.0, tile.1));
+        assert!(!state.world.is_solid(tile.0, tile.1));
+        assert!(!state.chariot.pilote_a_bord);
+        assert!(state.chariot.caisse_chargee.is_none());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use super::*;
-use crate::sim::{BlockKind, ZoneKind};
+use crate::sim::{BlockKind, BuildFloorKind, ZoneKind};
 use std::cell::RefCell;
 
 thread_local! {
@@ -16,15 +16,12 @@ pub(crate) fn set_initial_raw_material_texture(texture: Option<Texture2D>) {
     });
 }
 
-fn initial_raw_material_texture() -> Option<Texture2D> {
-    INITIAL_RAW_MATERIAL_TEXTURE.with(|slot| slot.borrow().clone())
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildToolAction {
     ToggleBuildMode,
     ToggleZoneOverlay,
     ToggleZonePaint,
+    ToggleSalesManager,
     CancelMoveSource,
     SaveLayout,
 }
@@ -33,6 +30,7 @@ pub enum BuildToolAction {
 pub enum BuildMenuSelection {
     Block(BlockKind),
     Zone(ZoneKind),
+    Floor(BuildFloorKind),
     Tool(BuildToolAction),
 }
 
@@ -44,67 +42,154 @@ struct BuildMenuEntry {
     hint: &'static str,
 }
 
-const BUILD_MENU_BLOCKS: [BuildMenuEntry; 5] = [
+const BUILD_MENU_BLOCKS: [BuildMenuEntry; 14] = [
     BuildMenuEntry {
-        selection: BuildMenuSelection::Block(BlockKind::Storage),
-        label: "Stockage",
-        description: "Depot d'entree pour les matieres premieres.",
+        selection: BuildMenuSelection::Block(BlockKind::InputHopper),
+        label: "Entree ligne",
+        description: "Tremie 3x8 avec tapis stockeur bleu pour alimenter la ligne.",
+        hint: "Ligne",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::Conveyor),
+        label: "Convoyeur",
+        description: "Module 1x1 orientable pour transferer le produit.",
+        hint: "Ligne",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::FluidityTank),
+        label: "Bac fluidite",
+        description: "Bac 5x5 brasse a l'eau pour laver le produit.",
+        hint: "Lavage",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::Cutter),
+        label: "Coupeuse",
+        description: "Bloc inox avec lames circulaires de coupe fine.",
+        hint: "Coupe",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::DistributorBelt),
+        label: "Tapis repartiteur",
+        description: "Bras 7x1 oscillant pour repartition avant le four.",
+        hint: "Four",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::DryerOven),
+        label: "Four deshydratation",
+        description: "Unite 10x20 avec tunnel thermique et tapis traversant.",
+        hint: "Four",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::OvenExitConveyor),
+        label: "Tapis sortie four",
+        description: "Recuperation 7x1 en sortie de four vers broyage.",
         hint: "Flux",
     },
     BuildMenuEntry {
-        selection: BuildMenuSelection::Block(BlockKind::MachineA),
-        label: "Machine A",
-        description: "Transforme la matiere en encours.",
-        hint: "Production",
+        selection: BuildMenuSelection::Block(BlockKind::Flaker),
+        label: "Floconneuse",
+        description: "Cylindre de concassage des lanieres deshydratees.",
+        hint: "Floc",
     },
     BuildMenuEntry {
-        selection: BuildMenuSelection::Block(BlockKind::MachineB),
-        label: "Machine B",
-        description: "Transforme les encours en produits finis.",
-        hint: "Production",
+        selection: BuildMenuSelection::Block(BlockKind::SuctionPipe),
+        label: "Tuyau aspiration",
+        description: "Reseau d'aspiration modulaire adaptatif vers Sortex.",
+        hint: "Pipe",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::Sortex),
+        label: "Sortex",
+        description: "Tri optique qui separe en flux bleu et rouge.",
+        hint: "Tri",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::BlueBagChute),
+        label: "Descente sac bleu",
+        description: "Remplissage auto des sacs bleus (bon produit).",
+        hint: "Sortie",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Block(BlockKind::RedBagChute),
+        label: "Descente sac rouge",
+        description: "Remplissage auto des sacs rouges (rejets).",
+        hint: "Sortie",
     },
     BuildMenuEntry {
         selection: BuildMenuSelection::Block(BlockKind::Buffer),
-        label: "Tampon",
-        description: "Absorbe les variations de cadence entre machines.",
-        hint: "Stabilite",
+        label: "Rack palettes",
+        description: "Rack vertical, niveaux RDC + N1..N5 pour palettes.",
+        hint: "Stock",
     },
     BuildMenuEntry {
         selection: BuildMenuSelection::Block(BlockKind::Seller),
-        label: "Vente",
-        description: "Sortie produit vers le client et encaissement.",
-        hint: "Revenus",
+        label: "Bureau vente",
+        description: "Poste commercial requis dans la zone vente.",
+        hint: "Vente",
     },
 ];
 
 const BUILD_MENU_ZONES: [BuildMenuEntry; 4] = [
     BuildMenuEntry {
         selection: BuildMenuSelection::Zone(ZoneKind::Receiving),
-        label: "Reception",
-        description: "Zone d'entree pour la logistique amont.",
+        label: "Zone stockage",
+        description: "Zone bleue de stockage (selection en rectangle).",
         hint: "Zone",
     },
     BuildMenuEntry {
         selection: BuildMenuSelection::Zone(ZoneKind::Processing),
-        label: "Production",
-        description: "Zone de transformation a haut debit.",
+        label: "Zone de cassage",
+        description: "Zone de production dediee au cassage.",
         hint: "Zone",
     },
     BuildMenuEntry {
         selection: BuildMenuSelection::Zone(ZoneKind::Shipping),
-        label: "Expedition",
-        description: "Zone de sortie et de preparation des ventes.",
+        label: "Zone de dehy/finition",
+        description: "Zone de production dediee a la dehy/finition.",
         hint: "Zone",
     },
     BuildMenuEntry {
         selection: BuildMenuSelection::Zone(ZoneKind::Support),
-        label: "Support",
-        description: "Zone utilitaire pour maintenance et confort.",
+        label: "Zone vente",
+        description: "Zone vente activee avec bureau + responsable.",
         hint: "Zone",
     },
 ];
 
-const BUILD_MENU_TOOLS: [BuildMenuEntry; 5] = [
+const BUILD_MENU_FLOORS: [BuildMenuEntry; 5] = [
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Floor(BuildFloorKind::Standard),
+        label: "Sol standard",
+        description: "Sol usine polyvalent a cout reduit.",
+        hint: "Sol",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Floor(BuildFloorKind::Metal),
+        label: "Sol metal",
+        description: "Sol industriel robuste, zone de trafic intense.",
+        hint: "Sol",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Floor(BuildFloorKind::Bois),
+        label: "Sol bois",
+        description: "Sol de finition legere pour zones seches.",
+        hint: "Sol",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Floor(BuildFloorKind::Mousse),
+        label: "Sol mousse",
+        description: "Sol technique amorti pour zones confort.",
+        hint: "Sol",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Floor(BuildFloorKind::Sable),
+        label: "Sol sable",
+        description: "Sol brut economique pour zones exterieures.",
+        hint: "Sol",
+    },
+];
+
+const BUILD_MENU_TOOLS: [BuildMenuEntry; 6] = [
     BuildMenuEntry {
         selection: BuildMenuSelection::Tool(BuildToolAction::ToggleBuildMode),
         label: "Mode construction",
@@ -120,8 +205,14 @@ const BUILD_MENU_TOOLS: [BuildMenuEntry; 5] = [
     BuildMenuEntry {
         selection: BuildMenuSelection::Tool(BuildToolAction::ToggleZonePaint),
         label: "Peinture zones",
-        description: "Permet de peindre la carte avec la zone choisie.",
+        description: "Definit des zones via rectangle (coin 1 -> coin 2).",
         hint: "V",
+    },
+    BuildMenuEntry {
+        selection: BuildMenuSelection::Tool(BuildToolAction::ToggleSalesManager),
+        label: "Resp. ventes",
+        description: "Assigner/retirer le responsable des ventes.",
+        hint: "Etat",
     },
     BuildMenuEntry {
         selection: BuildMenuSelection::Tool(BuildToolAction::CancelMoveSource),
@@ -142,6 +233,7 @@ const PANEL_SCROLL_STEP: f32 = 34.0;
 pub enum HudBuildTab {
     Blocs,
     Zones,
+    Sols,
     Outils,
 }
 
@@ -150,6 +242,7 @@ impl HudBuildTab {
         match self {
             HudBuildTab::Blocs => "Blocs",
             HudBuildTab::Zones => "Zones",
+            HudBuildTab::Sols => "Sols",
             HudBuildTab::Outils => "Outils",
         }
     }
@@ -436,7 +529,7 @@ pub fn draw_hud(
     world_camera: &Camera2D,
     time: f32,
 ) {
-    draw_bar_background(layout.bar_rect);
+    draw_bar_background(layout.bar_rect, time);
 
     draw_top_strip(state, layout.top_strip_rect, mouse);
 
@@ -450,64 +543,153 @@ pub fn draw_hud(
     if state.pawn_ui.context_menu.is_some() && !state.hud_ui.build_menu_open {
         ui_pawns::draw_pawn_context_menu(state, mouse);
     }
-
-    let _ = time;
 }
 
-fn draw_bar_background(bar: Rect) {
-    let top = rgba(24, 34, 48, 244);
-    let mid = rgba(14, 20, 30, 248);
-    let bottom = rgba(8, 12, 18, 252);
-    draw_rectangle(bar.x, bar.y, bar.w, bar.h, top);
-    draw_rectangle(bar.x, bar.y + bar.h * 0.28, bar.w, bar.h * 0.4, mid);
-    draw_rectangle(bar.x, bar.y + bar.h * 0.66, bar.w, bar.h * 0.34, bottom);
+fn draw_bar_background(bar: Rect, time: f32) {
+    let base_top = rgba(24, 50, 86, 248);
+    let base_bottom = rgba(7, 14, 26, 252);
+    draw_vertical_gradient(bar, base_top, base_bottom, 34);
 
-    draw_rectangle(bar.x, bar.y, bar.w, 2.0, rgba(176, 220, 248, 138));
-    draw_rectangle(bar.x, bar.y + 2.0, bar.w, 2.0, rgba(84, 128, 162, 118));
+    let pulse = (time * 1.25).sin() * 0.5 + 0.5;
+    let cyan_glow = with_alpha(ui_col_glow_cyan(), 0.08 + pulse * 0.07);
+    let teal_glow = with_alpha(ui_col_glow_teal(), 0.05 + pulse * 0.04);
+    draw_rectangle(bar.x, bar.y + bar.h * 0.04, bar.w, bar.h * 0.20, cyan_glow);
+    draw_rectangle(bar.x, bar.y + bar.h * 0.36, bar.w, bar.h * 0.20, teal_glow);
     draw_rectangle(
         bar.x,
-        bar.y + bar.h * 0.52,
+        bar.y + bar.h * 0.62,
+        bar.w,
+        bar.h * 0.38,
+        with_alpha(rgba(0, 0, 0, 255), 0.34),
+    );
+
+    let stripe_w = (bar.w / 28.0).max(38.0);
+    let mut sx = bar.x - stripe_w;
+    while sx < bar.x + bar.w + stripe_w {
+        draw_rectangle(
+            sx,
+            bar.y + bar.h * 0.70,
+            stripe_w * 0.46,
+            1.0,
+            with_alpha(ui_col_border_hi(), 0.10),
+        );
+        sx += stripe_w;
+    }
+
+    draw_rectangle(
+        bar.x,
+        bar.y,
         bar.w,
         2.0,
-        rgba(92, 132, 162, 70),
+        with_alpha(ui_col_border_hi(), 0.60),
     );
-    draw_rectangle_lines(bar.x, bar.y, bar.w, bar.h, 2.0, rgba(74, 112, 146, 226));
+    draw_rectangle(
+        bar.x,
+        bar.y + 2.0,
+        bar.w,
+        1.0,
+        with_alpha(ui_col_glow_cyan(), 0.42),
+    );
+    draw_rectangle(
+        bar.x,
+        bar.y + bar.h * 0.56,
+        bar.w,
+        1.0,
+        with_alpha(ui_col_border(), 0.30),
+    );
+    draw_rectangle_lines(
+        bar.x,
+        bar.y,
+        bar.w,
+        bar.h,
+        2.0,
+        with_alpha(ui_col_border(), 0.88),
+    );
     draw_rectangle_lines(
         bar.x + 1.0,
         bar.y + 1.0,
         bar.w - 2.0,
         bar.h - 2.0,
         1.0,
-        rgba(24, 34, 46, 232),
+        rgba(10, 20, 34, 228),
     );
 }
 
 fn ui_col_border() -> Color {
-    rgba(94, 142, 176, 214)
+    rgba(82, 182, 232, 220)
 }
 
 fn ui_col_border_hi() -> Color {
-    rgba(208, 236, 255, 245)
+    rgba(196, 244, 255, 250)
 }
 
 fn ui_col_accent() -> Color {
-    rgba(246, 198, 120, 248)
+    rgba(255, 196, 106, 248)
 }
 
 fn ui_col_surface() -> Color {
-    rgba(20, 28, 40, 240)
+    rgba(14, 28, 48, 236)
 }
 
 fn ui_col_surface_hi() -> Color {
-    rgba(32, 44, 60, 236)
+    rgba(26, 46, 72, 240)
 }
 
 fn ui_col_text_primary() -> Color {
-    rgba(236, 246, 255, 248)
+    rgba(242, 250, 255, 248)
 }
 
 fn ui_col_text_secondary() -> Color {
-    rgba(188, 214, 232, 242)
+    rgba(196, 220, 244, 244)
+}
+
+fn ui_col_glow_cyan() -> Color {
+    rgba(84, 218, 255, 255)
+}
+
+fn ui_col_glow_teal() -> Color {
+    rgba(112, 248, 206, 255)
+}
+
+fn mix_color(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    Color::new(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a + (b.a - a.a) * t,
+    )
+}
+
+fn draw_vertical_gradient(rect: Rect, top: Color, bottom: Color, slices: usize) {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    let slices = slices.max(1);
+    let slice_h = rect.h / slices as f32;
+    let denom = (slices.saturating_sub(1)).max(1) as f32;
+    for i in 0..slices {
+        let t = i as f32 / denom;
+        let y = rect.y + i as f32 * slice_h;
+        let h = if i + 1 == slices {
+            (rect.y + rect.h - y).max(0.0)
+        } else {
+            (slice_h + 0.5).max(0.0)
+        };
+        if h > 0.0 {
+            draw_rectangle(rect.x, y, rect.w, h, mix_color(top, bottom, t));
+        }
+    }
+}
+
+fn draw_panel_drop_shadow(rect: Rect, alpha: f32) {
+    draw_rectangle(
+        rect.x + 2.0,
+        rect.y + 3.0,
+        rect.w,
+        rect.h,
+        with_alpha(rgba(0, 0, 0, 255), alpha.clamp(0.0, 1.0)),
+    );
 }
 
 fn ui_shadow_offset(fs: f32) -> Vec2 {
@@ -536,51 +718,66 @@ fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: 
 
 fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
     let hovered = point_in_rect(mouse, rect);
-    let bg = if hovered {
+    draw_panel_drop_shadow(rect, if hovered { 0.32 } else { 0.24 });
+
+    let base_top = if hovered {
         ui_col_surface_hi()
     } else {
-        ui_col_surface()
+        mix_color(ui_col_surface_hi(), ui_col_surface(), 0.55)
     };
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+    let base_bottom = if hovered {
+        mix_color(ui_col_surface(), rgba(6, 12, 24, 255), 0.40)
+    } else {
+        mix_color(ui_col_surface(), rgba(4, 8, 18, 255), 0.44)
+    };
+    draw_vertical_gradient(rect, base_top, base_bottom, 18);
     draw_rectangle(
-        rect.x,
-        rect.y + rect.h * 0.48,
-        rect.w,
-        rect.h * 0.52,
-        rgba(8, 12, 18, 60),
+        rect.x + 1.0,
+        rect.y + rect.h * 0.54,
+        (rect.w - 2.0).max(0.0),
+        (rect.h * 0.46).max(0.0),
+        with_alpha(rgba(0, 0, 0, 255), 0.22),
     );
-    draw_rectangle_lines(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        2.0,
-        if hovered {
-            ui_col_border_hi()
-        } else {
-            ui_col_border()
-        },
-    );
+
+    let border_col = if hovered {
+        ui_col_border_hi()
+    } else {
+        ui_col_border()
+    };
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, border_col);
     draw_rectangle_lines(
         rect.x + 1.0,
         rect.y + 1.0,
         rect.w - 2.0,
         rect.h - 2.0,
         1.0,
-        rgba(24, 34, 44, 220),
+        rgba(10, 20, 34, 220),
     );
 
     let header_h = 24.0;
-    let header = Rect::new(rect.x, rect.y, rect.w, header_h);
-    let header_top = rgba(32, 46, 62, 250);
-    let header_bottom = rgba(18, 26, 36, 250);
-    draw_rectangle(header.x, header.y, header.w, header.h * 0.55, header_top);
+    let header = Rect::new(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.w - 2.0).max(1.0),
+        header_h - 1.0,
+    );
+    let header_top = if hovered {
+        rgba(56, 124, 184, 248)
+    } else {
+        rgba(40, 102, 162, 246)
+    };
+    let header_bottom = if hovered {
+        rgba(20, 54, 96, 248)
+    } else {
+        rgba(17, 44, 84, 246)
+    };
+    draw_vertical_gradient(header, header_top, header_bottom, 10);
     draw_rectangle(
         header.x,
-        header.y + header.h * 0.55,
+        header.y + header.h * 0.62,
         header.w,
-        header.h * 0.45,
-        header_bottom,
+        header.h * 0.38,
+        with_alpha(rgba(0, 0, 0, 255), 0.18),
     );
     draw_rectangle_lines(
         header.x,
@@ -588,21 +785,41 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         header.w,
         header.h,
         1.0,
-        rgba(126, 182, 220, 172),
+        with_alpha(ui_col_border_hi(), if hovered { 0.78 } else { 0.54 }),
     );
+
+    let accent = if hovered {
+        mix_color(ui_col_accent(), ui_col_glow_cyan(), 0.24)
+    } else {
+        ui_col_accent()
+    };
+    draw_rectangle(rect.x + 8.0, rect.y + 5.0, 4.0, header.h - 8.0, accent);
     draw_rectangle(
-        header.x + 8.0,
-        header.y + 5.0,
-        4.0,
-        header.h - 10.0,
-        ui_col_accent(),
+        rect.x + 14.0,
+        rect.y + 5.0,
+        2.0,
+        header.h - 8.0,
+        with_alpha(ui_col_glow_cyan(), 0.48),
+    );
+    draw_circle(
+        rect.x + rect.w - 12.0,
+        rect.y + 12.0,
+        2.5,
+        with_alpha(
+            if hovered {
+                ui_col_glow_teal()
+            } else {
+                ui_col_glow_cyan()
+            },
+            if hovered { 0.90 } else { 0.65 },
+        ),
     );
 
     let fs = 16.0;
-    let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
+    let (fill, shadow) = ui_text_and_shadow_for_bg(header_bottom);
     draw_text_shadowed(
         title,
-        rect.x + 18.0,
+        rect.x + 20.0,
         rect.y + 17.5,
         fs,
         if hovered { ui_col_text_primary() } else { fill },
@@ -612,14 +829,43 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
 }
 
 fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
-    let bg = rgba(16, 22, 30, 252);
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
-    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, rgba(90, 140, 190, 210));
+    let top = rgba(18, 44, 76, 252);
+    let bottom = rgba(10, 24, 42, 252);
+    draw_vertical_gradient(rect, top, bottom, 14);
+    draw_rectangle(
+        rect.x,
+        rect.y + rect.h * 0.04,
+        rect.w,
+        rect.h * 0.28,
+        with_alpha(ui_col_glow_cyan(), 0.12),
+    );
+    draw_rectangle(
+        rect.x,
+        rect.y + rect.h * 0.68,
+        rect.w,
+        rect.h * 0.32,
+        with_alpha(rgba(0, 0, 0, 255), 0.24),
+    );
+    draw_rectangle_lines(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        2.0,
+        with_alpha(ui_col_border(), 0.88),
+    );
+    draw_rectangle(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        rect.w - 2.0,
+        2.0,
+        with_alpha(ui_col_border_hi(), 0.44),
+    );
 
     let pad = 10.0;
     let y = rect.y + rect.h * 0.72;
     let fs = (rect.h * 0.46).clamp(14.0, 20.0);
-    let (fill, shadow) = ui_text_and_shadow_for_bg(bg);
+    let (fill, shadow) = ui_text_and_shadow_for_bg(bottom);
 
     let time_label = format!(
         "Heure {}  J{}",
@@ -661,7 +907,7 @@ fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
         Rect::new(x, pill_y, 170.0, pill_h),
         "Ventes",
         &format!("{}", sold),
-        rgba(98, 152, 188, 240),
+        rgba(84, 188, 242, 242),
         mouse,
         false,
     ) + 10.0;
@@ -670,7 +916,7 @@ fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
         Rect::new(x, pill_y, 170.0, pill_h),
         "Cadence",
         &format!("{:.1}/h", cadence),
-        rgba(120, 180, 130, 230),
+        rgba(96, 228, 178, 236),
         mouse,
         false,
     ) + 10.0;
@@ -679,7 +925,7 @@ fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
         Rect::new(x, pill_y, 160.0, pill_h),
         "Fiabilite",
         &format!("{:.0}%", (otif * 100.0).clamp(0.0, 999.0)),
-        rgba(180, 200, 120, 230),
+        rgba(208, 230, 110, 236),
         mouse,
         false,
     ) + 10.0;
@@ -740,18 +986,22 @@ fn draw_stat_pill(
 ) -> f32 {
     let hovered = point_in_rect(mouse, rect);
     let pad = 10.0;
-    let bg = if hovered {
-        rgba(34, 48, 64, 246)
+    draw_panel_drop_shadow(rect, if hovered { 0.28 } else { 0.20 });
+
+    let tint = with_alpha(accent, if hovered { 0.42 } else { 0.30 });
+    let top = if hovered {
+        mix_color(ui_col_surface_hi(), tint, 0.54)
     } else {
-        rgba(22, 32, 44, 242)
+        mix_color(ui_col_surface(), tint, 0.44)
     };
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
+    let bottom = mix_color(top, rgba(4, 8, 20, 255), if hovered { 0.46 } else { 0.52 });
+    draw_vertical_gradient(rect, top, bottom, 12);
     draw_rectangle(
-        rect.x,
+        rect.x + 1.0,
         rect.y + rect.h * 0.52,
-        rect.w,
-        rect.h * 0.48,
-        rgba(8, 12, 18, 80),
+        (rect.w - 2.0).max(0.0),
+        (rect.h * 0.48).max(0.0),
+        with_alpha(rgba(0, 0, 0, 255), 0.24),
     );
     draw_rectangle_lines(
         rect.x,
@@ -762,7 +1012,7 @@ fn draw_stat_pill(
         if hovered {
             ui_col_border_hi()
         } else {
-            ui_col_border()
+            with_alpha(ui_col_border(), 0.92)
         },
     );
     draw_rectangle_lines(
@@ -771,21 +1021,34 @@ fn draw_stat_pill(
         rect.w - 2.0,
         rect.h - 2.0,
         1.0,
-        rgba(24, 34, 46, 210),
+        rgba(9, 18, 30, 208),
     );
 
-    draw_rectangle(rect.x, rect.y, 6.0, rect.h, accent);
+    let accent_bar_w = if hovered { 8.0 } else { 7.0 };
     draw_rectangle(
-        rect.x + 6.0,
+        rect.x,
         rect.y,
-        rect.w - 6.0,
+        accent_bar_w,
+        rect.h,
+        with_alpha(accent, 0.95),
+    );
+    draw_rectangle(
+        rect.x + accent_bar_w,
+        rect.y,
+        (rect.w - accent_bar_w).max(0.0),
         2.0,
-        rgba(230, 242, 252, 80),
+        with_alpha(ui_col_border_hi(), if hovered { 0.46 } else { 0.32 }),
+    );
+    draw_circle(
+        rect.x + rect.w - 9.5,
+        rect.y + 8.0,
+        2.4,
+        with_alpha(accent, if hovered { 0.92 } else { 0.72 }),
     );
 
     let fs = (rect.h * 0.44).clamp(12.0, 18.0);
     let value_fs = (rect.h * 0.54).clamp(13.0, 19.0);
-    let (_fill, shadow) = ui_text_and_shadow_for_bg(bg);
+    let (_fill, shadow) = ui_text_and_shadow_for_bg(bottom);
 
     draw_text_shadowed(
         label,
@@ -868,26 +1131,45 @@ fn draw_euro_icon(x: f32, baseline_y: f32, h: f32, color: Color) {
 
 fn draw_small_button(rect: Rect, label: &str, hovered: bool, active: bool) {
     let base = if active {
-        ui_col_accent()
+        mix_color(ui_col_accent(), ui_col_glow_teal(), 0.18)
     } else if hovered {
-        rgba(90, 148, 186, 242)
+        rgba(78, 166, 228, 244)
     } else {
-        rgba(52, 78, 104, 236)
+        rgba(46, 96, 148, 236)
     };
+    let bottom = mix_color(base, rgba(6, 12, 24, 255), if active { 0.34 } else { 0.46 });
     let border = if active {
-        rgba(252, 224, 164, 252)
+        mix_color(ui_col_accent(), WHITE, 0.42)
     } else if hovered {
         ui_col_border_hi()
     } else {
-        rgba(118, 168, 198, 216)
+        with_alpha(ui_col_border(), 0.90)
     };
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+
+    draw_panel_drop_shadow(rect, if active { 0.24 } else { 0.18 });
+    draw_vertical_gradient(rect, base, bottom, 10);
+    draw_rectangle(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.w - 2.0).max(0.0),
+        rect.h * 0.45,
+        with_alpha(
+            WHITE,
+            if active {
+                0.24
+            } else if hovered {
+                0.14
+            } else {
+                0.09
+            },
+        ),
+    );
     draw_rectangle(
         rect.x,
-        rect.y,
+        rect.y + rect.h * 0.68,
         rect.w,
-        rect.h * 0.45,
-        with_alpha(WHITE, if active { 0.16 } else { 0.08 }),
+        rect.h * 0.32,
+        with_alpha(rgba(0, 0, 0, 255), 0.18),
     );
     draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.5, border);
     draw_rectangle_lines(
@@ -896,14 +1178,14 @@ fn draw_small_button(rect: Rect, label: &str, hovered: bool, active: bool) {
         rect.w - 2.0,
         rect.h - 2.0,
         1.0,
-        rgba(18, 26, 36, 160),
+        rgba(8, 14, 24, 158),
     );
 
     let fs = (rect.h * 0.72).clamp(12.0, 18.0);
     let dims = measure_text(label, None, fs as u16, 1.0);
     let tx = rect.x + rect.w * 0.5 - dims.width * 0.5;
     let ty = rect.y + rect.h * 0.5 + dims.height * 0.34;
-    let (fill, shadow) = ui_text_and_shadow_for_bg(base);
+    let (fill, shadow) = ui_text_and_shadow_for_bg(bottom);
     let text_col = if active { rgba(18, 24, 30, 248) } else { fill };
     draw_text_shadowed(label, tx, ty, fs, text_col, shadow, ui_shadow_offset(fs));
 }
@@ -934,14 +1216,14 @@ fn draw_vertical_scrollbar(view: Rect, content_h: f32, scroll_y: f32) {
     let track_w = 6.0;
     let track_x = view.x + view.w - track_w - 2.0;
     let track = Rect::new(track_x, view.y + 2.0, track_w, (view.h - 4.0).max(1.0));
-    draw_rectangle(track.x, track.y, track.w, track.h, rgba(8, 12, 18, 176));
+    draw_vertical_gradient(track, rgba(12, 24, 38, 194), rgba(8, 14, 24, 214), 8);
     draw_rectangle_lines(
         track.x,
         track.y,
         track.w,
         track.h,
         1.0,
-        rgba(120, 171, 199, 160),
+        with_alpha(ui_col_border(), 0.60),
     );
 
     let max_scroll = (content_h - view.h).max(1.0);
@@ -949,8 +1231,23 @@ fn draw_vertical_scrollbar(view: Rect, content_h: f32, scroll_y: f32) {
     let travel = (track.h - thumb_h).max(0.0);
     let t = (scroll_y / max_scroll).clamp(0.0, 1.0);
     let thumb_y = track.y + travel * t;
-    draw_rectangle(track.x, thumb_y, track.w, thumb_h, rgba(194, 230, 252, 220));
-    draw_rectangle(track.x, thumb_y, track.w, 2.0, rgba(236, 246, 255, 180));
+    let thumb = Rect::new(track.x, thumb_y, track.w, thumb_h);
+    draw_vertical_gradient(thumb, rgba(174, 230, 255, 232), rgba(112, 178, 222, 236), 8);
+    draw_rectangle_lines(
+        thumb.x,
+        thumb.y,
+        thumb.w,
+        thumb.h,
+        1.0,
+        with_alpha(ui_col_border_hi(), 0.76),
+    );
+    draw_rectangle(
+        thumb.x,
+        thumb.y,
+        thumb.w,
+        2.0,
+        with_alpha(ui_col_border_hi(), 0.55),
+    );
 }
 
 fn pawn_inner_rect(panel: Rect) -> Rect {
@@ -1292,8 +1589,13 @@ fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     };
     let brush_line = if state.sim.zone_paint_mode_enabled() {
         format!("Brosse active: zone {}", state.sim.zone_brush().label())
+    } else if state.sim.floor_paint_mode_enabled() {
+        format!("Brosse active: sol {}", state.sim.floor_brush().label())
     } else {
-        format!("Brosse active: bloc {}", state.sim.block_brush().label())
+        format!(
+            "Brosse active: bloc {}",
+            state.sim.block_brush().buyable_label()
+        )
     };
     let selected = state
         .hud_ui
@@ -1373,11 +1675,12 @@ fn build_menu_tab_rects(panel: Rect) -> Vec<(HudBuildTab, Rect)> {
     let mut x = panel.x + 12.0;
     let h = 26.0;
     let gap = 8.0;
-    let mut out = Vec::with_capacity(3);
+    let mut out = Vec::with_capacity(4);
     for (tab, w) in [
-        (HudBuildTab::Blocs, 122.0),
-        (HudBuildTab::Zones, 122.0),
-        (HudBuildTab::Outils, 122.0),
+        (HudBuildTab::Blocs, 110.0),
+        (HudBuildTab::Zones, 110.0),
+        (HudBuildTab::Sols, 110.0),
+        (HudBuildTab::Outils, 110.0),
     ] {
         out.push((tab, Rect::new(x, y, w, h)));
         x += w + gap;
@@ -1398,6 +1701,7 @@ fn build_menu_entries(tab: HudBuildTab) -> &'static [BuildMenuEntry] {
     match tab {
         HudBuildTab::Blocs => &BUILD_MENU_BLOCKS,
         HudBuildTab::Zones => &BUILD_MENU_ZONES,
+        HudBuildTab::Sols => &BUILD_MENU_FLOORS,
         HudBuildTab::Outils => &BUILD_MENU_TOOLS,
     }
 }
@@ -1406,18 +1710,21 @@ fn default_build_menu_selection(state: &GameState, tab: HudBuildTab) -> BuildMen
     match tab {
         HudBuildTab::Blocs => BuildMenuSelection::Block(state.sim.block_brush()),
         HudBuildTab::Zones => BuildMenuSelection::Zone(state.sim.zone_brush()),
+        HudBuildTab::Sols => BuildMenuSelection::Floor(state.sim.floor_brush()),
         HudBuildTab::Outils => BuildMenuSelection::Tool(BuildToolAction::ToggleBuildMode),
     }
 }
 
 fn build_menu_selection_title(selection: BuildMenuSelection) -> String {
     match selection {
-        BuildMenuSelection::Block(kind) => format!("Bloc {}", kind.label()),
+        BuildMenuSelection::Block(kind) => format!("Bloc {}", kind.buyable_label()),
         BuildMenuSelection::Zone(kind) => format!("Zone {}", kind.label()),
+        BuildMenuSelection::Floor(kind) => format!("Sol {}", kind.label()),
         BuildMenuSelection::Tool(tool) => match tool {
             BuildToolAction::ToggleBuildMode => "Basculer mode construction".to_string(),
             BuildToolAction::ToggleZoneOverlay => "Basculer surcouche des zones".to_string(),
             BuildToolAction::ToggleZonePaint => "Basculer peinture des zones".to_string(),
+            BuildToolAction::ToggleSalesManager => "Assigner responsable ventes".to_string(),
             BuildToolAction::CancelMoveSource => "Annuler source de deplacement".to_string(),
             BuildToolAction::SaveLayout => "Sauvegarder le layout".to_string(),
         },
@@ -1427,22 +1734,30 @@ fn build_menu_selection_title(selection: BuildMenuSelection) -> String {
 fn build_menu_selection_cost(selection: BuildMenuSelection) -> Option<f64> {
     match selection {
         BuildMenuSelection::Block(kind) => Some(kind.capex_eur()),
-        BuildMenuSelection::Zone(_) | BuildMenuSelection::Tool(_) => None,
+        BuildMenuSelection::Zone(kind) => Some(kind.capex_par_tuile_eur()),
+        BuildMenuSelection::Floor(kind) => Some(kind.capex_par_tuile_eur()),
+        BuildMenuSelection::Tool(_) => None,
     }
 }
 
 fn build_menu_selection_is_active(state: &GameState, selection: BuildMenuSelection) -> bool {
     match selection {
         BuildMenuSelection::Block(kind) => {
-            !state.sim.zone_paint_mode_enabled() && state.sim.block_brush() == kind
+            !state.sim.zone_paint_mode_enabled()
+                && !state.sim.floor_paint_mode_enabled()
+                && state.sim.block_brush() == kind
         }
         BuildMenuSelection::Zone(kind) => {
             state.sim.zone_paint_mode_enabled() && state.sim.zone_brush() == kind
+        }
+        BuildMenuSelection::Floor(kind) => {
+            state.sim.floor_paint_mode_enabled() && state.sim.floor_brush() == kind
         }
         BuildMenuSelection::Tool(tool) => match tool {
             BuildToolAction::ToggleBuildMode => state.sim.build_mode_enabled(),
             BuildToolAction::ToggleZoneOverlay => state.sim.zone_overlay_enabled(),
             BuildToolAction::ToggleZonePaint => state.sim.zone_paint_mode_enabled(),
+            BuildToolAction::ToggleSalesManager => state.sim.sales_manager_assigned(),
             BuildToolAction::CancelMoveSource => state.sim.pending_move_block().is_some(),
             BuildToolAction::SaveLayout => false,
         },
@@ -1458,13 +1773,20 @@ fn ensure_build_mode_enabled(state: &mut GameState) {
 fn apply_build_menu_selection(state: &mut GameState, selection: BuildMenuSelection) {
     match selection {
         BuildMenuSelection::Block(kind) => {
-            state.sim.set_block_brush(kind);
+            state.sim.set_floor_paint_mode(false);
             state.sim.set_zone_paint_mode(false);
+            state.sim.set_block_brush(kind);
             ensure_build_mode_enabled(state);
         }
         BuildMenuSelection::Zone(kind) => {
+            state.sim.set_floor_paint_mode(false);
             state.sim.set_zone_brush(kind);
             state.sim.set_zone_paint_mode(true);
+            ensure_build_mode_enabled(state);
+        }
+        BuildMenuSelection::Floor(kind) => {
+            state.sim.set_zone_paint_mode(false);
+            state.sim.set_floor_brush(kind);
             ensure_build_mode_enabled(state);
         }
         BuildMenuSelection::Tool(tool) => match tool {
@@ -1474,6 +1796,9 @@ fn apply_build_menu_selection(state: &mut GameState, selection: BuildMenuSelecti
                 state
                     .sim
                     .set_zone_paint_mode(!state.sim.zone_paint_mode_enabled());
+            }
+            BuildToolAction::ToggleSalesManager => {
+                state.sim.toggle_sales_manager_assigned();
             }
             BuildToolAction::CancelMoveSource => {
                 if state.sim.pending_move_block().is_some() {
@@ -1614,6 +1939,9 @@ fn build_menu_entry_for_selection(
         BuildMenuSelection::Zone(kind) => BUILD_MENU_ZONES
             .iter()
             .find(|entry| entry.selection == BuildMenuSelection::Zone(kind)),
+        BuildMenuSelection::Floor(kind) => BUILD_MENU_FLOORS
+            .iter()
+            .find(|entry| entry.selection == BuildMenuSelection::Floor(kind)),
         BuildMenuSelection::Tool(tool) => BUILD_MENU_TOOLS
             .iter()
             .find(|entry| entry.selection == BuildMenuSelection::Tool(tool)),
@@ -1649,16 +1977,19 @@ fn process_build_menu_input(state: &mut GameState, mouse: Vec2) -> bool {
         if point_in_rect(mouse, *rect) {
             if let Some(entry) = entries.get(*idx) {
                 state.hud_ui.build_menu_selected = Some(entry.selection);
-                apply_build_menu_selection(state, entry.selection);
             }
             return true;
         }
     }
 
-    if point_in_rect(mouse, layout.apply_rect)
-        && let Some(selection) = state.hud_ui.build_menu_selected
-    {
+    if point_in_rect(mouse, layout.apply_rect) {
+        let selection = state
+            .hud_ui
+            .build_menu_selected
+            .unwrap_or_else(|| default_build_menu_selection(state, state.hud_ui.build_tab));
         apply_build_menu_selection(state, selection);
+        state.hud_ui.build_menu_selected = Some(selection);
+        state.hud_ui.build_menu_open = false;
         return true;
     }
 
@@ -1733,54 +2064,6 @@ fn draw_build_menu(state: &GameState, mouse: Vec2) {
     draw_build_menu_details(state, &layout, mouse);
 }
 
-fn draw_storage_raw_material_badge(rect: Rect) {
-    let badge_size = 36.0;
-    let badge_rect = Rect::new(
-        rect.x + rect.w - badge_size - 8.0,
-        rect.y + 8.0,
-        badge_size,
-        badge_size,
-    );
-    draw_rectangle(
-        badge_rect.x,
-        badge_rect.y,
-        badge_rect.w,
-        badge_rect.h,
-        rgba(10, 14, 20, 170),
-    );
-    draw_rectangle_lines(
-        badge_rect.x,
-        badge_rect.y,
-        badge_rect.w,
-        badge_rect.h,
-        1.0,
-        rgba(180, 210, 236, 180),
-    );
-
-    if let Some(texture) = initial_raw_material_texture().as_ref() {
-        draw_texture_ex(
-            texture,
-            badge_rect.x + 2.0,
-            badge_rect.y + 2.0,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(badge_rect.w - 4.0, badge_rect.h - 4.0)),
-                ..Default::default()
-            },
-        );
-    } else {
-        draw_text_shadowed(
-            "MP",
-            badge_rect.x + 6.0,
-            badge_rect.y + badge_rect.h * 0.68,
-            14.0,
-            rgba(228, 236, 244, 245),
-            rgba(0, 0, 0, 150),
-            ui_shadow_offset(14.0),
-        );
-    }
-}
-
 fn draw_build_menu_entry_card(
     rect: Rect,
     entry: &BuildMenuEntry,
@@ -1825,12 +2108,13 @@ fn draw_build_menu_entry_card(
         ui_shadow_offset(13.0),
     );
 
-    if entry.selection == BuildMenuSelection::Block(BlockKind::Storage) {
-        draw_storage_raw_material_badge(rect);
-    }
-
     if let Some(cost) = build_menu_selection_cost(entry.selection) {
-        let cost_line = format!("Cout: {} EUR", format_money(cost));
+        let cost_line = match entry.selection {
+            BuildMenuSelection::Zone(_) | BuildMenuSelection::Floor(_) => {
+                format!("Cout estime: {} EUR / tuile", format_money(cost))
+            }
+            _ => format!("Cout: {} EUR", format_money(cost)),
+        };
         draw_text_shadowed(
             &cost_line,
             rect.x + 10.0,
@@ -1915,46 +2199,6 @@ fn draw_build_menu_details(state: &GameState, layout: &BuildMenuLayout, mouse: V
         );
     }
 
-    if selection == BuildMenuSelection::Block(BlockKind::Storage) {
-        let icon_rect = Rect::new(panel.x + panel.w - 84.0, panel.y + 26.0, 72.0, 72.0);
-        draw_rectangle(
-            icon_rect.x,
-            icon_rect.y,
-            icon_rect.w,
-            icon_rect.h,
-            rgba(10, 14, 20, 188),
-        );
-        draw_rectangle_lines(
-            icon_rect.x,
-            icon_rect.y,
-            icon_rect.w,
-            icon_rect.h,
-            1.0,
-            rgba(180, 210, 236, 180),
-        );
-        if let Some(texture) = initial_raw_material_texture().as_ref() {
-            draw_texture_ex(
-                texture,
-                icon_rect.x + 4.0,
-                icon_rect.y + 4.0,
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(vec2(icon_rect.w - 8.0, icon_rect.h - 8.0)),
-                    ..Default::default()
-                },
-            );
-        }
-        draw_text_shadowed(
-            "Matiere premiere initiale",
-            panel.x + 10.0,
-            panel.y + 164.0,
-            13.0,
-            rgba(220, 236, 248, 240),
-            shadow,
-            ui_shadow_offset(13.0),
-        );
-    }
-
     let status_line = if build_menu_selection_is_active(state, selection) {
         "Etat: actif"
     } else {
@@ -1971,8 +2215,14 @@ fn draw_build_menu_details(state: &GameState, layout: &BuildMenuLayout, mouse: V
     );
 
     if let Some(cost) = build_menu_selection_cost(selection) {
+        let cost_text = match selection {
+            BuildMenuSelection::Zone(_) | BuildMenuSelection::Floor(_) => {
+                format!("Cout estime: {} EUR / tuile", format_money(cost))
+            }
+            _ => format!("Cout de placement: {} EUR", format_money(cost)),
+        };
         draw_text_shadowed(
-            &format!("Cout de placement: {} EUR", format_money(cost)),
+            &cost_text,
             panel.x + 10.0,
             panel.y + 140.0,
             14.0,
@@ -1991,6 +2241,25 @@ fn draw_build_menu_details(state: &GameState, layout: &BuildMenuLayout, mouse: V
             ui_shadow_offset(14.0),
         );
     }
+
+    let vente_line = if state.sim.sales_operational() {
+        "Vente: operationnelle".to_string()
+    } else {
+        format!("Vente: bloquee ({})", state.sim.sales_block_reason())
+    };
+    draw_text_shadowed(
+        &vente_line,
+        panel.x + 10.0,
+        panel.y + 162.0,
+        13.0,
+        if state.sim.sales_operational() {
+            rgba(152, 224, 168, 240)
+        } else {
+            rgba(236, 188, 132, 238)
+        },
+        shadow,
+        ui_shadow_offset(13.0),
+    );
 
     draw_text_shadowed(
         state.sim.status_line(),
@@ -2810,6 +3079,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mix_color_clamps_factor_to_bounds() {
+        let a = rgba(10, 20, 30, 40);
+        let b = rgba(110, 120, 130, 140);
+
+        let low = mix_color(a, b, -2.0);
+        assert!((low.r - a.r).abs() < 0.0001);
+        assert!((low.g - a.g).abs() < 0.0001);
+        assert!((low.b - a.b).abs() < 0.0001);
+        assert!((low.a - a.a).abs() < 0.0001);
+
+        let high = mix_color(a, b, 2.0);
+        assert!((high.r - b.r).abs() < 0.0001);
+        assert!((high.g - b.g).abs() < 0.0001);
+        assert!((high.b - b.b).abs() < 0.0001);
+        assert!((high.a - b.a).abs() < 0.0001);
+    }
+
+    #[test]
+    fn mix_color_blends_midpoint_linearly() {
+        let a = rgba(0, 100, 200, 50);
+        let b = rgba(200, 0, 100, 250);
+        let mid = mix_color(a, b, 0.5);
+
+        assert!((mid.r - (a.r + b.r) * 0.5).abs() < 0.0001);
+        assert!((mid.g - (a.g + b.g) * 0.5).abs() < 0.0001);
+        assert!((mid.b - (a.b + b.b) * 0.5).abs() < 0.0001);
+        assert!((mid.a - (a.a + b.a) * 0.5).abs() < 0.0001);
+    }
+
+    #[test]
     fn rows_for_count_handles_edge_cases() {
         assert_eq!(rows_for_count(0, 2), 0);
         assert_eq!(rows_for_count(1, 2), 1);
@@ -2874,6 +3173,7 @@ mod tests {
     fn build_menu_catalog_is_present_for_all_categories() {
         assert!(!build_menu_entries(HudBuildTab::Blocs).is_empty());
         assert!(!build_menu_entries(HudBuildTab::Zones).is_empty());
+        assert!(!build_menu_entries(HudBuildTab::Sols).is_empty());
         assert!(!build_menu_entries(HudBuildTab::Outils).is_empty());
     }
 }

@@ -16,7 +16,783 @@ thread_local! {
     };
     static POT_DE_FLEUR_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
     static STORAGE_RAW_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static BROKEN_GARLIC_CRATE_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static BOX_CARTON_VIDE_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static BOX_SAC_BLEU_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static BOX_SAC_ROUGE_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static BOX_SAC_VERT_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static PALETTE_LOGISTIQUE_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static BUREAU_PC_ON_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static BUREAU_PC_OFF_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+    static LAVABO_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
     static MAIN_MENU_BACKGROUND_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+}
+
+const PROP_TEXTURE_VISUAL_SCALE: f32 = 1.15;
+const CHARIOT_VISUAL_SCALE: f32 = 2.44;
+
+fn scaled_prop_texture_placement(
+    base_x: f32,
+    base_y: f32,
+    base_w: f32,
+    base_h: f32,
+) -> (f32, f32, Vec2) {
+    let scaled_w = base_w * PROP_TEXTURE_VISUAL_SCALE;
+    let scaled_h = base_h * PROP_TEXTURE_VISUAL_SCALE;
+    let offset_x = (scaled_w - base_w) * 0.5;
+    let offset_y = (scaled_h - base_h) * 0.5;
+    (
+        base_x - offset_x,
+        base_y - offset_y,
+        vec2(scaled_w, scaled_h),
+    )
+}
+
+fn draw_prop_texture_scaled(
+    texture: &Texture2D,
+    base_x: f32,
+    base_y: f32,
+    base_w: f32,
+    base_h: f32,
+) {
+    let (draw_x, draw_y, draw_size) = scaled_prop_texture_placement(base_x, base_y, base_w, base_h);
+    draw_texture_ex(
+        texture,
+        draw_x,
+        draw_y,
+        WHITE,
+        DrawTextureParams {
+            dest_size: Some(draw_size),
+            ..Default::default()
+        },
+    );
+}
+
+fn chariot_basis_vectors(heading_rad: f32) -> (Vec2, Vec2) {
+    let forward = vec2(heading_rad.cos(), heading_rad.sin());
+    let side = vec2(-forward.y, forward.x);
+    (forward, side)
+}
+
+fn chariot_rotate_basis(forward: Vec2, side: Vec2, angle_rad: f32) -> (Vec2, Vec2) {
+    let c = angle_rad.cos();
+    let s = angle_rad.sin();
+    let rotated_forward = forward * c + side * s;
+    let rotated_side = side * c - forward * s;
+    (rotated_forward, rotated_side)
+}
+
+fn chariot_point(center: Vec2, forward: Vec2, side: Vec2, f: f32, s: f32) -> Vec2 {
+    center + forward * f + side * s
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_chariot_quad(
+    center: Vec2,
+    forward: Vec2,
+    side: Vec2,
+    f0: f32,
+    f1: f32,
+    s0: f32,
+    s1: f32,
+    color: Color,
+) {
+    let p0 = chariot_point(center, forward, side, f0, s0);
+    let p1 = chariot_point(center, forward, side, f1, s0);
+    let p2 = chariot_point(center, forward, side, f1, s1);
+    let p3 = chariot_point(center, forward, side, f0, s1);
+    draw_triangle(p0, p1, p2, color);
+    draw_triangle(p0, p2, p3, color);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_chariot_frame(
+    center: Vec2,
+    forward: Vec2,
+    side: Vec2,
+    f0: f32,
+    f1: f32,
+    s0: f32,
+    s1: f32,
+    thickness: f32,
+    color: Color,
+) {
+    let p0 = chariot_point(center, forward, side, f0, s0);
+    let p1 = chariot_point(center, forward, side, f1, s0);
+    let p2 = chariot_point(center, forward, side, f1, s1);
+    let p3 = chariot_point(center, forward, side, f0, s1);
+    draw_line(p0.x, p0.y, p1.x, p1.y, thickness, color);
+    draw_line(p1.x, p1.y, p2.x, p2.y, thickness, color);
+    draw_line(p2.x, p2.y, p3.x, p3.y, thickness, color);
+    draw_line(p3.x, p3.y, p0.x, p0.y, thickness, color);
+}
+
+fn chariot_cargo_colors(kind: PropKind) -> (Color, Color) {
+    match kind {
+        PropKind::BoxSacBleu => (rgba(72, 126, 198, 255), rgba(206, 232, 255, 195)),
+        PropKind::BoxSacRouge => (rgba(188, 88, 84, 255), rgba(252, 220, 214, 198)),
+        PropKind::BoxSacVert => (rgba(80, 158, 108, 255), rgba(210, 245, 220, 198)),
+        PropKind::CaisseAilBrut => (rgba(178, 142, 98, 255), rgba(84, 62, 42, 212)),
+        PropKind::CaisseAilCasse => (rgba(206, 170, 112, 255), rgba(94, 70, 42, 212)),
+        PropKind::PaletteLogistique => (rgba(162, 116, 72, 255), rgba(86, 62, 40, 220)),
+        _ => (rgba(152, 120, 86, 255), rgba(66, 48, 34, 214)),
+    }
+}
+
+fn draw_chariot_wheel(center: Vec2, forward: Vec2, side: Vec2, tire: Color, rim: Color) {
+    draw_chariot_quad(center, forward, side, -2.2, 2.2, -1.35, 1.35, tire);
+    draw_chariot_frame(center, forward, side, -2.2, 2.2, -1.35, 1.35, 0.8, rim);
+    draw_chariot_quad(center, forward, side, -0.55, 0.55, -1.05, 1.05, rim);
+    draw_chariot_quad(
+        center,
+        forward,
+        side,
+        -0.2,
+        0.2,
+        -0.45,
+        0.45,
+        rgba(56, 62, 74, 255),
+    );
+}
+
+pub(crate) fn draw_chariot_elevateur(
+    chariot: &ChariotElevateur,
+    palette: &Palette,
+    time: f32,
+    _driver_character: Option<&CharacterRecord>,
+    debug: bool,
+) {
+    let center = chariot.pos;
+    let (forward_unit, side_unit) = chariot_basis_vectors(chariot.heading_rad);
+    let visual_scale = CHARIOT_VISUAL_SCALE;
+    let forward = forward_unit * visual_scale;
+    let side = side_unit * visual_scale;
+    let moving = chariot.velocity.length_squared() > 4.0;
+    let speed_ratio = (chariot.vitesse_longitudinale.abs() / 128.0).clamp(0.0, 1.0);
+    let braquage_rad = chariot.angle_braquage * 0.72;
+    let (front_wheel_forward, front_wheel_side) = chariot_rotate_basis(forward, side, braquage_rad);
+    let fourche_lift_px = chariot.fourche_hauteur * 7.8 * visual_scale;
+    let fourche_offset = vec2(0.0, -fourche_lift_px);
+
+    let yellow_main = rgba(238, 190, 42, 255);
+    let yellow_dark = rgba(188, 138, 32, 255);
+    let steel = rgba(108, 120, 136, 255);
+    let steel_dark = rgba(74, 84, 98, 255);
+    let steel_high = rgba(186, 198, 216, 255);
+    let mast_black = rgba(24, 28, 34, 255);
+    let mast_black_soft = rgba(38, 44, 54, 255);
+    let fork_black = rgba(14, 18, 24, 255);
+    let fork_edge = rgba(92, 106, 124, 210);
+    let cabin_tint = rgba(38, 52, 66, 230);
+    let tire = rgba(22, 26, 34, 255);
+    let rim = rgba(146, 156, 170, 255);
+
+    // Ground shadow and suspension wobble.
+    let wobble = (time * 5.4 + chariot.phase_anim).sin() * (0.16 + speed_ratio * 0.24);
+    draw_chariot_quad(
+        center + vec2(0.0, 2.2 + wobble * 0.5),
+        forward,
+        side,
+        -15.2,
+        16.8,
+        -10.3,
+        10.3,
+        with_alpha(palette.shadow_hard, 0.34),
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, 2.8),
+        forward,
+        side,
+        12.4,
+        20.8,
+        -5.6,
+        5.6,
+        with_alpha(palette.shadow_hard, 0.18 + chariot.fourche_hauteur * 0.14),
+    );
+    if speed_ratio > 0.12 {
+        for i in 0..3 {
+            let drift = (time * 1.35 + i as f32 * 0.31).fract();
+            let puff = chariot_point(
+                center + vec2(0.0, 0.8),
+                forward,
+                side,
+                -14.8 - drift * 2.6,
+                3.0 + i as f32 * 1.1,
+            );
+            draw_circle(
+                puff.x + side_unit.x * drift * 2.2,
+                puff.y - 1.0 - drift * 2.3,
+                0.9 + drift * 1.4,
+                with_alpha(rgba(84, 98, 114, 255), (0.16 * (1.0 - drift)) * speed_ratio),
+            );
+        }
+    }
+
+    // Wheels with front steering.
+    let rear_left = chariot_point(center, forward, side, -8.0, -8.2);
+    let rear_right = chariot_point(center, forward, side, -8.0, 8.2);
+    let front_left = chariot_point(center, forward, side, 8.4, -8.2);
+    let front_right = chariot_point(center, forward, side, 8.4, 8.2);
+    draw_chariot_wheel(rear_left, forward, side, tire, rim);
+    draw_chariot_wheel(rear_right, forward, side, tire, rim);
+    draw_chariot_wheel(front_left, front_wheel_forward, front_wheel_side, tire, rim);
+    draw_chariot_wheel(
+        front_right,
+        front_wheel_forward,
+        front_wheel_side,
+        tire,
+        rim,
+    );
+
+    // Main chassis and side skirts.
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -9.5,
+        10.4,
+        -7.0,
+        7.0,
+        yellow_main,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -10.2,
+        10.9,
+        -7.6,
+        -6.0,
+        yellow_dark,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -10.2,
+        10.9,
+        6.0,
+        7.6,
+        yellow_dark,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -2.8,
+        7.4,
+        -6.8,
+        -5.6,
+        rgba(248, 238, 214, 230),
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -2.8,
+        7.4,
+        5.6,
+        6.8,
+        rgba(248, 238, 214, 230),
+    );
+    draw_chariot_frame(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -3.1,
+        7.6,
+        -6.9,
+        -5.4,
+        0.7,
+        rgba(54, 42, 22, 205),
+    );
+    draw_chariot_frame(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -3.1,
+        7.6,
+        5.4,
+        6.9,
+        0.7,
+        rgba(54, 42, 22, 205),
+    );
+    draw_chariot_frame(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -9.6,
+        10.4,
+        -7.0,
+        7.0,
+        1.2,
+        rgba(58, 44, 18, 220),
+    );
+
+    // Rear counterweight with hazard stripes.
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -14.0,
+        -6.2,
+        -7.6,
+        7.6,
+        yellow_dark,
+    );
+    for i in 0..4 {
+        let stripe_f0 = -13.6 + i as f32 * 1.8;
+        draw_chariot_quad(
+            center + vec2(0.0, wobble),
+            forward,
+            side,
+            stripe_f0,
+            stripe_f0 + 0.8,
+            -6.9,
+            6.9,
+            rgba(34, 28, 22, 176),
+        );
+    }
+
+    // Cabin floor and overhead guard.
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -4.2,
+        5.2,
+        -5.3,
+        5.3,
+        steel_dark,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -2.0,
+        2.6,
+        -4.1,
+        4.1,
+        cabin_tint,
+    );
+    draw_chariot_frame(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -2.8,
+        3.0,
+        -5.4,
+        5.4,
+        1.1,
+        steel,
+    );
+    draw_chariot_frame(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        -2.8,
+        3.0,
+        -3.6,
+        3.6,
+        1.0,
+        steel_high,
+    );
+
+    // Mast rails and cross-beam.
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        8.5,
+        15.0,
+        -4.4,
+        -2.5,
+        mast_black,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        8.5,
+        15.0,
+        2.5,
+        4.4,
+        mast_black,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        9.0,
+        12.2,
+        -3.9,
+        3.9,
+        mast_black_soft,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        11.0,
+        12.1,
+        -5.0,
+        5.0,
+        mast_black_soft,
+    );
+    draw_chariot_quad(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        9.4,
+        14.6,
+        -0.8,
+        0.8,
+        mast_black,
+    );
+    draw_chariot_frame(
+        center + vec2(0.0, wobble),
+        forward,
+        side,
+        9.5,
+        14.7,
+        -1.0,
+        1.0,
+        0.7,
+        with_alpha(fork_edge, 0.65),
+    );
+
+    // Black carriage + 2 parallel black forks with lift animation.
+    let fourche_center = center + fourche_offset;
+    draw_chariot_quad(
+        fourche_center,
+        forward,
+        side,
+        12.6,
+        14.1,
+        -5.9,
+        5.9,
+        mast_black_soft,
+    );
+    draw_chariot_quad(
+        fourche_center,
+        forward,
+        side,
+        13.4,
+        23.4,
+        -4.85,
+        -3.35,
+        fork_black,
+    );
+    draw_chariot_quad(
+        fourche_center,
+        forward,
+        side,
+        13.4,
+        23.4,
+        3.35,
+        4.85,
+        fork_black,
+    );
+    draw_chariot_quad(
+        fourche_center,
+        forward,
+        side,
+        13.15,
+        14.0,
+        -5.15,
+        5.15,
+        mast_black,
+    );
+    draw_chariot_frame(
+        fourche_center,
+        forward,
+        side,
+        13.3,
+        23.5,
+        -5.0,
+        5.0,
+        0.85,
+        with_alpha(fork_edge, 0.56),
+    );
+
+    // Front and rear lights.
+    let front_light = chariot_point(center + vec2(0.0, wobble), forward, side, 10.8, 0.0);
+    draw_circle(
+        front_light.x,
+        front_light.y,
+        1.9 + (moving as i32 as f32) * 0.25,
+        rgba(255, 244, 186, 255),
+    );
+    draw_circle(
+        front_light.x,
+        front_light.y,
+        3.1,
+        with_alpha(rgba(255, 214, 138, 255), 0.3 + speed_ratio * 0.12),
+    );
+    let front_glow_radius = 7.5 + speed_ratio * 4.6;
+    draw_circle(
+        front_light.x + forward_unit.x * 1.9,
+        front_light.y + forward_unit.y * 1.9,
+        front_glow_radius,
+        with_alpha(rgba(255, 224, 176, 255), 0.05 + speed_ratio * 0.08),
+    );
+    let rear_light_left = chariot_point(center + vec2(0.0, wobble), forward, side, -13.1, -4.3);
+    let rear_light_right = chariot_point(center + vec2(0.0, wobble), forward, side, -13.1, 4.3);
+    draw_circle(
+        rear_light_left.x,
+        rear_light_left.y,
+        1.2,
+        rgba(216, 62, 52, 255),
+    );
+    draw_circle(
+        rear_light_right.x,
+        rear_light_right.y,
+        1.2,
+        rgba(216, 62, 52, 255),
+    );
+
+    // Roof beacon (active only when driving).
+    let beacon = chariot_point(center + vec2(0.0, wobble), forward, side, -0.4, 0.0);
+    draw_circle(
+        beacon.x,
+        beacon.y - 7.2 + wobble,
+        1.65,
+        rgba(24, 28, 34, 255),
+    );
+    if chariot.pilote_a_bord {
+        let beacon_pulse = ((time * 6.0 + chariot.phase_anim).sin() * 0.5 + 0.5).powf(1.4);
+        draw_circle(
+            beacon.x,
+            beacon.y - 7.2 + wobble,
+            1.35,
+            rgba(238, 194, 62, 255),
+        );
+        draw_circle(
+            beacon.x,
+            beacon.y - 7.2 + wobble,
+            3.2 + beacon_pulse * 2.4,
+            with_alpha(rgba(252, 216, 88, 255), 0.18 + beacon_pulse * 0.17),
+        );
+    }
+
+    // Driver silhouette when boarded.
+    if chariot.pilote_a_bord {
+        draw_chariot_quad(
+            center + vec2(0.0, wobble),
+            forward,
+            side,
+            -1.4,
+            1.6,
+            -2.1,
+            2.1,
+            rgba(56, 92, 132, 255),
+        );
+        let head = chariot_point(center + vec2(0.0, wobble), forward, side, -0.7, 0.0);
+        draw_circle(
+            head.x,
+            head.y - 2.8 + wobble * 0.6,
+            1.85,
+            rgba(220, 188, 156, 255),
+        );
+        draw_circle(
+            head.x + side.x * 0.7,
+            head.y + side.y * 0.7 - 3.6,
+            0.7,
+            rgba(32, 28, 24, 255),
+        );
+    }
+
+    // Carried cargo rendered above forks.
+    if let Some(kind) = chariot.caisse_chargee {
+        let cargo_center = chariot_point(fourche_center, forward, side, 17.2, 0.0);
+        let bob = (time * 3.2 + chariot.phase_anim).sin() * 0.3;
+        let (fill, edge) = chariot_cargo_colors(kind);
+        let cargo_scale = 1.0 + chariot.fourche_hauteur * 0.12;
+        let cargo_f = 2.9 * cargo_scale;
+        let cargo_s = 3.2 * cargo_scale;
+        draw_chariot_quad(
+            chariot_point(center + vec2(0.0, 1.9), forward, side, 17.2, 0.0),
+            forward,
+            side,
+            -cargo_f,
+            cargo_f,
+            -cargo_s,
+            cargo_s,
+            with_alpha(palette.shadow_hard, 0.16 + chariot.fourche_hauteur * 0.2),
+        );
+        draw_chariot_quad(
+            cargo_center + vec2(0.0, bob),
+            forward,
+            side,
+            -cargo_f,
+            cargo_f,
+            -cargo_s,
+            cargo_s,
+            fill,
+        );
+        draw_chariot_frame(
+            cargo_center + vec2(0.0, bob),
+            forward,
+            side,
+            -cargo_f,
+            cargo_f,
+            -cargo_s,
+            cargo_s,
+            1.0,
+            edge,
+        );
+        draw_chariot_quad(
+            cargo_center + vec2(0.0, bob),
+            forward,
+            side,
+            -3.2,
+            3.2,
+            -0.45,
+            0.45,
+            with_alpha(edge, 0.68),
+        );
+    }
+
+    if debug {
+        let front = chariot_point(center, forward, side, 22.0, 0.0);
+        draw_line(
+            center.x,
+            center.y,
+            front.x,
+            front.y,
+            1.3,
+            Color::from_rgba(252, 228, 122, 230),
+        );
+        let steer_front = chariot_point(center, forward, side, 9.6, 0.0);
+        let steer_tip = chariot_point(steer_front, front_wheel_forward, front_wheel_side, 6.0, 0.0);
+        draw_line(
+            steer_front.x,
+            steer_front.y,
+            steer_tip.x,
+            steer_tip.y,
+            1.1,
+            Color::from_rgba(170, 236, 255, 225),
+        );
+    }
+}
+
+pub(crate) fn draw_chargeur_clark(
+    chargeur: &ChargeurClark,
+    chariot: &ChariotElevateur,
+    player_pos: Vec2,
+    palette: &Palette,
+    time: f32,
+    debug: bool,
+) {
+    let base = chargeur.base_pos;
+    let beacon_pulse = ((time * 2.8).sin() * 0.5 + 0.5).powf(1.25);
+    let body_w = 22.0;
+    let body_h = 26.0;
+    let base_rect = Rect::new(base.x - body_w * 0.5, base.y - body_h * 0.5, body_w, body_h);
+
+    // Accessibility cue: subtle glow ring so the charger is easy to spot.
+    draw_circle(
+        base.x,
+        base.y + 1.0,
+        19.0 + beacon_pulse * 3.8,
+        with_alpha(rgba(86, 188, 218, 255), 0.08 + beacon_pulse * 0.08),
+    );
+    draw_circle_lines(
+        base.x,
+        base.y + 1.0,
+        14.0 + beacon_pulse * 2.0,
+        1.0,
+        with_alpha(rgba(120, 210, 236, 255), 0.24),
+    );
+
+    draw_rectangle(
+        base_rect.x + 1.8,
+        base_rect.y + body_h - 4.0,
+        body_w - 2.8,
+        5.0,
+        with_alpha(palette.shadow_hard, 0.35),
+    );
+    draw_rectangle(
+        base_rect.x,
+        base_rect.y,
+        body_w,
+        body_h,
+        rgba(26, 30, 38, 255),
+    );
+    draw_rectangle(
+        base_rect.x + 2.0,
+        base_rect.y + 2.0,
+        body_w - 4.0,
+        body_h * 0.44,
+        rgba(42, 52, 66, 250),
+    );
+    draw_rectangle_lines(
+        base_rect.x + 0.5,
+        base_rect.y + 0.5,
+        body_w - 1.0,
+        body_h - 1.0,
+        1.0,
+        rgba(122, 142, 168, 182),
+    );
+
+    let led_col = if chargeur.cable_branche && chariot.est_en_charge {
+        let pulse = (time * 4.5).sin() * 0.5 + 0.5;
+        color_lerp(rgba(84, 196, 116, 255), rgba(168, 242, 176, 255), pulse)
+    } else {
+        color_lerp(
+            rgba(124, 138, 154, 255),
+            rgba(156, 206, 224, 255),
+            beacon_pulse * 0.45,
+        )
+    };
+    draw_circle(base_rect.x + body_w - 5.0, base_rect.y + 5.0, 1.9, led_col);
+
+    let cable_start = chargeur.point_prise();
+    let (forward, side) = chariot_basis_vectors(chariot.heading_rad);
+    let chariot_socket = chariot_point(
+        chariot.pos,
+        forward * CHARIOT_VISUAL_SCALE,
+        side * CHARIOT_VISUAL_SCALE,
+        -12.5,
+        5.8,
+    );
+    let cable_end = if chargeur.cable_branche {
+        chariot_socket
+    } else if chargeur.cable_tenu {
+        player_pos + vec2(0.0, -8.5)
+    } else {
+        cable_start + vec2(2.0, 9.0)
+    };
+
+    let cable_vec = cable_end - cable_start;
+    let cable_len = cable_vec.length();
+    if cable_len > 0.1 {
+        let steps = ((cable_len / 12.0).ceil() as i32).clamp(4, 22) as usize;
+        let sag = (8.0 + (cable_len / 28.0).clamp(0.0, 14.0)).min(18.0);
+        let mut prev = cable_start;
+        for i in 1..=steps {
+            let t = i as f32 / steps as f32;
+            let mut p = cable_start + cable_vec * t;
+            let arc = (t * (1.0 - t)) * 4.0;
+            p.y += sag * arc;
+            draw_line(prev.x, prev.y, p.x, p.y, 3.2, rgba(8, 10, 14, 246));
+            draw_line(prev.x, prev.y, p.x, p.y, 1.2, rgba(84, 96, 112, 205));
+            prev = p;
+        }
+    }
+
+    draw_circle(cable_end.x, cable_end.y, 2.1, rgba(18, 20, 24, 255));
+    draw_circle(cable_end.x, cable_end.y, 1.05, rgba(138, 152, 170, 232));
+
+    if debug {
+        draw_circle_lines(
+            base.x,
+            base.y,
+            CHARGEUR_INTERACTION_RADIUS,
+            1.0,
+            rgba(112, 186, 212, 120),
+        );
+    }
 }
 
 pub(crate) fn set_floor_tile_textures(floor: Option<Texture2D>, floor_metal: Option<Texture2D>) {
@@ -68,6 +844,132 @@ pub(crate) fn set_storage_raw_texture(texture: Option<Texture2D>) {
 
 fn storage_raw_texture() -> Option<Texture2D> {
     STORAGE_RAW_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_broken_garlic_crate_texture(texture: Option<Texture2D>) {
+    BROKEN_GARLIC_CRATE_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn broken_garlic_crate_texture() -> Option<Texture2D> {
+    BROKEN_GARLIC_CRATE_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_box_carton_vide_texture(texture: Option<Texture2D>) {
+    BOX_CARTON_VIDE_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn box_carton_vide_texture() -> Option<Texture2D> {
+    BOX_CARTON_VIDE_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_box_sac_bleu_texture(texture: Option<Texture2D>) {
+    BOX_SAC_BLEU_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn box_sac_bleu_texture() -> Option<Texture2D> {
+    BOX_SAC_BLEU_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_box_sac_rouge_texture(texture: Option<Texture2D>) {
+    BOX_SAC_ROUGE_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn box_sac_rouge_texture() -> Option<Texture2D> {
+    BOX_SAC_ROUGE_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_box_sac_vert_texture(texture: Option<Texture2D>) {
+    BOX_SAC_VERT_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn box_sac_vert_texture() -> Option<Texture2D> {
+    BOX_SAC_VERT_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_palette_logistique_texture(texture: Option<Texture2D>) {
+    PALETTE_LOGISTIQUE_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn palette_logistique_texture() -> Option<Texture2D> {
+    PALETTE_LOGISTIQUE_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_bureau_pc_on_texture(texture: Option<Texture2D>) {
+    BUREAU_PC_ON_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn bureau_pc_on_texture() -> Option<Texture2D> {
+    BUREAU_PC_ON_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_bureau_pc_off_texture(texture: Option<Texture2D>) {
+    BUREAU_PC_OFF_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn bureau_pc_off_texture() -> Option<Texture2D> {
+    BUREAU_PC_OFF_TEXTURE.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_lavabo_texture(texture: Option<Texture2D>) {
+    LAVABO_TEXTURE.with(|slot| {
+        let prepared = texture;
+        if let Some(tex) = prepared.as_ref() {
+            tex.set_filter(FilterMode::Nearest);
+        }
+        *slot.borrow_mut() = prepared;
+    });
+}
+
+fn lavabo_texture() -> Option<Texture2D> {
+    LAVABO_TEXTURE.with(|slot| slot.borrow().clone())
 }
 
 pub(crate) fn set_main_menu_background_texture(texture: Option<Texture2D>) {
@@ -226,68 +1128,215 @@ pub(crate) fn draw_background(palette: &Palette, time: f32) {
     );
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum TypeArbreExterieur {
+    Chene,
+    Peuplier,
+    Pin,
+}
+
+const EXTERIOR_TREE_SCALE_MULTIPLIER: f32 = 3.0;
+
+fn tile_is_exterior_ground(world: &World, x: i32, y: i32, tile: Tile) -> bool {
+    if !tile_is_floor(tile) {
+        return false;
+    }
+    if x <= 1 || y <= 1 || x >= world.w - 2 || y >= world.h - 2 {
+        return false;
+    }
+    let (fx0, fx1, fy0, fy1) = starter_factory_bounds(world.w, world.h);
+    !(x >= fx0 - 2 && x <= fx1 + 2 && y >= fy0 - 2 && y <= fy1 + 2)
+}
+
+fn tile_in_logistics_lane(world: &World, x: i32, y: i32) -> bool {
+    let (fx0, fx1, fy0, fy1) = starter_factory_bounds(world.w, world.h);
+    let span_y = (fy1 - fy0).max(6);
+    let road_y = clamp_i32(fy0 + span_y / 2, fy0 + 2, fy1 - 2);
+    let ship_y = clamp_i32(fy0 + (span_y * 3) / 4, fy0 + 2, fy1 - 2);
+    let south_door_x = (fx0 + fx1) / 2;
+
+    ((y - road_y).abs() <= 2 && x <= fx0 + 10)
+        || ((y - ship_y).abs() <= 2 && x >= fx1 - 10)
+        || ((x - south_door_x).abs() <= 2 && y >= fy1 - 1)
+}
+
+fn exterior_tree_type_for_tile(
+    world: &World,
+    x: i32,
+    y: i32,
+    tile: Tile,
+) -> Option<TypeArbreExterieur> {
+    if !matches!(tile, Tile::Floor | Tile::FloorMoss | Tile::FloorSand) {
+        return None;
+    }
+    if !tile_is_exterior_ground(world, x, y, tile) || tile_in_logistics_lane(world, x, y) {
+        return None;
+    }
+
+    const TREE_CELL_SIZE: i32 = 5;
+    let cell_x = x.div_euclid(TREE_CELL_SIZE);
+    let cell_y = y.div_euclid(TREE_CELL_SIZE);
+    let cell_hash = hash_with_salt(cell_x, cell_y, 0xD19C);
+
+    if cell_hash % 100 >= 84 {
+        return None;
+    }
+
+    let local_x = (cell_hash % TREE_CELL_SIZE as u32) as i32;
+    let local_y = ((cell_hash >> 3) % TREE_CELL_SIZE as u32) as i32;
+    let anchor_x = cell_x * TREE_CELL_SIZE + local_x;
+    let anchor_y = cell_y * TREE_CELL_SIZE + local_y;
+    if x != anchor_x || y != anchor_y {
+        return None;
+    }
+
+    Some(match (cell_hash >> 7) % 3 {
+        0 => TypeArbreExterieur::Chene,
+        1 => TypeArbreExterieur::Peuplier,
+        _ => TypeArbreExterieur::Pin,
+    })
+}
+
+fn draw_exterior_tree(kind: TypeArbreExterieur, x: i32, y: i32, palette: &Palette, time: f32) {
+    let rect = World::tile_rect(x, y);
+    let h = hash_with_salt(x, y, 0xB77A);
+    let jitter_x = ((h & 0x7) as f32 - 3.5) * 0.45;
+    let jitter_y = (((h >> 3) & 0x7) as f32 - 3.5) * 0.38;
+    let scale = (0.88 + ((h >> 7) & 0x3) as f32 * 0.11) * EXTERIOR_TREE_SCALE_MULTIPLIER;
+    let sway = (time * 0.52 + h as f32 * 0.013).sin() * (0.42 + ((h >> 9) & 0x3) as f32 * 0.08);
+
+    let base_x = rect.x + rect.w * 0.5 + jitter_x;
+    let base_y = rect.y + rect.h * 0.58 + jitter_y;
+
+    draw_circle(
+        base_x + 2.8,
+        base_y + 11.2,
+        8.6 * scale,
+        with_alpha(palette.shadow_hard, 0.30),
+    );
+
+    let trunk_dark = rgba(78, 58, 38, 255);
+    let trunk_light = rgba(114, 86, 57, 220);
+    draw_rectangle(
+        base_x - 2.3 * scale,
+        base_y + 1.7 * scale,
+        4.6 * scale,
+        10.8 * scale,
+        trunk_dark,
+    );
+    draw_rectangle(
+        base_x - 0.9 * scale,
+        base_y + 2.2 * scale,
+        1.8 * scale,
+        8.9 * scale,
+        trunk_light,
+    );
+
+    match kind {
+        TypeArbreExterieur::Chene => {
+            let leaf_dark = rgba(42, 108, 58, 255);
+            let leaf_mid = rgba(64, 136, 78, 255);
+            let leaf_light = rgba(118, 186, 106, 255);
+            draw_circle(
+                base_x - 5.8 + sway * 0.35,
+                base_y - 2.0,
+                6.8 * scale,
+                leaf_dark,
+            );
+            draw_circle(
+                base_x + 5.3 + sway * 0.48,
+                base_y - 2.6,
+                6.3 * scale,
+                leaf_mid,
+            );
+            draw_circle(
+                base_x + 0.8 + sway * 0.32,
+                base_y - 6.2,
+                7.5 * scale,
+                leaf_mid,
+            );
+            draw_circle(
+                base_x - 1.1 + sway * 0.58,
+                base_y - 4.4,
+                4.2 * scale,
+                with_alpha(leaf_light, 0.82),
+            );
+        }
+        TypeArbreExterieur::Peuplier => {
+            let leaf_dark = rgba(38, 94, 56, 255);
+            let leaf_mid = rgba(62, 132, 80, 255);
+            let leaf_light = rgba(126, 190, 122, 255);
+            draw_circle(base_x + sway * 0.24, base_y - 8.0, 4.7 * scale, leaf_dark);
+            draw_circle(base_x + sway * 0.28, base_y - 3.1, 5.3 * scale, leaf_mid);
+            draw_circle(base_x + sway * 0.31, base_y + 2.2, 4.9 * scale, leaf_mid);
+            draw_circle(
+                base_x + sway * 0.18,
+                base_y - 5.2,
+                2.3 * scale,
+                with_alpha(leaf_light, 0.84),
+            );
+        }
+        TypeArbreExterieur::Pin => {
+            let leaf_dark = rgba(36, 88, 54, 255);
+            let leaf_mid = rgba(46, 112, 66, 255);
+            let leaf_light = rgba(92, 158, 98, 235);
+            draw_triangle(
+                vec2(base_x + sway * 0.44, base_y - 11.0 * scale),
+                vec2(base_x - 6.2 * scale + sway * 0.22, base_y - 2.2 * scale),
+                vec2(base_x + 6.2 * scale + sway * 0.22, base_y - 2.2 * scale),
+                leaf_dark,
+            );
+            draw_triangle(
+                vec2(base_x + sway * 0.34, base_y - 7.0 * scale),
+                vec2(base_x - 7.2 * scale + sway * 0.28, base_y + 1.4 * scale),
+                vec2(base_x + 7.2 * scale + sway * 0.28, base_y + 1.4 * scale),
+                leaf_mid,
+            );
+            draw_triangle(
+                vec2(base_x + sway * 0.28, base_y - 3.8 * scale),
+                vec2(base_x - 8.0 * scale + sway * 0.35, base_y + 5.8 * scale),
+                vec2(base_x + 8.0 * scale + sway * 0.35, base_y + 5.8 * scale),
+                leaf_light,
+            );
+        }
+    }
+}
+
 pub(crate) fn draw_floor_tile(
     x: i32,
     y: i32,
     tile: Tile,
     palette: &Palette,
-    floor_texture: Option<&Texture2D>,
-    floor_metal_texture: Option<&Texture2D>,
+    _floor_texture: Option<&Texture2D>,
+    _floor_metal_texture: Option<&Texture2D>,
+    exterior_hint: bool,
 ) {
     let rect = World::tile_rect(x, y);
     let h = tile_hash(x, y);
 
-    let mapped_texture = match tile {
-        Tile::Floor => floor_texture,
-        Tile::FloorMetal => floor_metal_texture,
-        _ => None,
-    };
-
-    if let Some(texture) = mapped_texture {
-        draw_texture_ex(
-            texture,
-            rect.x,
-            rect.y,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(rect.w, rect.h)),
-                ..Default::default()
-            },
-        );
-        let grime_strength = 0.02 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 380.0);
-        draw_rectangle(
-            rect.x,
-            rect.y,
-            rect.w,
-            rect.h,
-            with_alpha(palette.floor_grime, grime_strength),
-        );
-        return;
-    }
-
-    let (base_a, base_b, panel_tint) = match tile {
-        Tile::Floor => (palette.floor_a, palette.floor_b, palette.floor_panel),
+    let (base_a, base_b) = match tile {
+        Tile::Floor if exterior_hint => (
+            color_lerp(rgba(86, 130, 76, 255), rgba(104, 146, 86, 255), 0.35),
+            color_lerp(rgba(74, 116, 66, 255), rgba(94, 136, 82, 255), 0.35),
+        ),
+        Tile::Floor => (palette.floor_a, palette.floor_b),
         Tile::FloorMetal => (
             color_lerp(palette.floor_b, palette.wall_mid, 0.35),
             color_lerp(palette.floor_c, palette.wall_dark, 0.45),
-            with_alpha(palette.prop_pipe_highlight, 0.75),
         ),
         Tile::FloorWood => (
             color_lerp(palette.prop_crate_light, palette.prop_crate_dark, 0.18),
             color_lerp(palette.prop_crate_dark, palette.wall_dark, 0.28),
-            with_alpha(palette.prop_crate_light, 0.62),
         ),
         Tile::FloorMoss => (
-            color_lerp(palette.floor_a, rgba(58, 96, 76, 255), 0.55),
-            color_lerp(palette.floor_c, rgba(42, 71, 58, 255), 0.5),
-            with_alpha(rgba(118, 172, 132, 255), 0.42),
+            color_lerp(rgba(66, 112, 82, 255), rgba(92, 146, 96, 255), 0.42),
+            color_lerp(rgba(52, 88, 64, 255), rgba(76, 120, 80, 255), 0.44),
         ),
         Tile::FloorSand => (
-            color_lerp(rgba(138, 124, 92, 255), palette.floor_b, 0.28),
-            color_lerp(rgba(122, 107, 81, 255), palette.floor_c, 0.28),
-            with_alpha(rgba(188, 164, 126, 255), 0.46),
+            color_lerp(rgba(132, 120, 88, 255), rgba(98, 130, 80, 255), 0.42),
+            color_lerp(rgba(118, 104, 78, 255), rgba(84, 116, 70, 255), 0.38),
         ),
-        _ => (palette.floor_a, palette.floor_b, palette.floor_panel),
+        _ => (palette.floor_a, palette.floor_b),
     };
 
     let base = match h % 3 {
@@ -297,69 +1346,85 @@ pub(crate) fn draw_floor_tile(
     };
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
 
+    let tile_edge = if exterior_hint {
+        color_lerp(palette.floor_edge, rgba(44, 88, 54, 190), 0.64)
+    } else {
+        palette.floor_edge
+    };
     draw_rectangle_lines(
         rect.x + 0.5,
         rect.y + 0.5,
         rect.w - 1.0,
         rect.h - 1.0,
         1.0,
-        palette.floor_edge,
+        tile_edge,
     );
 
-    if h & 1 == 0 {
-        draw_line(
-            rect.x + 4.0,
-            rect.y + rect.h * 0.5,
-            rect.x + rect.w - 4.0,
-            rect.y + rect.h * 0.5,
-            1.0,
-            panel_tint,
-        );
-    } else {
-        draw_line(
-            rect.x + rect.w * 0.5,
-            rect.y + 4.0,
-            rect.x + rect.w * 0.5,
-            rect.y + rect.h - 4.0,
-            1.0,
-            panel_tint,
+    // Variation douce et homogène, sans symboles ni traits marqués.
+    let soft_a = with_alpha(color_lerp(base_a, base_b, 0.66), 0.12);
+    let soft_b = with_alpha(color_lerp(base_b, base_a, 0.42), 0.10);
+    draw_circle(
+        rect.x + 8.0 + (h & 3) as f32,
+        rect.y + 10.0 + ((h >> 2) & 3) as f32,
+        2.6,
+        soft_a,
+    );
+    if h.is_multiple_of(3) {
+        draw_circle(
+            rect.x + 20.0 - ((h >> 3) & 3) as f32,
+            rect.y + 21.0 - ((h >> 5) & 2) as f32,
+            2.0,
+            soft_b,
         );
     }
 
-    if h.is_multiple_of(7) {
-        draw_line(
-            rect.x + 8.0,
-            rect.y + 9.0,
-            rect.x + rect.w - 9.0,
-            rect.y + rect.h - 8.0,
-            1.0,
-            with_alpha(panel_tint, 0.32),
-        );
+    match tile {
+        Tile::FloorSand => {
+            draw_circle(
+                rect.x + 13.0 + ((h >> 1) & 2) as f32,
+                rect.y + 15.0 + ((h >> 4) & 2) as f32,
+                1.0,
+                with_alpha(rgba(124, 136, 98, 255), 0.26),
+            );
+            draw_circle(
+                rect.x + 18.0 - ((h >> 2) & 2) as f32,
+                rect.y + 9.0 + ((h >> 5) & 2) as f32,
+                0.9,
+                with_alpha(rgba(116, 128, 92, 255), 0.22),
+            );
+        }
+        Tile::FloorMoss => {
+            let moss = with_alpha(rgba(100, 154, 104, 255), 0.22);
+            draw_circle(
+                rect.x + 9.0 + (h & 3) as f32,
+                rect.y + 10.0 + ((h >> 2) & 3) as f32,
+                3.0,
+                moss,
+            );
+            if h.is_multiple_of(4) {
+                draw_circle(
+                    rect.x + 20.0 - (h & 2) as f32,
+                    rect.y + 18.0 - ((h >> 3) & 2) as f32,
+                    2.2,
+                    with_alpha(rgba(82, 132, 92, 255), 0.22),
+                );
+            }
+        }
+        Tile::FloorWood => {
+            let warm = with_alpha(rgba(184, 154, 110, 255), 0.11);
+            draw_rectangle(rect.x + 2.0, rect.y + 6.0, rect.w - 4.0, 7.0, warm);
+            draw_rectangle(
+                rect.x + 2.0,
+                rect.y + 19.0,
+                rect.w - 4.0,
+                7.0,
+                with_alpha(warm, 0.7),
+            );
+        }
+        _ => {}
     }
 
-    if h.is_multiple_of(5) {
-        draw_circle(rect.x + 5.0, rect.y + 5.0, 1.2, palette.floor_rivet);
-        draw_circle(
-            rect.x + rect.w - 5.0,
-            rect.y + 5.0,
-            1.2,
-            palette.floor_rivet,
-        );
-        draw_circle(
-            rect.x + 5.0,
-            rect.y + rect.h - 5.0,
-            1.2,
-            palette.floor_rivet,
-        );
-        draw_circle(
-            rect.x + rect.w - 5.0,
-            rect.y + rect.h - 5.0,
-            1.2,
-            palette.floor_rivet,
-        );
-    }
-
-    let grime_strength = 0.04 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 255.0);
+    let grime_strength = 0.03 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 320.0);
     draw_rectangle(
         rect.x,
         rect.y,
@@ -379,6 +1444,7 @@ pub(crate) fn draw_floor_layer_region(
         for x in bounds.0..=bounds.1 {
             let tile = world.get(x, y);
             if tile_is_floor(tile) {
+                let exterior_hint = tile_is_exterior_ground(world, x, y, tile);
                 draw_floor_tile(
                     x,
                     y,
@@ -386,7 +1452,87 @@ pub(crate) fn draw_floor_layer_region(
                     palette,
                     floor_textures.floor.as_ref(),
                     floor_textures.floor_metal.as_ref(),
+                    exterior_hint,
                 );
+            }
+        }
+    }
+}
+
+pub(crate) fn draw_exterior_ground_ambiance_region(
+    world: &World,
+    _palette: &Palette,
+    time: f32,
+    bounds: (i32, i32, i32, i32),
+) {
+    for y in bounds.2..=bounds.3 {
+        for x in bounds.0..=bounds.1 {
+            let tile = world.get(x, y);
+            if !tile_is_exterior_ground(world, x, y, tile) {
+                continue;
+            }
+
+            let rect = World::tile_rect(x, y);
+            let h = hash_with_salt(x, y, 0x8F51);
+            if h % 100 < 44 {
+                let sway = (time * 0.9 + h as f32 * 0.021).sin() * 0.9;
+                let blade_a = with_alpha(rgba(122, 184, 114, 255), 0.28);
+                let blade_b = with_alpha(rgba(96, 154, 94, 255), 0.26);
+                draw_line(
+                    rect.x + 6.0 + (h & 3) as f32,
+                    rect.y + 24.5,
+                    rect.x + 6.8 + (h & 3) as f32 + sway * 0.2,
+                    rect.y + 19.2,
+                    1.0,
+                    blade_a,
+                );
+                draw_line(
+                    rect.x + 14.0 + ((h >> 2) & 3) as f32,
+                    rect.y + 24.8,
+                    rect.x + 14.4 + ((h >> 2) & 3) as f32 - sway * 0.22,
+                    rect.y + 19.6,
+                    1.0,
+                    blade_b,
+                );
+                if h.is_multiple_of(7) {
+                    draw_line(
+                        rect.x + 21.0,
+                        rect.y + 24.3,
+                        rect.x + 21.6 + sway * 0.16,
+                        rect.y + 19.4,
+                        1.0,
+                        blade_a,
+                    );
+                }
+            }
+            if h % 100 < 14 {
+                let flower = if h & 1 == 0 {
+                    rgba(236, 224, 148, 255)
+                } else {
+                    rgba(196, 220, 248, 255)
+                };
+                draw_circle(
+                    rect.x + 11.0 + ((h >> 1) & 3) as f32,
+                    rect.y + 14.0 + ((h >> 4) & 3) as f32,
+                    0.9,
+                    with_alpha(flower, 0.66),
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn draw_exterior_trees_region(
+    world: &World,
+    palette: &Palette,
+    time: f32,
+    bounds: (i32, i32, i32, i32),
+) {
+    for y in bounds.2..=bounds.3 {
+        for x in bounds.0..=bounds.1 {
+            let tile = world.get(x, y);
+            if let Some(tree_type) = exterior_tree_type_for_tile(world, x, y, tile) {
+                draw_exterior_tree(tree_type, x, y, palette, time);
             }
         }
     }
@@ -633,7 +1779,13 @@ pub(crate) fn draw_prop_shadows_region(
         let y = prop.tile_y as f32 * TILE_SIZE;
 
         match prop.kind {
-            PropKind::Crate => {
+            PropKind::Crate
+            | PropKind::BoxCartonVide
+            | PropKind::BoxSacBleu
+            | PropKind::BoxSacRouge
+            | PropKind::BoxSacVert
+            | PropKind::CaisseAilBrut
+            | PropKind::CaisseAilCasse => {
                 draw_circle(
                     x + 17.0,
                     y + 25.5,
@@ -685,6 +1837,32 @@ pub(crate) fn draw_prop_shadows_region(
                     with_alpha(palette.shadow_hard, 0.31),
                 );
             }
+            PropKind::PaletteLogistique => {
+                draw_rectangle(
+                    x + 4.0,
+                    y + 23.0,
+                    24.0,
+                    5.0,
+                    with_alpha(palette.shadow_hard, 0.33),
+                );
+            }
+            PropKind::BureauPcOn | PropKind::BureauPcOff => {
+                draw_rectangle(
+                    x + 3.0,
+                    y + 22.0,
+                    26.0,
+                    6.0,
+                    with_alpha(palette.shadow_hard, 0.34),
+                );
+            }
+            PropKind::Lavabo => {
+                draw_circle(
+                    x + 16.0,
+                    y + 23.5,
+                    7.0,
+                    with_alpha(palette.shadow_hard, 0.30),
+                );
+            }
             PropKind::Crystal => {
                 let pulse = ((time * 1.7 + prop.phase).sin() * 0.5 + 0.5) * 0.25 + 0.75;
                 draw_circle(
@@ -705,6 +1883,16 @@ pub(crate) fn draw_props_region(
     bounds: (i32, i32, i32, i32),
 ) {
     let pot_texture = pot_de_fleur_texture();
+    let box_carton_vide_texture = box_carton_vide_texture();
+    let box_sac_bleu_texture = box_sac_bleu_texture();
+    let box_sac_rouge_texture = box_sac_rouge_texture();
+    let box_sac_vert_texture = box_sac_vert_texture();
+    let palette_logistique_texture = palette_logistique_texture();
+    let bureau_pc_on_texture = bureau_pc_on_texture();
+    let bureau_pc_off_texture = bureau_pc_off_texture();
+    let caisse_ail_brut_texture = storage_raw_texture();
+    let caisse_ail_casse_texture = broken_garlic_crate_texture();
+    let lavabo_texture = lavabo_texture();
     for prop in props {
         if !tile_in_bounds((prop.tile_x, prop.tile_y), bounds) {
             continue;
@@ -714,25 +1902,156 @@ pub(crate) fn draw_props_region(
 
         match prop.kind {
             PropKind::Crate => {
-                draw_rectangle(x + 6.0, y + 8.0, 20.0, 18.0, palette.prop_crate_dark);
-                draw_rectangle(x + 8.0, y + 10.0, 16.0, 14.0, palette.prop_crate_light);
-                draw_line(
-                    x + 8.0,
-                    y + 10.0,
-                    x + 24.0,
-                    y + 24.0,
-                    1.0,
-                    palette.wall_outline,
-                );
-                draw_line(
-                    x + 24.0,
-                    y + 10.0,
-                    x + 8.0,
-                    y + 24.0,
-                    1.0,
-                    palette.wall_outline,
-                );
-                draw_rectangle_lines(x + 6.5, y + 8.5, 19.0, 17.0, 1.0, palette.wall_outline);
+                if let Some(texture) = box_carton_vide_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 7.0, 22.0, 22.0);
+                } else {
+                    draw_rectangle(x + 6.0, y + 8.0, 20.0, 18.0, palette.prop_crate_dark);
+                    draw_rectangle(x + 8.0, y + 10.0, 16.0, 14.0, palette.prop_crate_light);
+                    draw_line(
+                        x + 8.0,
+                        y + 10.0,
+                        x + 24.0,
+                        y + 24.0,
+                        1.0,
+                        palette.wall_outline,
+                    );
+                    draw_line(
+                        x + 24.0,
+                        y + 10.0,
+                        x + 8.0,
+                        y + 24.0,
+                        1.0,
+                        palette.wall_outline,
+                    );
+                    draw_rectangle_lines(x + 6.5, y + 8.5, 19.0, 17.0, 1.0, palette.wall_outline);
+                }
+            }
+            PropKind::BoxCartonVide => {
+                if let Some(texture) = box_carton_vide_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 7.0, 22.0, 22.0);
+                } else {
+                    draw_rectangle(
+                        x + 6.0,
+                        y + 8.0,
+                        20.0,
+                        18.0,
+                        color_lerp(palette.prop_crate_dark, palette.wall_dark, 0.18),
+                    );
+                    draw_rectangle_lines(x + 6.5, y + 8.5, 19.0, 17.0, 1.0, palette.wall_outline);
+                }
+            }
+            PropKind::BoxSacBleu => {
+                if let Some(texture) = box_sac_bleu_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 7.0, 22.0, 22.0);
+                } else {
+                    draw_rectangle(x + 6.0, y + 8.0, 20.0, 18.0, rgba(70, 120, 182, 255));
+                    draw_rectangle_lines(
+                        x + 6.5,
+                        y + 8.5,
+                        19.0,
+                        17.0,
+                        1.0,
+                        Color::from_rgba(190, 225, 252, 180),
+                    );
+                }
+            }
+            PropKind::BoxSacRouge => {
+                if let Some(texture) = box_sac_rouge_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 7.0, 22.0, 22.0);
+                } else {
+                    draw_rectangle(x + 6.0, y + 8.0, 20.0, 18.0, rgba(176, 82, 74, 255));
+                    draw_rectangle_lines(
+                        x + 6.5,
+                        y + 8.5,
+                        19.0,
+                        17.0,
+                        1.0,
+                        Color::from_rgba(248, 210, 206, 180),
+                    );
+                }
+            }
+            PropKind::BoxSacVert => {
+                if let Some(texture) = box_sac_vert_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 7.0, 22.0, 22.0);
+                } else {
+                    draw_rectangle(x + 6.0, y + 8.0, 20.0, 18.0, rgba(70, 148, 100, 255));
+                    draw_rectangle_lines(
+                        x + 6.5,
+                        y + 8.5,
+                        19.0,
+                        17.0,
+                        1.0,
+                        Color::from_rgba(206, 242, 216, 180),
+                    );
+                }
+            }
+            PropKind::CaisseAilBrut => {
+                if let Some(texture) = caisse_ail_brut_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 7.0, 22.0, 22.0);
+                } else {
+                    draw_rectangle(x + 6.0, y + 8.0, 20.0, 18.0, rgba(182, 146, 104, 255));
+                    draw_rectangle_lines(
+                        x + 6.5,
+                        y + 8.5,
+                        19.0,
+                        17.0,
+                        1.0,
+                        Color::from_rgba(80, 60, 40, 220),
+                    );
+                }
+            }
+            PropKind::CaisseAilCasse => {
+                if let Some(texture) = caisse_ail_casse_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 7.0, 22.0, 22.0);
+                } else {
+                    draw_rectangle(x + 6.0, y + 8.0, 20.0, 18.0, rgba(206, 174, 118, 255));
+                    draw_rectangle_lines(
+                        x + 6.5,
+                        y + 8.5,
+                        19.0,
+                        17.0,
+                        1.0,
+                        Color::from_rgba(94, 72, 44, 220),
+                    );
+                }
+            }
+            PropKind::PaletteLogistique => {
+                if let Some(texture) = palette_logistique_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 4.0, y + 10.0, 24.0, 16.0);
+                } else {
+                    let wood = color_lerp(palette.prop_crate_light, palette.floor_b, 0.22);
+                    draw_rectangle(x + 4.0, y + 18.0, 24.0, 3.0, wood);
+                    draw_rectangle(x + 4.0, y + 22.0, 24.0, 3.0, wood);
+                    draw_rectangle_lines(x + 4.0, y + 17.5, 24.0, 8.0, 1.0, palette.wall_outline);
+                }
+            }
+            PropKind::BureauPcOn => {
+                if let Some(texture) = bureau_pc_on_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 3.0, y + 6.0, 26.0, 24.0);
+                } else {
+                    draw_rectangle(x + 4.0, y + 14.0, 24.0, 10.0, rgba(92, 96, 108, 255));
+                    draw_rectangle(x + 9.0, y + 9.0, 14.0, 6.0, rgba(70, 170, 120, 255));
+                    draw_rectangle_lines(x + 4.5, y + 14.5, 23.0, 9.0, 1.0, palette.wall_outline);
+                }
+            }
+            PropKind::BureauPcOff => {
+                if let Some(texture) = bureau_pc_off_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 3.0, y + 6.0, 26.0, 24.0);
+                } else {
+                    draw_rectangle(x + 4.0, y + 14.0, 24.0, 10.0, rgba(92, 96, 108, 255));
+                    draw_rectangle(x + 9.0, y + 9.0, 14.0, 6.0, rgba(76, 84, 92, 255));
+                    draw_rectangle_lines(x + 4.5, y + 14.5, 23.0, 9.0, 1.0, palette.wall_outline);
+                }
+            }
+            PropKind::Lavabo => {
+                if let Some(texture) = lavabo_texture.as_ref() {
+                    draw_prop_texture_scaled(texture, x + 4.0, y + 6.0, 24.0, 24.0);
+                } else {
+                    draw_rectangle(x + 8.0, y + 10.0, 16.0, 12.0, rgba(184, 196, 208, 255));
+                    draw_circle(x + 16.0, y + 16.0, 3.0, rgba(138, 170, 198, 255));
+                    draw_rectangle(x + 14.0, y + 22.0, 4.0, 4.0, rgba(122, 132, 142, 255));
+                    draw_rectangle_lines(x + 8.5, y + 10.5, 15.0, 11.0, 1.0, palette.wall_outline);
+                }
             }
             PropKind::Pipe => {
                 let pulse = (time * 1.4 + prop.phase).sin() * 0.5 + 0.5;
@@ -782,16 +2101,7 @@ pub(crate) fn draw_props_region(
             PropKind::Plant => {
                 if let Some(texture) = pot_texture.as_ref() {
                     let bob = (time * 1.9 + prop.phase).sin() * 0.35;
-                    draw_texture_ex(
-                        texture,
-                        x + 5.0,
-                        y + 6.0 + bob,
-                        WHITE,
-                        DrawTextureParams {
-                            dest_size: Some(vec2(22.0, 22.0)),
-                            ..Default::default()
-                        },
-                    );
+                    draw_prop_texture_scaled(texture, x + 5.0, y + 6.0 + bob, 22.0, 22.0);
                 } else {
                     let sway = (time * 2.1 + prop.phase).sin() * 1.1;
                     let pot = color_lerp(palette.prop_crate_dark, palette.wall_dark, 0.35);
@@ -890,6 +2200,10 @@ pub(crate) fn draw_lighting_region(
             let glow = Color::new(0.38, 0.92, 1.0, 0.18 + pulse * 0.05);
             draw_circle(cx, cy + 8.0, 15.0 + pulse * 4.0, glow);
             draw_circle(cx, cy + 8.0, 28.0 + pulse * 5.0, with_alpha(glow, 0.45));
+        } else if matches!(prop.kind, PropKind::BureauPcOn) {
+            let pulse = (time * 2.0 + prop.phase).sin() * 0.5 + 0.5;
+            let glow = Color::new(0.48, 0.9, 0.72, 0.11 + pulse * 0.04);
+            draw_circle(cx, cy + 9.0, 12.0 + pulse * 2.5, glow);
         }
     }
 }
@@ -1009,7 +2323,26 @@ pub(crate) fn draw_editor_grid_region(bounds: (i32, i32, i32, i32)) {
     }
 }
 
-pub(crate) fn run_main_menu_frame(map: &MapAsset, palette: &Palette, time: f32) -> Option<AppMode> {
+fn draw_menu_text_line(text: &str, x: f32, y: f32, size: f32, color: Color) {
+    draw_text_shadowed(
+        text,
+        x,
+        y,
+        size,
+        color,
+        with_alpha(BLACK, 0.88),
+        ui_shadow_offset(size),
+    );
+}
+
+pub(crate) fn run_main_menu_frame(
+    map: &MapAsset,
+    palette: &Palette,
+    time: f32,
+    frame_dt: f32,
+    menu_state: &mut MainMenuState,
+) -> MainMenuAction {
+    tick_main_menu_status(menu_state, frame_dt);
     clear_background(palette.bg_bottom);
     begin_ui_pass();
     if let Some(texture) = main_menu_background_texture().as_ref() {
@@ -1028,74 +2361,1827 @@ pub(crate) fn run_main_menu_frame(map: &MapAsset, palette: &Palette, time: f32) 
             0.0,
             screen_width(),
             screen_height(),
-            Color::from_rgba(0, 0, 0, 48),
+            Color::from_rgba(6, 12, 20, 88),
         );
     } else {
-        draw_background(palette, time * 0.6);
+        let bg_time = if menu_state.ambiance_motion {
+            time * 0.58
+        } else {
+            0.0
+        };
+        draw_background(palette, bg_time);
         let (menu_camera, menu_view_rect) = fit_world_camera_to_screen(&map.world, 34.0);
         let visible_bounds = tile_bounds_from_camera(&map.world, &menu_camera, menu_view_rect, 2);
         set_camera(&menu_camera);
         draw_floor_layer_region(&map.world, palette, visible_bounds);
+        draw_exterior_ground_ambiance_region(&map.world, palette, time, visible_bounds);
         draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
         draw_wall_layer_region(&map.world, palette, visible_bounds);
+        draw_exterior_trees_region(&map.world, palette, time, visible_bounds);
         draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
         draw_props_region(&map.props, palette, time, visible_bounds);
         draw_lighting_region(&map.props, palette, time, visible_bounds);
         begin_ui_pass();
-        draw_rectangle_lines(
-            menu_view_rect.x + 0.5,
-            menu_view_rect.y + 0.5,
-            menu_view_rect.w - 1.0,
-            menu_view_rect.h - 1.0,
-            2.0,
-            Color::from_rgba(130, 170, 194, 165),
-        );
-        draw_ambient_dust(palette, time);
-        draw_vignette(palette);
         draw_rectangle(
             0.0,
             0.0,
             screen_width(),
             screen_height(),
-            Color::from_rgba(6, 9, 13, 120),
+            Color::from_rgba(6, 11, 18, 78),
         );
     }
 
-    let center_x = screen_width() * 0.5;
+    let pulse = (time * 1.12).sin() * 0.5 + 0.5;
+    let orb_size = screen_height() * (0.36 + pulse * 0.05);
+    draw_circle(
+        screen_width() - orb_size * 0.26,
+        orb_size * 0.22,
+        orb_size,
+        Color::from_rgba(32, 102, 124, 24),
+    );
+    draw_circle(
+        screen_width() - orb_size * 0.18,
+        orb_size * 0.16,
+        orb_size * 0.58,
+        Color::from_rgba(38, 166, 154, 20),
+    );
+
+    let sw = screen_width();
+    let sh = screen_height();
     let mouse = vec2(mouse_position().0, mouse_position().1);
-    let click = is_mouse_button_pressed(MouseButton::Left);
-    let play_rect = Rect::new(center_x - 140.0, screen_height() * 0.42, 280.0, 58.0);
-    let editor_rect = Rect::new(center_x - 140.0, play_rect.y + 74.0, 280.0, 58.0);
+    let left_click = is_mouse_button_pressed(MouseButton::Left);
+    let wheel_y = mouse_wheel().1;
+    let has_save = !menu_state.saves.is_empty();
 
-    let play_clicked = draw_ui_button(play_rect, "Jouer", mouse, click, false);
-    let editor_clicked = draw_ui_button(editor_rect, "Editeur", mouse, click, false);
+    draw_rectangle(
+        0.0,
+        sh * 0.84,
+        sw,
+        sh * 0.16,
+        Color::from_rgba(4, 10, 18, 72),
+    );
 
-    if play_clicked || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
-        return Some(AppMode::Playing);
+    let button_w = (sw * 0.28).clamp(300.0, 420.0);
+    let button_h = (sh * 0.07).clamp(48.0, 62.0);
+    let button_gap = (button_h * 0.22).clamp(10.0, 14.0);
+    let button_count = 6.0;
+    let stack_h = button_h * button_count + button_gap * (button_count - 1.0);
+    let start_y = (sh * 0.52 - stack_h * 0.5).max(sh * 0.24);
+    let bx = sw * 0.5 - button_w * 0.5;
+    let new_game_rect = Rect::new(bx, start_y, button_w, button_h);
+    let continue_rect = Rect::new(
+        bx,
+        new_game_rect.y + button_h + button_gap,
+        button_w,
+        button_h,
+    );
+    let load_rect = Rect::new(
+        bx,
+        continue_rect.y + button_h + button_gap,
+        button_w,
+        button_h,
+    );
+    let editor_rect = Rect::new(bx, load_rect.y + button_h + button_gap, button_w, button_h);
+    let options_rect = Rect::new(
+        bx,
+        editor_rect.y + button_h + button_gap,
+        button_w,
+        button_h,
+    );
+    let quit_rect = Rect::new(
+        bx,
+        options_rect.y + button_h + button_gap,
+        button_w,
+        button_h,
+    );
+
+    if draw_ui_button_sized(
+        new_game_rect,
+        "Nouvelle partie",
+        mouse,
+        left_click,
+        false,
+        21.0,
+    ) || is_key_pressed(KeyCode::N)
+    {
+        return MainMenuAction::StartNewGame;
     }
-    if editor_clicked || is_key_pressed(KeyCode::E) {
-        return Some(AppMode::Editor);
+
+    let continue_clicked = draw_ui_button_sized(
+        continue_rect,
+        "Continuer partie",
+        mouse,
+        left_click,
+        false,
+        21.0,
+    );
+    if !has_save {
+        draw_rectangle(
+            continue_rect.x,
+            continue_rect.y,
+            continue_rect.w,
+            continue_rect.h,
+            Color::from_rgba(10, 12, 16, 186),
+        );
+        let no_save_text = "Aucune sauvegarde";
+        let no_save_dims = measure_text(no_save_text, None, 15, 1.0);
+        draw_menu_text_line(
+            no_save_text,
+            continue_rect.x + continue_rect.w * 0.5 - no_save_dims.width * 0.5,
+            continue_rect.y + continue_rect.h * 0.5 + 5.0,
+            15.0,
+            Color::from_rgba(164, 178, 192, 245),
+        );
     }
-    None
+    if (continue_clicked || is_key_pressed(KeyCode::Enter))
+        && menu_state.view == MainMenuView::Principal
+    {
+        if !has_save {
+            refresh_main_menu_saves(menu_state);
+            if menu_state.saves.is_empty() {
+                set_main_menu_status(menu_state, "Aucune sauvegarde disponible.");
+            } else if let Some(slot) = menu_state.saves.first() {
+                return MainMenuAction::StartFromSave(slot.file_name.clone());
+            }
+        } else if let Some(slot) = menu_state.saves.first() {
+            return MainMenuAction::StartFromSave(slot.file_name.clone());
+        }
+    }
+
+    if draw_ui_button_sized(
+        load_rect,
+        "Charger",
+        mouse,
+        left_click,
+        menu_state.view == MainMenuView::Charger,
+        21.0,
+    ) {
+        menu_state.view = MainMenuView::Charger;
+        refresh_main_menu_saves(menu_state);
+    }
+    if draw_ui_button_sized(editor_rect, "Editeur", mouse, left_click, false, 21.0)
+        || is_key_pressed(KeyCode::E)
+    {
+        return MainMenuAction::OpenEditor;
+    }
+    if draw_ui_button_sized(
+        options_rect,
+        "Options",
+        mouse,
+        left_click,
+        menu_state.view == MainMenuView::Options,
+        21.0,
+    ) {
+        menu_state.view = MainMenuView::Options;
+    }
+    if draw_ui_button_sized(quit_rect, "Quitter", mouse, left_click, false, 21.0)
+        || is_key_pressed(KeyCode::Q)
+    {
+        return MainMenuAction::Quit;
+    }
+
+    match menu_state.view {
+        MainMenuView::Principal => {
+            let info_text = if let Some(slot) = menu_state.saves.first() {
+                format!(
+                    "Derniere sauvegarde: {} ({})",
+                    slot.save_name, slot.saved_at_label
+                )
+            } else {
+                "Aucune sauvegarde detectee.".to_string()
+            };
+            let info_dims = measure_text(&info_text, None, 21, 1.0);
+            draw_menu_text_line(
+                &info_text,
+                sw * 0.5 - info_dims.width * 0.5,
+                quit_rect.y + button_h + 36.0,
+                21.0,
+                Color::from_rgba(198, 222, 236, 255),
+            );
+        }
+        MainMenuView::Charger => {
+            let popup_w = (sw * 0.56).clamp(560.0, 860.0);
+            let popup_h = (sh * 0.36).clamp(260.0, 340.0);
+            let popup_rect = Rect::new(
+                sw * 0.5 - popup_w * 0.5,
+                quit_rect.y + button_h + 20.0,
+                popup_w,
+                popup_h,
+            );
+            draw_rectangle(
+                popup_rect.x,
+                popup_rect.y,
+                popup_rect.w,
+                popup_rect.h,
+                Color::from_rgba(8, 18, 28, 210),
+            );
+            draw_rectangle_lines(
+                popup_rect.x + 0.5,
+                popup_rect.y + 0.5,
+                popup_rect.w - 1.0,
+                popup_rect.h - 1.0,
+                1.4,
+                Color::from_rgba(96, 150, 180, 208),
+            );
+            draw_menu_text_line(
+                "Charger",
+                popup_rect.x + 14.0,
+                popup_rect.y + 24.0,
+                24.0,
+                Color::from_rgba(236, 248, 255, 255),
+            );
+
+            let action_y = popup_rect.y + 36.0;
+            let action_w = ((popup_rect.w - 54.0) / 3.0).max(140.0);
+            let play_rect = Rect::new(popup_rect.x + 14.0, action_y, action_w, 34.0);
+            let refresh_rect =
+                Rect::new(play_rect.x + play_rect.w + 10.0, action_y, action_w, 34.0);
+            let close_rect = Rect::new(
+                refresh_rect.x + refresh_rect.w + 10.0,
+                action_y,
+                action_w,
+                34.0,
+            );
+            if draw_ui_button_sized(
+                play_rect,
+                "Charger selection",
+                mouse,
+                left_click,
+                false,
+                15.0,
+            ) || is_key_pressed(KeyCode::Space)
+            {
+                if let Some(selected) = menu_state.selected_save
+                    && let Some(slot) = menu_state.saves.get(selected)
+                {
+                    return MainMenuAction::StartFromSave(slot.file_name.clone());
+                }
+                set_main_menu_status(menu_state, "Selectionne une sauvegarde.");
+            }
+            if draw_ui_button_sized(refresh_rect, "Rafraichir", mouse, left_click, false, 15.0) {
+                refresh_main_menu_saves(menu_state);
+            }
+            if draw_ui_button_sized(close_rect, "Fermer", mouse, left_click, false, 15.0) {
+                menu_state.view = MainMenuView::Principal;
+            }
+
+            let list_rect = Rect::new(
+                popup_rect.x + 14.0,
+                action_y + 48.0,
+                popup_rect.w - 28.0,
+                popup_rect.h - 58.0,
+            );
+            draw_rectangle(
+                list_rect.x,
+                list_rect.y,
+                list_rect.w,
+                list_rect.h,
+                Color::from_rgba(14, 26, 38, 222),
+            );
+            draw_rectangle_lines(
+                list_rect.x + 0.5,
+                list_rect.y + 0.5,
+                list_rect.w - 1.0,
+                list_rect.h - 1.0,
+                1.2,
+                Color::from_rgba(94, 138, 166, 210),
+            );
+
+            let row_h = 40.0;
+            let visible_rows = ((list_rect.h - 8.0) / row_h).floor().max(1.0) as usize;
+            let max_offset = menu_state.saves.len().saturating_sub(visible_rows);
+            menu_state.saves_offset = menu_state.saves_offset.min(max_offset);
+
+            if point_in_rect(mouse, list_rect) && wheel_y.abs() > f32::EPSILON {
+                if wheel_y > 0.0 {
+                    menu_state.saves_offset = menu_state.saves_offset.saturating_sub(1);
+                } else {
+                    menu_state.saves_offset = (menu_state.saves_offset + 1).min(max_offset);
+                }
+            }
+
+            if menu_state.saves.is_empty() {
+                draw_menu_text_line(
+                    "Aucune sauvegarde trouvee dans saves/",
+                    list_rect.x + 10.0,
+                    list_rect.y + 24.0,
+                    16.0,
+                    Color::from_rgba(178, 206, 224, 255),
+                );
+            } else {
+                let start = menu_state.saves_offset;
+                let end = (start + visible_rows).min(menu_state.saves.len());
+                let mut row_y = list_rect.y + 4.0;
+                for idx in start..end {
+                    let slot = &menu_state.saves[idx];
+                    let row_rect =
+                        Rect::new(list_rect.x + 4.0, row_y, list_rect.w - 8.0, row_h - 2.0);
+                    let hovered = point_in_rect(mouse, row_rect);
+                    let selected = menu_state.selected_save == Some(idx);
+                    let fill = if selected {
+                        Color::from_rgba(74, 120, 150, 230)
+                    } else if hovered {
+                        Color::from_rgba(52, 84, 108, 222)
+                    } else {
+                        Color::from_rgba(28, 46, 62, 214)
+                    };
+                    draw_rectangle(row_rect.x, row_rect.y, row_rect.w, row_rect.h, fill);
+                    draw_rectangle_lines(
+                        row_rect.x + 0.5,
+                        row_rect.y + 0.5,
+                        row_rect.w - 1.0,
+                        row_rect.h - 1.0,
+                        1.0,
+                        if selected {
+                            Color::from_rgba(220, 240, 252, 242)
+                        } else {
+                            Color::from_rgba(106, 154, 182, 196)
+                        },
+                    );
+                    draw_menu_text_line(
+                        &slot.save_name,
+                        row_rect.x + 8.0,
+                        row_rect.y + 18.0,
+                        15.0,
+                        Color::from_rgba(236, 246, 255, 255),
+                    );
+                    draw_menu_text_line(
+                        &slot.saved_at_label,
+                        row_rect.x + 8.0,
+                        row_rect.y + 33.0,
+                        12.0,
+                        Color::from_rgba(192, 220, 238, 245),
+                    );
+                    if hovered && left_click {
+                        menu_state.selected_save = Some(idx);
+                    }
+                    row_y += row_h;
+                }
+            }
+
+            if is_key_pressed(KeyCode::Up)
+                && let Some(selected) = menu_state.selected_save
+            {
+                menu_state.selected_save = Some(selected.saturating_sub(1));
+            }
+            if is_key_pressed(KeyCode::Down) {
+                if let Some(selected) = menu_state.selected_save {
+                    let max_index = menu_state.saves.len().saturating_sub(1);
+                    menu_state.selected_save = Some((selected + 1).min(max_index));
+                } else if !menu_state.saves.is_empty() {
+                    menu_state.selected_save = Some(0);
+                }
+            }
+            if is_key_pressed(KeyCode::Enter)
+                && let Some(selected) = menu_state.selected_save
+                && let Some(slot) = menu_state.saves.get(selected)
+            {
+                return MainMenuAction::StartFromSave(slot.file_name.clone());
+            }
+        }
+        MainMenuView::Options => {
+            let popup_w = (sw * 0.48).clamp(500.0, 700.0);
+            let popup_h = (sh * 0.24).clamp(190.0, 240.0);
+            let popup_rect = Rect::new(
+                sw * 0.5 - popup_w * 0.5,
+                quit_rect.y + button_h + 24.0,
+                popup_w,
+                popup_h,
+            );
+            draw_rectangle(
+                popup_rect.x,
+                popup_rect.y,
+                popup_rect.w,
+                popup_rect.h,
+                Color::from_rgba(8, 18, 28, 208),
+            );
+            draw_rectangle_lines(
+                popup_rect.x + 0.5,
+                popup_rect.y + 0.5,
+                popup_rect.w - 1.0,
+                popup_rect.h - 1.0,
+                1.4,
+                Color::from_rgba(96, 150, 180, 208),
+            );
+            draw_menu_text_line(
+                "Options",
+                popup_rect.x + 14.0,
+                popup_rect.y + 24.0,
+                24.0,
+                Color::from_rgba(236, 248, 255, 255),
+            );
+
+            let opt_line_h = 48.0;
+            let start_y = popup_rect.y + 38.0;
+            let opt1_rect = Rect::new(popup_rect.x + 14.0, start_y, popup_rect.w - 28.0, 38.0);
+            let opt2_rect = Rect::new(
+                popup_rect.x + 14.0,
+                start_y + opt_line_h,
+                popup_rect.w - 28.0,
+                38.0,
+            );
+            if draw_ui_button_sized(
+                opt1_rect,
+                &format!(
+                    "Afficher FPS menu: {}",
+                    if menu_state.show_fps { "ON" } else { "OFF" }
+                ),
+                mouse,
+                left_click,
+                menu_state.show_fps,
+                15.0,
+            ) {
+                menu_state.show_fps = !menu_state.show_fps;
+            }
+            if draw_ui_button_sized(
+                opt2_rect,
+                &format!(
+                    "Ambiance animee: {}",
+                    if menu_state.ambiance_motion {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                ),
+                mouse,
+                left_click,
+                menu_state.ambiance_motion,
+                15.0,
+            ) {
+                menu_state.ambiance_motion = !menu_state.ambiance_motion;
+            }
+            let close_rect = Rect::new(
+                popup_rect.x + popup_rect.w - 154.0,
+                popup_rect.y + popup_rect.h - 44.0,
+                140.0,
+                30.0,
+            );
+            if draw_ui_button_sized(close_rect, "Fermer", mouse, left_click, false, 14.0) {
+                menu_state.view = MainMenuView::Principal;
+            }
+        }
+    }
+
+    if is_key_pressed(KeyCode::Escape) && menu_state.view != MainMenuView::Principal {
+        menu_state.view = MainMenuView::Principal;
+    }
+
+    if let Some(warn) = menu_state.saves_warning.as_deref() {
+        draw_menu_text_line(
+            warn,
+            sw * 0.5 - (sw * 0.32),
+            sh - 18.0,
+            14.0,
+            Color::from_rgba(244, 214, 146, 255),
+        );
+    }
+    if let Some(status) = menu_state.status_text.as_deref()
+        && menu_state.status_timer > 0.0
+    {
+        let status_dims = measure_text(status, None, 16, 1.0);
+        draw_menu_text_line(
+            status,
+            sw * 0.5 - status_dims.width * 0.5,
+            sh - 38.0,
+            16.0,
+            Color::from_rgba(244, 214, 146, 255),
+        );
+    }
+
+    if menu_state.show_fps {
+        draw_menu_text_line(
+            &format!("FPS {}", get_fps()),
+            sw - 112.0,
+            24.0,
+            16.0,
+            Color::from_rgba(196, 228, 242, 255),
+        );
+    }
+
+    MainMenuAction::None
 }
 
 pub(crate) fn sim_zone_overlay_color(zone: sim::ZoneKind) -> Option<Color> {
     match zone {
         sim::ZoneKind::Neutral => None,
-        sim::ZoneKind::Receiving => Some(Color::from_rgba(86, 122, 224, 62)),
-        sim::ZoneKind::Processing => Some(Color::from_rgba(218, 114, 42, 66)),
-        sim::ZoneKind::Shipping => Some(Color::from_rgba(64, 180, 122, 62)),
-        sim::ZoneKind::Support => Some(Color::from_rgba(172, 130, 220, 58)),
+        sim::ZoneKind::Receiving => Some(Color::from_rgba(70, 126, 236, 66)),
+        sim::ZoneKind::Processing => Some(Color::from_rgba(232, 122, 52, 68)),
+        sim::ZoneKind::Shipping => Some(Color::from_rgba(86, 188, 132, 66)),
+        sim::ZoneKind::Support => Some(Color::from_rgba(220, 146, 84, 62)),
     }
 }
 
 pub(crate) fn sim_block_overlay_color(kind: sim::BlockKind) -> Color {
     match kind {
-        sim::BlockKind::Storage => Color::from_rgba(88, 160, 222, 255),
-        sim::BlockKind::MachineA => Color::from_rgba(240, 154, 72, 255),
-        sim::BlockKind::MachineB => Color::from_rgba(252, 120, 82, 255),
+        sim::BlockKind::InputHopper => Color::from_rgba(170, 188, 204, 255),
+        sim::BlockKind::Conveyor => Color::from_rgba(58, 142, 238, 255),
+        sim::BlockKind::FluidityTank => Color::from_rgba(70, 154, 198, 255),
+        sim::BlockKind::Cutter => Color::from_rgba(164, 176, 196, 255),
+        sim::BlockKind::DistributorBelt => Color::from_rgba(64, 140, 232, 255),
+        sim::BlockKind::DryerOven => Color::from_rgba(204, 150, 120, 255),
+        sim::BlockKind::OvenExitConveyor => Color::from_rgba(80, 132, 204, 255),
+        sim::BlockKind::Flaker => Color::from_rgba(196, 170, 132, 255),
+        sim::BlockKind::SuctionPipe => Color::from_rgba(154, 170, 188, 255),
+        sim::BlockKind::Sortex => Color::from_rgba(114, 194, 148, 255),
+        sim::BlockKind::BlueBagChute => Color::from_rgba(98, 162, 236, 255),
+        sim::BlockKind::RedBagChute => Color::from_rgba(234, 124, 108, 255),
+        sim::BlockKind::Storage => Color::from_rgba(94, 160, 230, 255),
+        sim::BlockKind::MachineA => Color::from_rgba(190, 204, 220, 255),
+        sim::BlockKind::MachineB => Color::from_rgba(170, 188, 210, 255),
         sim::BlockKind::Buffer => Color::from_rgba(142, 122, 208, 255),
         sim::BlockKind::Seller => Color::from_rgba(94, 196, 124, 255),
+    }
+}
+
+fn sim_block_rect(tile: (i32, i32), footprint: (i32, i32)) -> Rect {
+    let origin = World::tile_rect(tile.0, tile.1);
+    Rect::new(
+        origin.x,
+        origin.y,
+        origin.w * footprint.0.max(1) as f32,
+        origin.h * footprint.1.max(1) as f32,
+    )
+}
+
+fn block_intersects_bounds(
+    tile: (i32, i32),
+    footprint: (i32, i32),
+    bounds: (i32, i32, i32, i32),
+) -> bool {
+    let x0 = tile.0;
+    let y0 = tile.1;
+    let x1 = x0 + footprint.0.max(1) - 1;
+    let y1 = y0 + footprint.1.max(1) - 1;
+    !(x1 < bounds.0 || x0 > bounds.1 || y1 < bounds.2 || y0 > bounds.3)
+}
+
+fn block_occupies_tile(block: &sim::BlockDebugView, tile: (i32, i32)) -> bool {
+    tile.0 >= block.tile.0
+        && tile.0 < block.tile.0 + block.footprint.0.max(1)
+        && tile.1 >= block.tile.1
+        && tile.1 < block.tile.1 + block.footprint.1.max(1)
+}
+
+fn orientation_axis(orientation: sim::BlockOrientation) -> Vec2 {
+    match orientation {
+        sim::BlockOrientation::East => vec2(1.0, 0.0),
+        sim::BlockOrientation::South => vec2(0.0, 1.0),
+        sim::BlockOrientation::West => vec2(-1.0, 0.0),
+        sim::BlockOrientation::North => vec2(0.0, -1.0),
+    }
+}
+
+fn draw_belt_motion(
+    rect: Rect,
+    orientation: sim::BlockOrientation,
+    time: f32,
+    base: Color,
+    stripe: Color,
+    border: Color,
+) {
+    let axis = orientation_axis(orientation);
+    let horizontal = axis.x.abs() > axis.y.abs();
+    let steel = with_alpha(Color::from_rgba(164, 178, 194, 255), 0.95);
+    let steel_dark = with_alpha(Color::from_rgba(102, 116, 132, 255), 0.94);
+    let steel_glow = with_alpha(Color::from_rgba(198, 214, 236, 255), 0.44);
+    let belt = with_alpha(base, 0.68);
+    let gloss = with_alpha(Color::from_rgba(186, 238, 255, 210), 0.45);
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, steel_dark);
+    draw_rectangle(
+        rect.x + 0.8,
+        rect.y + 0.8,
+        (rect.w - 1.6).max(1.0),
+        (rect.h - 1.6).max(1.0),
+        steel,
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.5,
+        with_alpha(border, 0.85),
+    );
+
+    let rail_w = rect.w.min(rect.h) * 0.12;
+    if horizontal {
+        draw_rectangle(
+            rect.x + 1.1,
+            rect.y + rect.h * 0.26,
+            (rect.w - 2.2).max(1.0),
+            rail_w.clamp(1.5, 3.2),
+            with_alpha(border, 0.26),
+        );
+        draw_rectangle(
+            rect.x + 1.1,
+            rect.y + rect.h * 0.74 - rail_w,
+            (rect.w - 2.2).max(1.0),
+            rail_w.clamp(1.5, 3.2),
+            with_alpha(border, 0.2),
+        );
+    } else {
+        draw_rectangle(
+            rect.x + rect.w * 0.26,
+            rect.y + 1.1,
+            rail_w.clamp(1.5, 3.2),
+            (rect.h - 2.2).max(1.0),
+            with_alpha(border, 0.26),
+        );
+        draw_rectangle(
+            rect.x + rect.w * 0.74 - rail_w,
+            rect.y + 1.1,
+            rail_w.clamp(1.5, 3.2),
+            (rect.h - 2.2).max(1.0),
+            with_alpha(border, 0.2),
+        );
+    }
+
+    let lane = if horizontal {
+        Rect::new(
+            rect.x + 2.0,
+            rect.y + rect.h * 0.33,
+            (rect.w - 4.0).max(1.0),
+            (rect.h * 0.34).max(1.0),
+        )
+    } else {
+        Rect::new(
+            rect.x + rect.w * 0.33,
+            rect.y + 2.0,
+            (rect.w * 0.34).max(1.0),
+            (rect.h - 4.0).max(1.0),
+        )
+    };
+    draw_rectangle(
+        lane.x,
+        lane.y,
+        lane.w,
+        lane.h,
+        with_alpha(belt, 0.58),
+    );
+    draw_rectangle(
+        lane.x + 1.2,
+        lane.y + (lane.h * 0.33),
+        (lane.w - 2.4).max(1.0),
+        lane.h * 0.08,
+        with_alpha(gloss, 0.78),
+    );
+    if horizontal {
+        let stroke_count = 6usize;
+        for i in 0..stroke_count {
+            let ratio = (i as f32 + 0.5) / stroke_count as f32;
+            draw_line(
+                lane.x + lane.w * ratio,
+                lane.y + 1.3,
+                lane.x + lane.w * ratio,
+                lane.y + lane.h - 1.3,
+                0.7,
+                with_alpha(steel_dark, 0.26),
+            );
+        }
+    } else {
+        let stroke_count = 6usize;
+        for i in 0..stroke_count {
+            let ratio = (i as f32 + 0.5) / stroke_count as f32;
+            draw_line(
+                lane.x + 1.3,
+                lane.y + lane.h * ratio,
+                lane.x + lane.w - 1.3,
+                lane.y + lane.h * ratio,
+                0.7,
+                with_alpha(steel_dark, 0.26),
+            );
+        }
+    }
+
+    let spacing = if horizontal {
+        (rect.w * 0.16).clamp(6.0, 15.0)
+    } else {
+        (rect.h * 0.16).clamp(6.0, 15.0)
+    };
+    let phase = (time * 28.0).rem_euclid(spacing);
+    let pulse = (time * 1.4).sin() * 0.16;
+    let dash_w = if horizontal {
+        (lane.h * 0.48).clamp(2.0, 7.0)
+    } else {
+        (lane.w * 0.48).clamp(2.0, 7.0)
+    };
+    let move_pos = if horizontal {
+        axis.x >= 0.0
+    } else {
+        axis.y >= 0.0
+    };
+
+    if horizontal {
+        let mut x = if move_pos {
+            lane.x - spacing + phase
+        } else {
+            lane.x + lane.w + phase
+        };
+        let mut limit = if move_pos {
+            lane.x + lane.w + spacing
+        } else {
+            lane.x - spacing
+        };
+        while if move_pos { x < limit } else { x > limit } {
+            draw_rectangle(
+                x,
+                lane.y + (lane.h - dash_w) * 0.5 + pulse,
+                dash_w,
+                dash_w * 1.4,
+                with_alpha(with_alpha(stripe, 0.9), 0.95),
+            );
+            x += if move_pos { spacing } else { -spacing };
+        }
+    } else {
+        let mut y = if move_pos {
+            lane.y - spacing + phase
+        } else {
+            lane.y + lane.h + phase
+        };
+        let mut limit = if move_pos {
+            lane.y + lane.h + spacing
+        } else {
+            lane.y - spacing
+        };
+        while if move_pos { y < limit } else { y > limit } {
+            draw_rectangle(
+                lane.x + (lane.w - dash_w) * 0.5 + pulse,
+                y,
+                dash_w * 1.4,
+                dash_w,
+                with_alpha(with_alpha(stripe, 0.9), 0.95),
+            );
+            y += if move_pos { spacing } else { -spacing };
+        }
+    }
+
+    draw_rectangle(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.w - 2.0).max(1.0),
+        (rect.h - 2.0).max(1.0),
+        steel_glow,
+    );
+
+    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let tip = center + axis * rect.w.min(rect.h) * 0.22;
+    let base_center = center - axis * rect.w.min(rect.h) * 0.13;
+    let normal = vec2(-axis.y, axis.x) * rect.w.min(rect.h) * 0.1;
+    draw_triangle(
+        tip,
+        base_center + normal,
+        base_center - normal,
+        with_alpha(WHITE, 0.45),
+    );
+    draw_line(
+        base_center.x,
+        base_center.y,
+        tip.x,
+        tip.y,
+        1.0,
+        with_alpha(Color::from_rgba(210, 236, 255, 240), 0.58),
+    );
+}
+
+fn draw_input_hopper_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
+    let hull = Color::from_rgba(64, 80, 102, 242);
+    let base = Color::from_rgba(84, 102, 122, 222);
+    let frame = Color::from_rgba(198, 216, 236, 215);
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, hull);
+    draw_rectangle(
+        rect.x + 2.0,
+        rect.y + 2.0,
+        (rect.w - 4.0).max(1.0),
+        (rect.h - 4.0).max(1.0),
+        base,
+    );
+    draw_rectangle_lines(
+        rect.x + 0.8,
+        rect.y + 0.8,
+        rect.w - 1.6,
+        rect.h - 1.6,
+        1.4,
+        frame,
+    );
+
+    let axis = orientation_axis(orientation);
+    let belt_rect = if axis.x.abs() > axis.y.abs() {
+        Rect::new(
+            rect.x + 8.0,
+            rect.y + rect.h * 0.34,
+            (rect.w - 16.0).max(1.0),
+            (rect.h * 0.32).max(2.0),
+        )
+    } else {
+        Rect::new(
+            rect.x + rect.w * 0.34,
+            rect.y + 8.0,
+            (rect.w * 0.32).max(2.0),
+            (rect.h - 16.0).max(1.0),
+        )
+    };
+    draw_belt_motion(
+        belt_rect,
+        orientation,
+        time,
+        Color::from_rgba(26, 62, 116, 232),
+        Color::from_rgba(62, 132, 218, 228),
+        Color::from_rgba(96, 164, 236, 214),
+    );
+
+    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let funnel_center = center - axis * rect.w.max(rect.h) * 0.24;
+    draw_circle(
+        funnel_center.x,
+        funnel_center.y,
+        rect.w.min(rect.h) * 0.18,
+        Color::from_rgba(138, 148, 166, 236),
+    );
+    draw_circle_lines(
+        funnel_center.x,
+        funnel_center.y,
+        rect.w.min(rect.h) * 0.18,
+        1.2,
+        Color::from_rgba(208, 220, 234, 214),
+    );
+
+    for i in 0..6 {
+        let t = time * 0.85 + i as f32 * 0.6;
+        let dot = funnel_center + vec2(t.cos() * 7.8, t.sin() * 5.8);
+        draw_circle(
+            dot.x,
+            dot.y,
+            2.0 + (i % 2) as f32 * 0.4,
+            Color::from_rgba(236, 214, 148, 206),
+        );
+    }
+
+    let cap_x = rect.x + rect.w * 0.5;
+    let cap_y = rect.y + rect.h * 0.12;
+    draw_circle(
+        cap_x,
+        cap_y,
+        rect.w.min(rect.h) * 0.09,
+        Color::from_rgba(118, 130, 154, 218),
+    );
+    draw_circle_lines(
+        cap_x,
+        cap_y,
+        rect.w.min(rect.h) * 0.09,
+        0.9,
+        frame,
+    );
+    for i in 0..3 {
+        let step = time * 2.6 + i as f32 * 0.9;
+        draw_line(
+            cap_x + step.cos() * (rect.w.min(rect.h) * 0.06),
+            cap_y + step.sin() * (rect.h.min(rect.h) * 0.06),
+            cap_x + (step + 1.3).sin() * (rect.w.min(rect.h) * 0.06),
+            cap_y + (step + 1.3).cos() * (rect.h.min(rect.h) * 0.06),
+            1.1,
+            with_alpha(Color::from_rgba(220, 236, 252, 200), 0.44),
+        );
+    }
+}
+
+fn draw_fluidity_tank_visual(rect: Rect, time: f32) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(68, 82, 98, 236),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        2.0,
+        Color::from_rgba(182, 202, 222, 220),
+    );
+
+    let water = Rect::new(rect.x + 6.0, rect.y + 6.0, rect.w - 12.0, rect.h - 12.0);
+    let fill_ratio = ((time * 0.5).sin() * 0.14 + 0.58).clamp(0.1, 0.94);
+    draw_rectangle(
+        water.x,
+        water.y,
+        water.w,
+        water.h,
+        Color::from_rgba(64, 150, 198, 232),
+    );
+    let fill = Rect::new(
+        water.x + 1.2,
+        water.y + water.h * (1.0 - fill_ratio),
+        (water.w - 2.4).max(1.0),
+        water.h * fill_ratio - 2.4,
+    );
+    if fill.h > 0.0 {
+        draw_rectangle(
+            fill.x,
+            fill.y,
+            fill.w,
+            fill.h,
+            with_alpha(Color::from_rgba(74, 196, 250, 225), 0.86),
+        );
+    }
+    for i in 0..4 {
+        let wave_y =
+            water.y + fill.h * ((i + 1) as f32 / 5.0) + (time * 1.8 + i as f32 * 0.7).sin() * 1.9;
+        draw_line(
+            water.x + 4.0,
+            wave_y,
+            water.x + water.w - 4.0,
+            wave_y,
+            1.5,
+            Color::from_rgba(184, 238, 255, 188),
+        );
+    }
+    for i in 0..8 {
+        let phase = time * 0.9 + i as f32 * 0.5;
+        let bx = water.x + 6.0 + (phase.sin() * 0.5 + 0.5) * (water.w - 12.0);
+        let by = water.y + 6.0 + (phase.cos() * 0.5 + 0.5) * (water.h - 12.0);
+        draw_circle(
+            bx,
+            by,
+            1.5 + (i % 3) as f32 * 0.4,
+            Color::from_rgba(218, 248, 255, 196),
+        );
+    }
+}
+
+fn draw_cutter_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(145, 158, 170, 234),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.8,
+        Color::from_rgba(224, 234, 246, 220),
+    );
+    draw_belt_motion(
+        Rect::new(rect.x + 3.0, rect.y + 3.0, rect.w - 6.0, rect.h - 6.0),
+        orientation,
+        time,
+        Color::from_rgba(42, 78, 122, 214),
+        Color::from_rgba(86, 154, 226, 214),
+        Color::from_rgba(176, 214, 246, 184),
+    );
+
+    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let axis = orientation_axis(orientation);
+    let normal = vec2(-axis.y, axis.x);
+    let ring = rect.w.min(rect.h) * 0.16;
+    draw_circle(
+        center.x,
+        center.y,
+        ring,
+        with_alpha(Color::from_rgba(88, 114, 144, 190), 0.38),
+    );
+    draw_circle_lines(
+        center.x,
+        center.y,
+        ring,
+        1.2,
+        with_alpha(Color::from_rgba(208, 228, 250, 210), 0.62),
+    );
+    for i in -1..=1 {
+        let blade_center = center + normal * i as f32 * rect.w.min(rect.h) * 0.2;
+        let r = rect.w.min(rect.h) * 0.13;
+        draw_circle(
+            blade_center.x,
+            blade_center.y,
+            r,
+            Color::from_rgba(224, 230, 236, 236),
+        );
+        draw_circle_lines(
+            blade_center.x,
+            blade_center.y,
+            r,
+            1.1,
+            Color::from_rgba(118, 126, 136, 230),
+        );
+        let angle = time * 4.2 + i as f32;
+        draw_line(
+            blade_center.x,
+            blade_center.y,
+            blade_center.x + angle.cos() * r,
+            blade_center.y + angle.sin() * r,
+            1.4,
+            Color::from_rgba(76, 84, 92, 228),
+        );
+    }
+    for i in 0..8 {
+        let angle = time * 3.1 + i as f32 * std::f32::consts::TAU / 8.0;
+        draw_line(
+            center.x,
+            center.y,
+            center.x + angle.cos() * ring * 0.9,
+            center.y + angle.sin() * ring * 0.9,
+            0.8,
+            with_alpha(Color::from_rgba(232, 244, 255, 180), 0.55),
+        );
+    }
+}
+
+fn draw_distributor_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
+    draw_belt_motion(
+        rect,
+        orientation,
+        time,
+        Color::from_rgba(38, 80, 128, 232),
+        Color::from_rgba(94, 168, 238, 222),
+        Color::from_rgba(164, 220, 250, 206),
+    );
+    draw_rectangle(
+        rect.x + 2.0,
+        rect.y + 2.0,
+        (rect.w - 4.0).max(1.0),
+        (rect.h - 4.0).max(1.0),
+        with_alpha(Color::from_rgba(55, 70, 98, 190), 0.52),
+    );
+    let pivot = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let foot = rect.h.min(rect.w) * 0.38;
+    let axis = orientation_axis(orientation);
+    let normal = vec2(-axis.y, axis.x);
+    for i in 0..6 {
+        let gate = pivot + normal * (i as f32 - 2.5) * (rect.w.min(rect.h) * 0.045);
+        draw_rectangle(
+            gate.x,
+            gate.y,
+            rect.w.min(rect.h) * 0.02,
+            rect.w.min(rect.h) * 0.06,
+            with_alpha(Color::from_rgba(216, 236, 255, 168), 0.32),
+        );
+    }
+    draw_rectangle(
+        pivot.x - foot * 0.5,
+        pivot.y - foot * 0.5,
+        foot,
+        foot,
+        Color::from_rgba(76, 86, 102, 235),
+    );
+    let base_angle = axis.y.atan2(axis.x);
+    let swing = (time * 1.3).sin() * 35.0_f32.to_radians();
+    let arm_angle = base_angle + swing;
+    let arm_len = rect.w.max(rect.h) * 0.46;
+    let tip = pivot + vec2(arm_angle.cos(), arm_angle.sin()) * arm_len;
+    draw_line(
+        pivot.x,
+        pivot.y,
+        tip.x,
+        tip.y,
+        2.4,
+        Color::from_rgba(206, 214, 226, 228),
+    );
+    draw_circle(
+        tip.x,
+        tip.y,
+        3.4,
+        with_alpha(Color::from_rgba(248, 252, 255, 226), 0.72),
+    );
+    let sec = pivot + normal * foot * 0.4;
+    draw_circle(sec.x, sec.y, 2.2, with_alpha(Color::from_rgba(196, 226, 252, 175), 0.9));
+    draw_line(
+        pivot.x,
+        pivot.y,
+        sec.x,
+        sec.y,
+        1.5,
+        with_alpha(Color::from_rgba(196, 226, 252, 185), 0.6),
+    );
+}
+
+fn draw_dryer_oven_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
+    crate::four_texture::draw_dryer_oven_visual(rect, orientation, time);
+}
+
+fn draw_flaker_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(126, 124, 118, 232),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.7,
+        Color::from_rgba(214, 220, 226, 216),
+    );
+
+    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let drum_radius = rect.w.min(rect.h) * 0.24;
+    draw_circle(
+        center.x,
+        center.y,
+        drum_radius,
+        Color::from_rgba(178, 184, 194, 236),
+    );
+    draw_circle_lines(
+        center.x,
+        center.y,
+        drum_radius,
+        1.2,
+        Color::from_rgba(92, 102, 118, 236),
+    );
+    for i in 0..5 {
+        let angle = time * 4.0 + i as f32 * std::f32::consts::TAU / 5.0;
+        draw_line(
+            center.x,
+            center.y,
+            center.x + angle.cos() * drum_radius,
+            center.y + angle.sin() * drum_radius,
+            1.2,
+            Color::from_rgba(82, 90, 108, 230),
+        );
+    }
+
+    let axis = orientation_axis(orientation);
+    let normal = vec2(-axis.y, axis.x);
+    let chute_center = center + axis * rect.w.min(rect.h) * 0.28;
+    draw_circle(
+        center.x,
+        center.y,
+        drum_radius * 0.88,
+        with_alpha(Color::from_rgba(112, 132, 156, 128), 0.18),
+    );
+    draw_triangle(
+        chute_center + normal * 5.0,
+        chute_center - normal * 5.0,
+        chute_center + axis * 10.0,
+        Color::from_rgba(214, 192, 144, 210),
+    );
+    for i in 0..12 {
+        let phase = time * 3.6 + i as f32 * 0.4;
+        let dust = (phase.sin() * 0.5 + 0.5) * drum_radius * 0.75;
+        let dir = i as f32 / 12.0 * std::f32::consts::TAU;
+        let p = center + vec2(dir.cos() * dust, dir.sin() * dust * 0.32);
+        draw_circle(p.x, p.y, 1.0, with_alpha(Color::from_rgba(230, 245, 255, 170), 0.42));
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct PipeConnections {
+    north: bool,
+    south: bool,
+    east: bool,
+    west: bool,
+}
+
+fn suction_pipe_connectable(kind: sim::BlockKind) -> bool {
+    matches!(
+        kind,
+        sim::BlockKind::SuctionPipe
+            | sim::BlockKind::Flaker
+            | sim::BlockKind::Sortex
+            | sim::BlockKind::BlueBagChute
+            | sim::BlockKind::RedBagChute
+    )
+}
+
+fn suction_pipe_connections(
+    block: &sim::BlockDebugView,
+    blocks: &[sim::BlockDebugView],
+) -> PipeConnections {
+    let origin = block.tile;
+    let has_block_at = |tile: (i32, i32)| {
+        blocks.iter().any(|other| {
+            other.id != block.id
+                && suction_pipe_connectable(other.kind)
+                && block_occupies_tile(other, tile)
+        })
+    };
+
+    PipeConnections {
+        north: has_block_at((origin.0, origin.1 - 1)),
+        south: has_block_at((origin.0, origin.1 + 1)),
+        east: has_block_at((origin.0 + 1, origin.1)),
+        west: has_block_at((origin.0 - 1, origin.1)),
+    }
+}
+
+fn draw_suction_pipe_visual(rect: Rect, conn: PipeConnections, time: f32) {
+    let cx = rect.x + rect.w * 0.5;
+    let cy = rect.y + rect.h * 0.5;
+    let thick = rect.w.min(rect.h) * 0.26;
+    let pipe_color = Color::from_rgba(148, 162, 178, 238);
+    let edge_color = Color::from_rgba(86, 98, 114, 240);
+    let flow_color = with_alpha(
+        Color::from_rgba(194, 234, 255, 220),
+        0.24 + (time * 1.8).sin().abs() * 0.32,
+    );
+    if conn.north {
+        draw_rectangle(cx - thick * 0.5, rect.y, thick, rect.h * 0.5, pipe_color);
+    }
+    if conn.south {
+        draw_rectangle(cx - thick * 0.5, cy, thick, rect.h * 0.5, pipe_color);
+    }
+    if conn.west {
+        draw_rectangle(rect.x, cy - thick * 0.5, rect.w * 0.5, thick, pipe_color);
+    }
+    if conn.east {
+        draw_rectangle(cx, cy - thick * 0.5, rect.w * 0.5, thick, pipe_color);
+    }
+    draw_circle(cx, cy, thick * 0.85, pipe_color);
+    draw_circle_lines(cx, cy, thick * 0.9, 1.1, edge_color);
+    draw_circle(cx, cy, thick * 0.64, flow_color);
+    draw_circle_lines(cx, cy, thick * 1.05, 0.7, edge_color);
+
+    let flow = (time * 2.6).sin() * 0.5 + 0.5;
+    draw_circle(
+        cx + (flow - 0.5) * rect.w * 0.45,
+        cy,
+        thick * 0.24,
+        Color::from_rgba(204, 236, 255, 224),
+    );
+    if conn.north || conn.south || conn.east || conn.west {
+        for i in 0..3 {
+            let offset = (i as f32) * 2.2 + time * 1.2;
+            let bx = cx + (offset.cos() * rect.w * 0.12);
+            let by = cy + (offset.sin() * rect.h * 0.12);
+            draw_circle(
+                bx,
+                by,
+                1.1,
+                with_alpha(Color::from_rgba(220, 248, 255, 212), 0.6 - i as f32 * 0.12),
+            );
+        }
+    }
+}
+
+fn draw_sortex_visual(rect: Rect, time: f32) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(82, 104, 92, 236),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.9,
+        Color::from_rgba(192, 226, 204, 214),
+    );
+    let sensor_y = rect.y + rect.h * 0.42;
+    for i in 0..5 {
+        let t = time * 2.2 + i as f32 * 0.7;
+        let x = rect.x + rect.w * (0.15 + i as f32 * 0.17);
+        let blink = 0.26 + ((t.sin() * 0.5 + 0.5) * 0.5);
+        draw_circle(
+            x,
+            sensor_y,
+            3.2,
+            with_alpha(Color::from_rgba(198, 248, 214, 255), blink),
+        );
+    }
+    draw_rectangle(
+        rect.x + rect.w * 0.14,
+        rect.y + rect.h * 0.66,
+        rect.w * 0.27,
+        rect.h * 0.24,
+        Color::from_rgba(92, 150, 224, 212),
+    );
+    draw_rectangle(
+        rect.x + rect.w * 0.59,
+        rect.y + rect.h * 0.66,
+        rect.w * 0.27,
+        rect.h * 0.24,
+        Color::from_rgba(220, 110, 94, 212),
+    );
+    let divider = rect.w * 0.5;
+    draw_line(
+        rect.x + divider,
+        rect.y + rect.h * 0.14,
+        rect.x + divider,
+        rect.y + rect.h * 0.86,
+        1.2,
+        with_alpha(Color::from_rgba(214, 232, 244, 170), 0.6),
+    );
+    for i in 0..8 {
+        let t = (time * 0.9 + i as f32 * 0.35).fract();
+        let x = rect.x + rect.w * (0.18 + t * 0.64);
+        draw_rectangle(
+            x,
+            rect.y + rect.h * (0.34 + (i % 2) as f32 * 0.02),
+            rect.w * 0.03,
+            rect.h * 0.2,
+            with_alpha(Color::from_rgba(248, 244, 180, 200), 0.2 + (i as f32 * 0.12).min(0.95)),
+        );
+    }
+}
+
+fn draw_bag_chute_visual(
+    rect: Rect,
+    is_blue: bool,
+    fill_ratio: f32,
+    beacon_active: bool,
+    time: f32,
+) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(98, 106, 116, 236),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.6,
+        Color::from_rgba(194, 208, 222, 212),
+    );
+
+    let chute = Rect::new(
+        rect.x + rect.w * 0.36,
+        rect.y + rect.h * 0.06,
+        rect.w * 0.28,
+        rect.h * 0.4,
+    );
+    draw_rectangle(
+        chute.x,
+        chute.y,
+        chute.w,
+        chute.h,
+        Color::from_rgba(128, 138, 150, 228),
+    );
+
+    let bag = Rect::new(
+        rect.x + rect.w * 0.18,
+        rect.y + rect.h * 0.46,
+        rect.w * 0.64,
+        rect.h * 0.46,
+    );
+    let bag_color = if is_blue {
+        Color::from_rgba(94, 152, 232, 232)
+    } else {
+        Color::from_rgba(226, 106, 92, 232)
+    };
+    draw_rectangle(
+        bag.x,
+        bag.y,
+        bag.w,
+        bag.h,
+        Color::from_rgba(54, 62, 72, 214),
+    );
+    draw_rectangle(
+        bag.x + 1.5,
+        bag.y + bag.h * (1.0 - fill_ratio.clamp(0.0, 1.0)),
+        (bag.w - 3.0).max(1.0),
+        (bag.h * fill_ratio.clamp(0.0, 1.0)).max(1.0),
+        bag_color,
+    );
+    draw_rectangle_lines(
+        bag.x + 0.5,
+        bag.y + 0.5,
+        bag.w - 1.0,
+        bag.h - 1.0,
+        1.0,
+        Color::from_rgba(222, 236, 248, 196),
+    );
+
+    let blink = if beacon_active {
+        0.44 + ((time * 7.5).sin() * 0.5 + 0.5) * 0.56
+    } else {
+        0.18
+    };
+    draw_circle(
+        rect.x + rect.w * 0.5,
+        rect.y + rect.h * 0.08,
+        rect.w.min(rect.h) * 0.1,
+        with_alpha(Color::from_rgba(248, 72, 68, 255), blink),
+    );
+    let fill_ratio = fill_ratio.clamp(0.0, 1.0);
+    let fill_top = bag.y + bag.h * (1.0 - fill_ratio);
+    for i in 0..3 {
+        let wave = fill_top + ((time * 3.0 + i as f32).sin() * 1.5);
+        draw_circle(
+            bag.x + 3.0 + i as f32 * (bag.w - 6.0) / 3.0,
+            wave,
+            1.2,
+            with_alpha(if is_blue {
+                Color::from_rgba(132, 196, 255, 220)
+            } else {
+                Color::from_rgba(255, 150, 136, 220)
+            }, 0.62),
+        );
+    }
+    let gauge_x = rect.x + rect.w * 0.2;
+    let gauge_w = rect.w * 0.6;
+    let gauge_y = rect.y + rect.h * 0.9;
+    draw_rectangle(
+        gauge_x,
+        gauge_y,
+        gauge_w,
+        1.8,
+        with_alpha(Color::from_rgba(30, 40, 48, 180), 0.55),
+    );
+    draw_rectangle(
+        gauge_x,
+        gauge_y,
+        gauge_w * fill_ratio,
+        1.8,
+        if is_blue {
+            with_alpha(Color::from_rgba(112, 166, 255, 220), 0.8)
+        } else {
+            with_alpha(Color::from_rgba(255, 128, 112, 220), 0.8)
+        },
+    );
+}
+
+fn draw_buffer_rack_visual(rect: Rect, rack_levels: &[bool]) {
+    let frame = Color::from_rgba(196, 172, 146, 188);
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(76, 64, 54, 218),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.4,
+        frame,
+    );
+    draw_rectangle(
+        rect.x + 1.6,
+        rect.y + 1.6,
+        (rect.w - 3.2).max(1.0),
+        (rect.h - 3.2).max(1.0),
+        with_alpha(Color::from_rgba(98, 84, 68, 80), 0.9),
+    );
+    let levels = rack_levels.len().max(1);
+    for i in 0..levels {
+        let t = i as f32 / levels as f32;
+        let y = rect.y + rect.h - 4.0 - t * (rect.h - 8.0);
+        draw_line(
+            rect.x + 2.0,
+            y,
+            rect.x + rect.w - 2.0,
+            y,
+            1.1,
+            Color::from_rgba(186, 154, 118, 182),
+        );
+        if rack_levels.get(i).copied().unwrap_or(false) {
+            draw_rectangle(
+                rect.x + 4.0,
+                y - 3.4,
+                (rect.w - 8.0).max(1.0),
+                6.4,
+                Color::from_rgba(146, 104, 72, 212),
+            );
+            draw_rectangle_lines(
+                rect.x + 4.5,
+                y - 2.9,
+                (rect.w - 9.0).max(1.0),
+                5.4,
+                0.7,
+                with_alpha(Color::from_rgba(234, 216, 196, 150), 0.7),
+            );
+        } else {
+            draw_circle(
+                rect.x + rect.w * 0.35,
+                y - 0.6,
+                0.6,
+                with_alpha(Color::from_rgba(172, 152, 132, 140), 0.65),
+            );
+            draw_circle(
+                rect.x + rect.w * 0.65,
+                y - 0.6,
+                0.6,
+                with_alpha(Color::from_rgba(172, 152, 132, 140), 0.65),
+            );
+        }
+    }
+}
+
+fn draw_seller_visual(rect: Rect, time: f32) {
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        Color::from_rgba(66, 96, 76, 222),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        rect.w - 1.0,
+        rect.h - 1.0,
+        1.2,
+        Color::from_rgba(184, 230, 198, 184),
+    );
+    draw_rectangle(
+        rect.x + rect.w * 0.16,
+        rect.y + rect.h * 0.54,
+        rect.w * 0.68,
+        rect.h * 0.28,
+        Color::from_rgba(112, 84, 62, 220),
+    );
+    let pulse = 0.28 + ((time * 2.1).sin() * 0.5 + 0.5) * 0.52;
+    draw_rectangle(
+        rect.x + rect.w * 0.34,
+        rect.y + rect.h * 0.2,
+        rect.w * 0.32,
+        rect.h * 0.25,
+        with_alpha(Color::from_rgba(112, 196, 148, 255), pulse),
+    );
+    draw_rectangle(
+        rect.x + rect.w * 0.18,
+        rect.y + rect.h * 0.2,
+        rect.w * 0.15,
+        rect.h * 0.13,
+        with_alpha(Color::from_rgba(198, 238, 208, 178), 0.4 + pulse * 0.2),
+    );
+    draw_circle(
+        rect.x + rect.w * 0.5,
+        rect.y + rect.h * 0.72,
+        rect.w.min(rect.h) * 0.1,
+        with_alpha(Color::from_rgba(255, 180, 80, 200), 0.22 + blink_ratio(time)),
+    );
+}
+
+fn draw_machine_cluster_visual(
+    rect: Rect,
+    base: Color,
+    panel: Color,
+    frame: Color,
+    activity: f32,
+    rotor_speed: f32,
+    time: f32,
+) {
+    let shell = with_alpha(Color::from_rgba(188, 204, 216, 248), 0.94);
+    let shell_dark = with_alpha(Color::from_rgba(130, 146, 162, 248), 0.95);
+    let chrome = with_alpha(Color::from_rgba(230, 242, 250, 170), 0.7);
+    let steel_glow = with_alpha(Color::from_rgba(168, 216, 255, 170), 0.35 + activity * 0.35);
+
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, shell_dark);
+    draw_rectangle(
+        rect.x + 0.9,
+        rect.y + 0.9,
+        (rect.w - 1.8).max(1.0),
+        (rect.h - 1.8).max(1.0),
+        shell,
+    );
+    draw_rectangle(
+        rect.x + 0.9,
+        rect.y + rect.h * 0.18,
+        rect.w - 1.8,
+        rect.h * 0.14,
+        with_alpha(chrome, 0.42),
+    );
+    draw_rectangle(
+        rect.x + 0.9,
+        rect.y + rect.h * 0.68,
+        rect.w - 1.8,
+        rect.h * 0.14,
+        with_alpha(chrome, 0.42),
+    );
+    for i in 0..7 {
+        let y = rect.y + rect.h * ((i as f32 + 0.5) / 8.0);
+        draw_line(
+            rect.x + 1.4,
+            y,
+            rect.x + rect.w - 1.4,
+            y + ((time * 0.5).sin() * 0.3),
+            0.5,
+            with_alpha(with_alpha(base, 0.2), (i as f32 / 10.0).min(0.55)),
+        );
+    }
+    draw_rectangle_lines(
+        rect.x + 0.6,
+        rect.y + 0.6,
+        (rect.w - 1.2).max(1.0),
+        (rect.h - 1.2).max(1.0),
+        1.3,
+        frame,
+    );
+    draw_circle(
+        rect.x + rect.w * 0.5,
+        rect.y + rect.h * 0.8,
+        rect.w.min(rect.h) * 0.06,
+        frame,
+    );
+    draw_rectangle(
+        rect.x + rect.w * 0.12,
+        rect.y + rect.h * 0.12,
+        rect.w * 0.76,
+        rect.h * 0.76,
+        with_alpha(panel, 0.68),
+    );
+    for i in 0..5 {
+        let t = (i as f32 + 0.7) * 0.11;
+        draw_line(
+            rect.x + rect.w * (0.12 + t),
+            rect.y + rect.h * 0.18,
+            rect.x + rect.w * (0.12 + t),
+            rect.y + rect.h * 0.86,
+            0.4,
+            with_alpha(panel, 0.28 + activity * 0.1),
+        );
+    }
+    for i in 0..6 {
+        let bx = rect.x + rect.w * (0.22 + i as f32 * 0.11);
+        let by = rect.y + rect.h * 0.14;
+        draw_circle(bx, by, 0.9, chrome);
+        draw_circle(bx, rect.y + rect.h * 0.88, 0.9, chrome);
+    }
+
+    let core = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.32);
+    let core_radius = rect.w.min(rect.h) * 0.11;
+    draw_circle(
+        core.x,
+        core.y,
+        core_radius,
+        with_alpha(steel_glow, 0.38),
+    );
+    draw_circle(
+        core.x,
+        core.y,
+        core_radius * 0.7,
+        with_alpha(frame, 0.18 + activity * 0.55),
+    );
+    for i in 0..3 {
+        let a = time * rotor_speed + i as f32 * (std::f32::consts::TAU / 3.0);
+        draw_line(
+            core.x,
+            core.y,
+            core.x + a.cos() * core_radius * 0.9,
+            core.y + a.sin() * core_radius * 0.9,
+            1.0,
+            with_alpha(Color::from_rgba(170, 220, 255, 220), 0.45 + activity * 0.4),
+        );
+    }
+
+    let bar_x = rect.x + rect.w * 0.76;
+    let bar_y = rect.y + rect.h * 0.78;
+    let bar_w = rect.w * 0.18;
+    let bar_h = rect.h * 0.1;
+    let fill = (activity * 0.9).clamp(0.0, 1.0);
+    draw_rectangle(
+        bar_x,
+        bar_y,
+        bar_w,
+        bar_h,
+        with_alpha(Color::from_rgba(8, 16, 24, 190), 0.7),
+    );
+    draw_rectangle(
+        bar_x + 0.8,
+        bar_y + 0.9,
+        (bar_w - 1.6).max(1.0) * fill,
+        bar_h - 1.8,
+        with_alpha(steel_glow, 0.9),
+    );
+    draw_circle(
+        rect.x + rect.w * 0.84,
+        rect.y + rect.h * 0.88,
+        rect.w.min(rect.h) * 0.045,
+        if activity > 0.3 {
+            with_alpha(Color::from_rgba(64, 248, 152, 255), 0.75)
+        } else {
+            with_alpha(Color::from_rgba(120, 140, 170, 180), 0.45)
+        },
+    );
+}
+
+fn blink_ratio(time: f32) -> f32 {
+    0.18 + ((time * 7.5).sin() * 0.5 + 0.5) * 0.62
+}
+
+fn draw_modern_block_visual(
+    block: &sim::BlockDebugView,
+    rect: Rect,
+    sim: &sim::FactorySim,
+    blocks: &[sim::BlockDebugView],
+    time: f32,
+) {
+    match block.kind {
+        sim::BlockKind::InputHopper => draw_input_hopper_visual(rect, block.orientation, time),
+        sim::BlockKind::Conveyor => draw_belt_motion(
+            rect,
+            block.orientation,
+            time,
+            Color::from_rgba(26, 108, 220, 252),
+            Color::from_rgba(110, 198, 255, 238),
+            Color::from_rgba(176, 220, 250, 198),
+        ),
+        sim::BlockKind::FluidityTank => draw_fluidity_tank_visual(rect, time),
+        sim::BlockKind::Cutter => draw_cutter_visual(rect, block.orientation, time),
+        sim::BlockKind::DistributorBelt => draw_distributor_visual(rect, block.orientation, time),
+        sim::BlockKind::DryerOven => draw_dryer_oven_visual(rect, block.orientation, time),
+        sim::BlockKind::OvenExitConveyor => draw_belt_motion(
+            rect,
+            block.orientation,
+            time,
+            Color::from_rgba(38, 120, 220, 232),
+            Color::from_rgba(122, 201, 255, 224),
+            Color::from_rgba(206, 232, 250, 192),
+        ),
+        sim::BlockKind::Flaker => draw_flaker_visual(rect, block.orientation, time),
+        sim::BlockKind::SuctionPipe => {
+            let conn = suction_pipe_connections(block, blocks);
+            draw_suction_pipe_visual(rect, conn, time);
+        }
+        sim::BlockKind::Sortex => draw_sortex_visual(rect, time),
+        sim::BlockKind::BlueBagChute => draw_bag_chute_visual(
+            rect,
+            true,
+            sim.descente_bleue_fill_ratio(),
+            sim.descente_bleue_beacon_active(),
+            time,
+        ),
+        sim::BlockKind::RedBagChute => draw_bag_chute_visual(
+            rect,
+            false,
+            sim.descente_rouge_fill_ratio(),
+            sim.descente_rouge_beacon_active(),
+            time,
+        ),
+        sim::BlockKind::Storage => {
+            draw_rectangle(
+                rect.x,
+                rect.y,
+                rect.w,
+                rect.h,
+                Color::from_rgba(60, 92, 128, 224),
+            );
+            draw_rectangle_lines(
+                rect.x + 0.5,
+                rect.y + 0.5,
+                rect.w - 1.0,
+                rect.h - 1.0,
+                1.2,
+                Color::from_rgba(184, 214, 236, 190),
+            );
+        }
+        sim::BlockKind::MachineA => {
+            let activity = (time * 1.2 + block.id as f32 * 0.11).sin() * 0.5 + 0.5;
+            draw_machine_cluster_visual(
+                rect,
+                Color::from_rgba(213, 227, 238, 228),
+                Color::from_rgba(238, 248, 253, 205),
+                Color::from_rgba(158, 182, 204, 214),
+                activity,
+                2.4,
+                time,
+            );
+            let top = rect.x + rect.w * 0.3;
+            for i in 0..3 {
+                let x = top + i as f32 * rect.w * 0.18;
+                draw_rectangle(
+                    x,
+                    rect.y + rect.h * 0.58,
+                    rect.w * 0.1,
+                    rect.h * 0.12,
+                    with_alpha(Color::from_rgba(224, 242, 255, 210), 0.22 + i as f32 * 0.1),
+                );
+            }
+        }
+        sim::BlockKind::MachineB => {
+            let activity = (time * 1.6 + block.id as f32 * 0.17).sin() * 0.5 + 0.5;
+            draw_machine_cluster_visual(
+                rect,
+                Color::from_rgba(198, 214, 228, 228),
+                Color::from_rgba(232, 242, 248, 198),
+                Color::from_rgba(148, 172, 198, 214),
+                activity,
+                2.9,
+                time,
+            );
+            let c = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.64);
+            let r = rect.w.min(rect.h) * 0.17;
+            for i in 0..6 {
+                let a = time * 4.4 + i as f32 * (std::f32::consts::TAU / 6.0);
+                draw_line(
+                    c.x,
+                    c.y,
+                    c.x + a.cos() * r,
+                    c.y + a.sin() * r,
+                    1.0 + activity * 0.6,
+                    with_alpha(Color::from_rgba(228, 244, 255, 200), 0.45 + activity * 0.5),
+                );
+            }
+        }
+        sim::BlockKind::Buffer => draw_buffer_rack_visual(rect, &block.rack_levels),
+        sim::BlockKind::Seller => draw_seller_visual(rect, time),
     }
 }
 
@@ -1119,27 +4205,35 @@ pub(crate) fn draw_sim_blocks_overlay(
     bounds: Option<(i32, i32, i32, i32)>,
 ) {
     let storage_texture = storage_raw_texture();
-    for block in sim.block_debug_views() {
+    let time = get_time() as f32;
+    let blocks = sim.block_debug_views();
+    for block in &blocks {
         if let Some(tile_bounds) = bounds
-            && !tile_in_bounds(block.tile, tile_bounds)
+            && !block_intersects_bounds(block.tile, block.footprint, tile_bounds)
         {
             continue;
         }
-        let rect = World::tile_rect(block.tile.0, block.tile.1);
+        let rect = sim_block_rect(block.tile, block.footprint);
         let color = sim_block_overlay_color(block.kind);
+        draw_modern_block_visual(block, rect, sim, &blocks, time);
         draw_rectangle_lines(
-            rect.x + 2.0,
-            rect.y + 2.0,
-            rect.w - 4.0,
-            rect.h - 4.0,
-            2.0,
-            color,
+            rect.x + 1.5,
+            rect.y + 1.5,
+            (rect.w - 3.0).max(1.0),
+            (rect.h - 3.0).max(1.0),
+            1.7,
+            with_alpha(color, 0.74),
         );
         if block.kind == sim::BlockKind::Storage && block.raw_qty > 0 {
             draw_storage_raw_stack(rect, block.raw_qty, storage_texture.as_ref());
         }
         if show_labels {
-            let label = format!("#{} {}", block.id, block.kind.label());
+            let kind_label = if block.kind.is_player_buyable() {
+                block.kind.buyable_label()
+            } else {
+                block.kind.label()
+            };
+            let label = format!("#{} {}", block.id, kind_label);
             draw_text_chip(
                 &label,
                 rect.x + 3.0,
@@ -1160,6 +4254,100 @@ pub(crate) fn draw_sim_blocks_overlay(
             );
         }
     }
+}
+
+pub(crate) fn draw_build_block_preview(
+    sim: &sim::FactorySim,
+    world: &World,
+    mouse_tile: Option<(i32, i32)>,
+) {
+    let Some(tile) = mouse_tile else {
+        return;
+    };
+    let Some(preview) = sim.build_block_preview(world, tile) else {
+        return;
+    };
+
+    let rect = sim_block_rect(preview.tile, preview.footprint);
+    let time = get_time() as f32;
+    let existing_blocks = sim.block_debug_views();
+    let ghost = sim::BlockDebugView {
+        id: 0,
+        kind: preview.kind,
+        tile: preview.tile,
+        footprint: preview.footprint,
+        orientation: preview.orientation,
+        raw_qty: 0,
+        inventory_summary: String::new(),
+        rack_levels: [false; 6],
+    };
+
+    draw_modern_block_visual(&ghost, rect, sim, &existing_blocks, time);
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        with_alpha(
+            Color::from_rgba(230, 238, 248, 255),
+            if preview.can_place { 0.26 } else { 0.12 },
+        ),
+    );
+    let border = if !preview.can_place {
+        Color::from_rgba(238, 112, 94, 242)
+    } else if preview.connects_to_line {
+        Color::from_rgba(110, 230, 150, 236)
+    } else {
+        Color::from_rgba(248, 196, 104, 236)
+    };
+    draw_rectangle_lines(
+        rect.x + 0.8,
+        rect.y + 0.8,
+        (rect.w - 1.6).max(1.0),
+        (rect.h - 1.6).max(1.0),
+        2.4,
+        border,
+    );
+
+    if !preview.guidance.is_empty() {
+        let guidance_color = if !preview.can_place {
+            Color::from_rgba(255, 176, 166, 236)
+        } else if preview.connects_to_line {
+            Color::from_rgba(228, 252, 236, 240)
+        } else {
+            Color::from_rgba(255, 226, 166, 228)
+        };
+        let bg = if !preview.can_place {
+            Color::from_rgba(70, 24, 20, 198)
+        } else if preview.connects_to_line {
+            Color::from_rgba(18, 54, 36, 196)
+        } else {
+            Color::from_rgba(72, 52, 14, 192)
+        };
+        let border_col = if !preview.can_place {
+            Color::from_rgba(255, 136, 118, 180)
+        } else if preview.connects_to_line {
+            Color::from_rgba(130, 236, 180, 190)
+        } else {
+            Color::from_rgba(236, 186, 128, 180)
+        };
+        draw_text_chip(
+            preview.guidance.as_str(),
+            rect.x + 6.0,
+            rect.y + rect.h + 12.0,
+            11.0,
+            guidance_color,
+            bg,
+            border_col,
+        );
+    }
+
+    let axis = orientation_axis(preview.orientation);
+    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let tip = center + axis * rect.w.min(rect.h) * 0.24;
+    let base = center - axis * rect.w.min(rect.h) * 0.14;
+    let normal = vec2(-axis.y, axis.x) * rect.w.min(rect.h) * 0.11;
+    draw_triangle(tip, base + normal, base - normal, with_alpha(border, 0.74));
 }
 
 fn draw_storage_raw_stack(rect: Rect, raw_qty: u32, texture: Option<&Texture2D>) {
@@ -1219,3 +4407,92 @@ pub(crate) fn draw_sim_agent_overlay(sim: &sim::FactorySim, show_label: bool) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_close(lhs: f32, rhs: f32) {
+        assert!((lhs - rhs).abs() <= 1e-5, "expected {rhs}, got {lhs}");
+    }
+
+    #[test]
+    fn scaled_prop_texture_placement_recenters_square_assets() {
+        let base_x = 5.0;
+        let base_y = 7.0;
+        let base_w = 22.0;
+        let base_h = 22.0;
+
+        let (draw_x, draw_y, draw_size) =
+            scaled_prop_texture_placement(base_x, base_y, base_w, base_h);
+
+        assert_close(draw_size.x, base_w * PROP_TEXTURE_VISUAL_SCALE);
+        assert_close(draw_size.y, base_h * PROP_TEXTURE_VISUAL_SCALE);
+        assert_close(draw_x, base_x - (draw_size.x - base_w) * 0.5);
+        assert_close(draw_y, base_y - (draw_size.y - base_h) * 0.5);
+    }
+
+    #[test]
+    fn scaled_prop_texture_placement_keeps_non_square_centered() {
+        let base_x = 4.0;
+        let base_y = 10.0;
+        let base_w = 24.0;
+        let base_h = 16.0;
+
+        let (draw_x, draw_y, draw_size) =
+            scaled_prop_texture_placement(base_x, base_y, base_w, base_h);
+
+        assert_close(draw_size.x, base_w * PROP_TEXTURE_VISUAL_SCALE);
+        assert_close(draw_size.y, base_h * PROP_TEXTURE_VISUAL_SCALE);
+        assert_close(draw_x, base_x - (draw_size.x - base_w) * 0.5);
+        assert_close(draw_y, base_y - (draw_size.y - base_h) * 0.5);
+    }
+
+    #[test]
+    fn exterior_tree_selection_is_deterministic() {
+        let world = generate_starter_factory_world(168, 108);
+        let tile = (17, 14);
+        let first = exterior_tree_type_for_tile(&world, tile.0, tile.1, world.get(tile.0, tile.1));
+        let second = exterior_tree_type_for_tile(&world, tile.0, tile.1, world.get(tile.0, tile.1));
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn exterior_tree_selection_covers_all_tree_types() {
+        let world = generate_starter_factory_world(168, 108);
+        let mut seen_chene = false;
+        let mut seen_peuplier = false;
+        let mut seen_pin = false;
+
+        for y in 0..world.h {
+            for x in 0..world.w {
+                let tile = world.get(x, y);
+                match exterior_tree_type_for_tile(&world, x, y, tile) {
+                    Some(TypeArbreExterieur::Chene) => seen_chene = true,
+                    Some(TypeArbreExterieur::Peuplier) => seen_peuplier = true,
+                    Some(TypeArbreExterieur::Pin) => seen_pin = true,
+                    None => {}
+                }
+            }
+        }
+
+        assert!(seen_chene);
+        assert!(seen_peuplier);
+        assert!(seen_pin);
+    }
+
+    #[test]
+    fn exterior_tree_selection_keeps_factory_core_clear() {
+        let world = generate_starter_factory_world(168, 108);
+        let (fx0, fx1, fy0, fy1) = starter_factory_bounds(world.w, world.h);
+
+        for y in fy0..=fy1 {
+            for x in fx0..=fx1 {
+                let tree = exterior_tree_type_for_tile(&world, x, y, world.get(x, y));
+                assert!(tree.is_none());
+            }
+        }
+    }
+}
+
+

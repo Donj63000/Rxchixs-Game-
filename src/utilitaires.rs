@@ -81,137 +81,297 @@ pub(crate) fn tiles_overlapping_aabb(world: &World, aabb: Aabb) -> (i32, i32, i3
     )
 }
 
+pub(crate) fn starter_factory_bounds(w: i32, h: i32) -> (i32, i32, i32, i32) {
+    let w = w.max(8);
+    let h = h.max(8);
+    let available_w = (w - 8).max(6);
+    let available_h = (h - 8).max(6);
+
+    let target_w = ((w as f32) * 0.24).round() as i32;
+    let target_h = ((h as f32) * 0.28).round() as i32;
+    let factory_w = target_w.clamp(12, 44).min(available_w);
+    let factory_h = target_h.clamp(10, 30).min(available_h);
+
+    let center_x = ((w as f32) * 0.58).round() as i32;
+    let center_y = ((h as f32) * 0.52).round() as i32;
+
+    let min_x_lo = 2;
+    let min_x_hi = (w - factory_w - 3).max(min_x_lo);
+    let min_y_lo = 2;
+    let min_y_hi = (h - factory_h - 3).max(min_y_lo);
+
+    let min_x = (center_x - factory_w / 2).clamp(min_x_lo, min_x_hi);
+    let min_y = (center_y - factory_h / 2).clamp(min_y_lo, min_y_hi);
+    let max_x = (min_x + factory_w - 1).clamp(min_x + 2, w - 2);
+    let max_y = (min_y + factory_h - 1).clamp(min_y + 2, h - 2);
+    (min_x, max_x, min_y, max_y)
+}
+
 pub(crate) fn generate_starter_factory_world(w: i32, h: i32) -> World {
     let mut world = World::new_room(w, h);
 
+    // Exterieur type campagne: dominant herbe, avec zones tassees et plaques de terre.
     for y in 1..h - 1 {
         for x in 1..w - 1 {
-            let tile = if x < w / 3 {
-                if y < h / 2 {
-                    Tile::FloorWood
-                } else {
-                    Tile::FloorMoss
-                }
-            } else if x > (w * 2) / 3 {
-                if y < h / 2 {
-                    Tile::Floor
-                } else {
-                    Tile::FloorSand
-                }
+            let h0 = hash_with_salt(x, y, 0x51) % 100;
+            let tile = if h0 < 58 {
+                Tile::FloorMoss
+            } else if h0 < 84 {
+                Tile::Floor
             } else {
-                Tile::FloorMetal
+                Tile::FloorSand
             };
             world.set(x, y, tile);
         }
     }
 
-    let vertical_walls = [w / 3, (w * 2) / 3];
-    for &vx in &vertical_walls {
-        for y in 1..h - 1 {
-            world.set(vx, y, Tile::WallSteel);
+    let (fx0, fx1, fy0, fy1) = starter_factory_bounds(w, h);
+    let span_y = (fy1 - fy0).max(6);
+    let road_y = clamp_i32(fy0 + span_y / 2, fy0 + 2, fy1 - 2);
+    let ship_y = clamp_i32(fy0 + (span_y * 3) / 4, fy0 + 2, fy1 - 2);
+    let south_door_x = (fx0 + fx1) / 2;
+
+    // Axes de circulation extérieurs (accès réception + accès expédition).
+    for y in road_y - 1..=road_y + 1 {
+        for x in 1..=fx0 + 2 {
+            if world.in_bounds(x, y) {
+                world.set(x, y, Tile::Floor);
+            }
         }
-        for &door_y in &[h / 6, h / 2, (h * 5) / 6] {
-            for dy in -1..=1 {
-                let y = clamp_i32(door_y + dy, 1, h - 2);
-                world.set(vx, y, Tile::FloorMetal);
+    }
+    for y in ship_y - 1..=ship_y + 1 {
+        for x in fx1 - 2..w - 1 {
+            if world.in_bounds(x, y) {
+                world.set(x, y, Tile::Floor);
+            }
+        }
+    }
+    for x in south_door_x - 1..=south_door_x + 1 {
+        for y in fy1..h - 1 {
+            if world.in_bounds(x, y) {
+                world.set(x, y, Tile::Floor);
             }
         }
     }
 
-    let horizontal_walls = [h / 3, (h * 2) / 3];
-    for &hy in &horizontal_walls {
-        for x in 1..w - 1 {
-            world.set(x, hy, Tile::WallBrick);
-        }
-        for &door_x in &[w / 6, w / 2, (w * 5) / 6] {
-            for dx in -1..=1 {
-                let x = clamp_i32(door_x + dx, 1, w - 2);
-                world.set(x, hy, Tile::FloorMetal);
-            }
-        }
-    }
-
-    let core_min_x = (w / 2) - 9;
-    let core_max_x = (w / 2) + 9;
-    let core_min_y = (h / 2) - 6;
-    let core_max_y = (h / 2) + 6;
-
-    for x in core_min_x..=core_max_x {
-        world.set(x, core_min_y, Tile::WallNeon);
-        world.set(x, core_max_y, Tile::WallNeon);
-    }
-    for y in core_min_y..=core_max_y {
-        world.set(core_min_x, y, Tile::WallNeon);
-        world.set(core_max_x, y, Tile::WallNeon);
-    }
-    for x in (w / 2) - 1..=(w / 2) + 1 {
-        world.set(x, core_min_y, Tile::FloorWood);
-        world.set(x, core_max_y, Tile::FloorWood);
-    }
-    for y in (h / 2) - 1..=(h / 2) + 1 {
-        world.set(core_min_x, y, Tile::FloorWood);
-        world.set(core_max_x, y, Tile::FloorWood);
-    }
-    for y in core_min_y + 1..core_max_y {
-        for x in core_min_x + 1..core_max_x {
-            if !world.is_solid(x, y) {
+    // Aplomb de quai côté réception et côté expédition.
+    for y in road_y - 2..=road_y + 2 {
+        for x in fx0 - 4..=fx0 + 2 {
+            if world.in_bounds(x, y) {
                 world.set(x, y, Tile::FloorWood);
             }
         }
+    }
+    for y in ship_y - 2..=ship_y + 2 {
+        for x in fx1 - 2..=fx1 + 4 {
+            if world.in_bounds(x, y) {
+                world.set(x, y, Tile::FloorWood);
+            }
+        }
+    }
+
+    // Bâtiment usine compact.
+    for y in fy0 + 1..fy1 {
+        for x in fx0 + 1..fx1 {
+            world.set(x, y, Tile::FloorMetal);
+        }
+    }
+
+    for x in fx0..=fx1 {
+        world.set(x, fy0, Tile::WallSteel);
+        world.set(x, fy1, Tile::WallSteel);
+    }
+    for y in fy0..=fy1 {
+        world.set(fx0, y, Tile::WallSteel);
+        world.set(fx1, y, Tile::WallSteel);
+    }
+
+    // Portes extérieures.
+    for dy in -1..=1 {
+        world.set(fx0, road_y + dy, Tile::FloorMetal);
+        world.set(fx1, ship_y + dy, Tile::FloorMetal);
+    }
+    for dx in -1..=1 {
+        world.set(south_door_x + dx, fy1, Tile::FloorMetal);
+    }
+
+    // Sous-zones internes (réception / production / expédition + support).
+    let p1 = fx0 + ((fx1 - fx0) / 3);
+    let p2 = fx0 + ((fx1 - fx0) * 2 / 3);
+    let support_wall_y = (fy1 - 6).max(fy0 + 3);
+
+    for y in fy0 + 1..fy1 {
+        for x in fx0 + 1..p1 {
+            world.set(x, y, Tile::FloorWood);
+        }
+        for x in p2 + 1..fx1 {
+            world.set(x, y, Tile::FloorWood);
+        }
+    }
+    for y in support_wall_y + 1..fy1 {
+        for x in fx0 + 1..fx1 {
+            world.set(x, y, Tile::Floor);
+        }
+    }
+
+    for y in fy0 + 1..fy1 {
+        world.set(p1, y, Tile::WallBrick);
+        world.set(p2, y, Tile::WallBrick);
+    }
+    for x in fx0 + 1..fx1 {
+        world.set(x, support_wall_y, Tile::WallBrick);
+    }
+
+    // Ouvertures internes pour un flux lisible.
+    for dy in -1..=1 {
+        world.set(p1, road_y + dy, Tile::FloorMetal);
+        world.set(p2, road_y + dy, Tile::FloorMetal);
+        world.set(p2, ship_y + dy, Tile::FloorMetal);
+    }
+    for dx in -1..=1 {
+        world.set(south_door_x + dx, support_wall_y, Tile::FloorMetal);
+        world.set(fx0 + 3 + dx, support_wall_y, Tile::FloorMetal);
+        world.set(fx1 - 3 + dx, support_wall_y, Tile::FloorMetal);
     }
 
     enforce_world_border(&mut world);
     world
 }
 
+fn add_prop_if_walkable_unique(
+    props: &mut Vec<Prop>,
+    world: &World,
+    tile: (i32, i32),
+    kind: PropKind,
+) {
+    if !world.in_bounds(tile.0, tile.1) || world.is_solid(tile.0, tile.1) {
+        return;
+    }
+    if prop_index_at_tile(props, tile).is_some() {
+        return;
+    }
+    props.push(Prop {
+        tile_x: tile.0,
+        tile_y: tile.1,
+        kind,
+        phase: prop_phase_for_tile(tile),
+    });
+}
+
 pub(crate) fn default_props(world: &World) -> Vec<Prop> {
     let mut props = Vec::new();
 
-    for y in (3..world.h - 3).step_by(5) {
-        for x in (3..world.w - 3).step_by(6) {
-            if world.is_solid(x, y) {
+    let (fx0, fx1, fy0, fy1) = starter_factory_bounds(world.w, world.h);
+    let span_y = (fy1 - fy0).max(6);
+    let road_y = clamp_i32(fy0 + span_y / 2, fy0 + 2, fy1 - 2);
+    let ship_y = clamp_i32(fy0 + (span_y * 3) / 4, fy0 + 2, fy1 - 2);
+    let support_y = (fy1 - 3).max(fy0 + 2);
+
+    // Éclairage du site: allée principale + sortie expédition.
+    for x in (4..fx0 - 1).step_by(9) {
+        add_prop_if_walkable_unique(&mut props, world, (x, road_y - 2), PropKind::Lamp);
+    }
+    for x in ((fx1 + 4).max(4)..world.w - 4).step_by(10) {
+        add_prop_if_walkable_unique(&mut props, world, (x, ship_y + 2), PropKind::Lamp);
+    }
+    for y in ((fy1 + 3).max(4)..world.h - 4).step_by(9) {
+        add_prop_if_walkable_unique(&mut props, world, ((fx0 + fx1) / 2 - 2, y), PropKind::Lamp);
+        add_prop_if_walkable_unique(&mut props, world, ((fx0 + fx1) / 2 + 2, y), PropKind::Lamp);
+    }
+
+    // Exterieur: touches decoratives legeres, priorite au vegetal.
+    for y in (4..world.h - 4).step_by(8) {
+        for x in (4..world.w - 4).step_by(10) {
+            if x >= fx0 - 6 && x <= fx1 + 6 && y >= fy0 - 6 && y <= fy1 + 6 {
                 continue;
             }
-            let h = hash_with_salt(x, y, 0xA3) % 19;
+            let h = hash_with_salt(x, y, 0xA3) % 100;
             if h > 14 {
                 continue;
             }
-            let kind = match h {
-                0..=3 => PropKind::Crate,
-                4..=6 => PropKind::Pipe,
-                7..=8 => PropKind::Lamp,
-                9..=10 => PropKind::Banner,
-                11..=12 => PropKind::Plant,
-                13 => PropKind::Bench,
-                _ => PropKind::Crystal,
+            let kind = match h % 12 {
+                0..=5 => PropKind::Plant,
+                6 => PropKind::Bench,
+                7 => PropKind::Lamp,
+                8 => PropKind::BoxCartonVide,
+                9 => PropKind::PaletteLogistique,
+                10 => PropKind::CaisseAilBrut,
+                _ => PropKind::CaisseAilCasse,
             };
-            props.push(Prop {
-                tile_x: x,
-                tile_y: y,
-                kind,
-                phase: prop_phase_for_tile((x, y)),
-            });
+            add_prop_if_walkable_unique(&mut props, world, (x, y), kind);
         }
     }
 
-    let hero_spots = [
-        (world.w / 2, world.h / 2, PropKind::Bench),
-        (world.w / 2 - 2, world.h / 2, PropKind::Lamp),
-        (world.w / 2 + 2, world.h / 2, PropKind::Lamp),
-    ];
-    for (x, y, kind) in hero_spots {
-        if world.in_bounds(x, y)
-            && !world.is_solid(x, y)
-            && prop_index_at_tile(&props, (x, y)).is_none()
-        {
-            props.push(Prop {
-                tile_x: x,
-                tile_y: y,
-                kind,
-                phase: prop_phase_for_tile((x, y)),
-            });
+    // Réception: stock initial et outillage.
+    let recv_x0 = fx0 + 2;
+    let recv_x1 = (fx0 + ((fx1 - fx0) / 3) - 2).max(recv_x0);
+    for x in (recv_x0..=recv_x1).step_by(3) {
+        for y in (fy0 + 2..=road_y + 2).step_by(3) {
+            let slot = hash_with_salt(x, y, 0xA7) % 3;
+            let kind = match slot {
+                0 => PropKind::CaisseAilBrut,
+                1 => PropKind::BoxCartonVide,
+                _ => PropKind::PaletteLogistique,
+            };
+            add_prop_if_walkable_unique(&mut props, world, (x, y), kind);
         }
     }
+
+    // Zone de production: tuyauterie + signalétique.
+    let proc_x0 = (fx0 + ((fx1 - fx0) / 3) + 2).min(fx1 - 3);
+    let proc_x1 = (fx0 + ((fx1 - fx0) * 2 / 3) - 2).max(proc_x0);
+    for x in (proc_x0..=proc_x1).step_by(4) {
+        add_prop_if_walkable_unique(&mut props, world, (x, road_y - 1), PropKind::Pipe);
+        add_prop_if_walkable_unique(&mut props, world, (x, road_y + 3), PropKind::Pipe);
+    }
+    for x in (proc_x0 + 1..=proc_x1).step_by(5) {
+        add_prop_if_walkable_unique(&mut props, world, (x, road_y + 1), PropKind::CaisseAilCasse);
+    }
+    add_prop_if_walkable_unique(
+        &mut props,
+        world,
+        ((proc_x0 + proc_x1) / 2 - 1, road_y + 4),
+        PropKind::BoxSacRouge,
+    );
+    add_prop_if_walkable_unique(
+        &mut props,
+        world,
+        ((proc_x0 + proc_x1) / 2 + 2, road_y + 4),
+        PropKind::BoxSacVert,
+    );
+    add_prop_if_walkable_unique(&mut props, world, (proc_x0 + 1, fy0 + 2), PropKind::Banner);
+    add_prop_if_walkable_unique(&mut props, world, (proc_x1 - 1, fy0 + 2), PropKind::Banner);
+
+    // Expédition: palettes/caisses prêtes au départ.
+    let ship_x0 = (fx0 + ((fx1 - fx0) * 2 / 3) + 2).min(fx1 - 2);
+    for y in (ship_y - 3..=ship_y + 3).step_by(2) {
+        add_prop_if_walkable_unique(&mut props, world, (ship_x0, y), PropKind::PaletteLogistique);
+        add_prop_if_walkable_unique(&mut props, world, (ship_x0 + 1, y), PropKind::BoxSacBleu);
+        add_prop_if_walkable_unique(&mut props, world, (fx1 + 2, y), PropKind::PaletteLogistique);
+        add_prop_if_walkable_unique(&mut props, world, (fx1 + 3, y), PropKind::BoxSacVert);
+    }
+
+    // Support: petit coin vie/administratif.
+    add_prop_if_walkable_unique(
+        &mut props,
+        world,
+        (fx0 + 3, support_y),
+        PropKind::BureauPcOn,
+    );
+    add_prop_if_walkable_unique(&mut props, world, (fx0 + 6, support_y), PropKind::Lavabo);
+    add_prop_if_walkable_unique(
+        &mut props,
+        world,
+        (fx1 - 3, support_y),
+        PropKind::BureauPcOff,
+    );
+    add_prop_if_walkable_unique(&mut props, world, (fx1 - 6, support_y), PropKind::Plant);
+    add_prop_if_walkable_unique(
+        &mut props,
+        world,
+        ((fx0 + fx1) / 2, support_y - 1),
+        PropKind::Lamp,
+    );
 
     props
 }
@@ -727,5 +887,53 @@ mod tests {
         let h3 = hash_with_salt(12, 7, 100);
         assert_eq!(h1, h2);
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn starter_factory_bounds_stays_inside_world() {
+        for (w, h) in [(25, 15), (96, 64), (168, 108)] {
+            let (fx0, fx1, fy0, fy1) = starter_factory_bounds(w, h);
+            assert!(fx0 >= 1 && fy0 >= 1);
+            assert!(fx1 <= w - 2 && fy1 <= h - 2);
+            assert!(fx1 - fx0 >= 4);
+            assert!(fy1 - fy0 >= 4);
+        }
+    }
+
+    #[test]
+    fn generated_world_keeps_large_outdoor_area() {
+        let world = generate_starter_factory_world(168, 108);
+        let (fx0, fx1, fy0, fy1) = starter_factory_bounds(world.w, world.h);
+        let mut outside = 0usize;
+        let mut outside_open = 0usize;
+        for y in 1..world.h - 1 {
+            for x in 1..world.w - 1 {
+                let in_factory = x >= fx0 && x <= fx1 && y >= fy0 && y <= fy1;
+                if in_factory {
+                    continue;
+                }
+                outside += 1;
+                if !world.is_solid(x, y) {
+                    outside_open += 1;
+                }
+            }
+        }
+        assert!(outside > 10_000);
+        assert!(outside_open * 100 / outside >= 96);
+    }
+
+    #[test]
+    fn default_props_are_unique_and_walkable() {
+        use std::collections::HashSet;
+
+        let world = generate_starter_factory_world(168, 108);
+        let props = default_props(&world);
+        let mut occupied = HashSet::new();
+        for prop in props {
+            let tile = (prop.tile_x, prop.tile_y);
+            assert!(world.in_bounds(tile.0, tile.1));
+            assert!(!world.is_solid(tile.0, tile.1));
+            assert!(occupied.insert(tile));
+        }
     }
 }

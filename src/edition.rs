@@ -13,6 +13,16 @@ pub(crate) fn prop_kind_label(kind: PropKind) -> &'static str {
         PropKind::Plant => "pot de fleur",
         PropKind::Bench => "banc",
         PropKind::Crystal => "cristal",
+        PropKind::BoxCartonVide => "box carton vide",
+        PropKind::BoxSacBleu => "box sac bleu",
+        PropKind::BoxSacRouge => "box sac rouge",
+        PropKind::BoxSacVert => "box sac vert",
+        PropKind::PaletteLogistique => "palette logistique",
+        PropKind::BureauPcOn => "bureau PC ON",
+        PropKind::BureauPcOff => "bureau PC OFF",
+        PropKind::CaisseAilBrut => "caisse d'ail brut",
+        PropKind::CaisseAilCasse => "caisse d'ail cassé",
+        PropKind::Lavabo => "lavabo",
     }
 }
 
@@ -34,6 +44,16 @@ pub(crate) fn editor_brush_label(brush: EditorBrush) -> &'static str {
         EditorBrush::Plant => "Pot de fleur",
         EditorBrush::Bench => "Banc",
         EditorBrush::Crystal => "Cristal",
+        EditorBrush::BoxCartonVide => "Box carton vide",
+        EditorBrush::BoxSacBleu => "Box sac bleu",
+        EditorBrush::BoxSacRouge => "Box sac rouge",
+        EditorBrush::BoxSacVert => "Box sac vert",
+        EditorBrush::PaletteLogistique => "Palette logistique",
+        EditorBrush::BureauPcOn => "Bureau PC ON",
+        EditorBrush::BureauPcOff => "Bureau PC OFF",
+        EditorBrush::CaisseAilBrut => "Caisse d'ail brut",
+        EditorBrush::CaisseAilCasse => "Caisse d'ail cassé",
+        EditorBrush::Lavabo => "Lavabo",
         EditorBrush::EraseProp => "Effacer objet",
     }
 }
@@ -212,6 +232,16 @@ pub(crate) fn editor_apply_brush(map: &mut MapAsset, brush: EditorBrush, tile: (
         EditorBrush::Plant => set_prop_at_tile(map, tile, PropKind::Plant),
         EditorBrush::Bench => set_prop_at_tile(map, tile, PropKind::Bench),
         EditorBrush::Crystal => set_prop_at_tile(map, tile, PropKind::Crystal),
+        EditorBrush::BoxCartonVide => set_prop_at_tile(map, tile, PropKind::BoxCartonVide),
+        EditorBrush::BoxSacBleu => set_prop_at_tile(map, tile, PropKind::BoxSacBleu),
+        EditorBrush::BoxSacRouge => set_prop_at_tile(map, tile, PropKind::BoxSacRouge),
+        EditorBrush::BoxSacVert => set_prop_at_tile(map, tile, PropKind::BoxSacVert),
+        EditorBrush::PaletteLogistique => set_prop_at_tile(map, tile, PropKind::PaletteLogistique),
+        EditorBrush::BureauPcOn => set_prop_at_tile(map, tile, PropKind::BureauPcOn),
+        EditorBrush::BureauPcOff => set_prop_at_tile(map, tile, PropKind::BureauPcOff),
+        EditorBrush::CaisseAilBrut => set_prop_at_tile(map, tile, PropKind::CaisseAilBrut),
+        EditorBrush::CaisseAilCasse => set_prop_at_tile(map, tile, PropKind::CaisseAilCasse),
+        EditorBrush::Lavabo => set_prop_at_tile(map, tile, PropKind::Lavabo),
         EditorBrush::EraseProp => remove_prop_at_tile(map, tile),
     }
 }
@@ -314,6 +344,8 @@ pub(crate) fn build_game_state_from_map(
     let mut map_copy = map.clone();
     sanitize_map_asset(&mut map_copy);
     let player = Player::new(tile_center(map_copy.player_spawn));
+    let chariot = spawn_chariot_pour_map(&map_copy.world, map_copy.player_spawn);
+    let chargeur_clark = spawn_chargeur_pour_chariot(&map_copy.world, &chariot);
     let npc = NpcWanderer::new(tile_center(map_copy.npc_spawn), 0x9922_11AA_77CC_44DD);
     let palette = Palette::new();
     let lineage = build_lineage_preview(character_catalog, lineage_seed);
@@ -365,6 +397,8 @@ pub(crate) fn build_game_state_from_map(
     GameState {
         world: map_copy.world,
         player,
+        chariot,
+        chargeur_clark,
         npc,
         camera_center: tile_center(map_copy.player_spawn),
         camera_zoom: 1.15,
@@ -381,6 +415,15 @@ pub(crate) fn build_game_state_from_map(
         social_state,
         pawn_ui,
         hud_ui: HudUiState::default(),
+        pause_menu_open: false,
+        pause_panel: PausePanel::Aucun,
+        pause_status_text: None,
+        pause_status_timer: 0.0,
+        pause_save_name: String::new(),
+        pause_sauvegardes: Vec::new(),
+        pause_sauvegardes_warning: None,
+        pause_sauvegardes_offset: 0,
+        pause_selected_sauvegarde: None,
         show_character_inspector: false,
         debug: false,
         last_input: Vec2::ZERO,

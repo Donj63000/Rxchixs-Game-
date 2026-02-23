@@ -218,6 +218,62 @@ Portee: rendre les interactions sociales visibles en partie reelle, reduire le b
 - `src/modes.rs`
 - `docs/PLANS.md`
 
+# ExecPlan - Chariot elevateur (Clark jaune) conduisible + manutention caisses
+
+Date: 2026-02-22
+Portee: ajout d'un vehicule gameplay conduit par le joueur, avec manipulation de caisses, rendu detaille et verifications completes.
+
+## Objectifs observables
+- Ajouter un chariot elevateur jaune visible en jeu des le demarrage.
+- Permettre au joueur de monter/descendre du chariot.
+- Permettre de deplacer des caisses via fourches (charger/decharger).
+- Rendre le chariot visuellement travaille (carrosserie, masts, fourches, roues, gyrophare, details cabine).
+- Garder la boucle de simulation fixe et deterministic-friendly.
+
+## Invariants
+- Tick fixe conserve: aucune logique vehicule dependante du framerate render.
+- Aucune mutation de schema de sauvegarde carte necessaire pour cette feature (etat runtime).
+- Conduite et manutention sans fallback silencieux: action impossible => raison explicite dans HUD.
+- Deplacement chariot respecte collisions murs (meme grille monde que le joueur).
+- Deplacement de caisse: pas de duplication/perte silencieuse.
+
+## Milestones
+1. Creer un module dedie `src/chariot_elevateur.rs` (etat, orientation, mouvement, interaction caisses).
+2. Integrer le chariot dans `GameState` et l'initialiser a un spawn jouable.
+3. Integrer commandes gameplay:
+   - `E`: monter/descendre
+   - `F`: charger/decharger caisse
+4. Integrer update fixe:
+   - conduite chariot en pas fixe
+   - synchronisation position joueur conducteur
+5. Ajouter rendu detaille du chariot + caisse transportee.
+6. Ajouter feedback HUD/debug pour etat conduite/cargo.
+7. Ajouter tests (unitaire + integration cible), puis `fmt`, `clippy`, `test`, `run` smoke.
+
+## Fichiers impactes (prevus)
+- `src/main.rs`
+- `src/modes.rs`
+- `src/rendu.rs`
+- `src/chariot_elevateur.rs` (nouveau)
+- `docs/PLANS.md`
+
+## Risques
+- Conflits d'inputs avec commandes de deplacement existantes.
+- Artefacts de layering visuel entre props/personnages/chariot.
+- Regressions comportementales du joueur hors conduite.
+
+## Strategie de test
+- Tests unitaires `chariot_elevateur`:
+  - detection caisse transportable
+  - cycle charge/decharge deterministe
+- Test d'integration cible:
+  - `GameState` initialise un chariot valide sur tuile marchable
+- Validation complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` (smoke lancement)
+
 ## Risques
 - Interactions trop frequentes si les seuils sont trop permissifs.
 - Regressions sur l'historique si les logs ne couvrent plus certains cas attendus.
@@ -227,3 +283,285 @@ Portee: rendre les interactions sociales visibles en partie reelle, reduire le b
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test`
 - `cargo run` smoke test
+
+# ExecPlan - Systeme de sauvegardes nommees + horodate + menu robuste
+
+Date: 2026-02-22
+Portee: remplacer la sauvegarde unique par un systeme multi-sauvegardes avec UX complete dans le menu pause.
+
+## Objectifs observables
+- Pouvoir creer plusieurs sauvegardes nommees.
+- Afficher une horodate lisible pour chaque sauvegarde.
+- Proposer un menu de sauvegarde avec saisie du nom et liste des slots existants.
+- Proposer un menu de chargement avec selection explicite d'une sauvegarde.
+- Rendre le tout robuste: schema versionne, erreurs explicites, liste tolerante aux fichiers invalides.
+
+## Invariants
+- Tick simulation fixe conserve (pause = simulation completement gelee).
+- Pas de fallback silencieux: toute erreur de sauvegarde/chargement doit etre visible.
+- Schema de sauvegarde versionne (`schema_version`) et verifie au chargement.
+- Donnees chargees sanitisees avant reconstruction de l'etat de jeu.
+
+## Milestones
+1. Creer un module `src/sauvegarde.rs` dedie:
+   - format de fichier,
+   - nommage/horodatage,
+   - listing des slots,
+   - chargement/sauvegarde robustes.
+2. Integrer l'etat UI pause necessaire dans `GameState`.
+3. Transformer le menu pause:
+   - ecran sauvegarder (nom + horodate + liste + actions),
+   - ecran charger (liste + selection + action charger).
+4. Ajouter des tests unitaires de persistance et horodatage.
+5. Executer la verification complete (`fmt`, `clippy -D warnings`, `test`, `run` smoke).
+
+## Fichiers impactes
+- `src/sauvegarde.rs` (nouveau)
+- `src/modes.rs`
+- `src/main.rs`
+- `src/edition.rs`
+- `docs/PLANS.md`
+
+## Risques
+- Erreurs de format de date/nom de fichier.
+- Regressions d'ergonomie dans le menu pause.
+- Fichiers de sauvegarde corrompus ou schema futur.
+
+## Strategie de test
+- Tests unitaires `sauvegarde`:
+  - format horodate stable,
+  - sanitation nom,
+  - roundtrip save/list/load,
+  - gestion fichier invalide,
+  - rejet schema futur.
+- Validation complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` (smoke)
+
+# ExecPlan - Refonte visuelle barre HUD basse (theme moderne colore)
+
+Date: 2026-02-22
+Portee: ameliorer le rendu de la barre basse (fonds, panneaux, pills KPI, boutons) avec un style recent, colore et soigne, sans changer la logique metier.
+
+## Objectifs observables
+- La barre HUD basse est visuellement plus moderne, lisible et coloree.
+- Les boutons sont plus lisibles et mieux differencies (normal, hover, actif).
+- Les panneaux ont une profondeur visuelle (degrade, ombres, highlights) sans perdre la clarte.
+- Les KPI restent parfaitement lisibles et priorises.
+
+## Invariants
+- Aucune logique simulation modifiee.
+- Aucun comportement dependant du framerate/temps reel OS ajoute dans la simulation.
+- Separation simulation/rendu preservee.
+- Les interactions HUD existantes (clic, hover, scroll) restent intactes.
+
+## 10 taches de recherche
+1. Cartographier les points d'entree de rendu HUD dans `src/ui_hud.rs`.
+2. Identifier les primitives visuelles communes (couleurs, cadres, boutons, pills).
+3. Relever les fonctions partagees par plusieurs panneaux pour eviter les regressions.
+4. Evaluer les contraintes de lisibilite texte (contraste clair/fonce).
+5. Etudier les etats interactifs existants (hover, actif, inactif) et leur signal visuel.
+6. Delimiter ce qui appartient strictement a la barre basse vs fenetres modales.
+7. Concevoir une palette cible (base, surface, accents, danger, succes) coherente.
+8. Definir les nouveaux effets autorises sans cout excessif (degrades, lignes de separation, glow subtil).
+9. Verifier les points de test unitaire possibles pour helpers visuels purs.
+10. Structurer un plan d'implementation incremental pour eviter un gros patch opaque.
+
+## 10 taches d'execution robustes
+1. Introduire des helpers visuels purs reutilisables (`mix_color`, `draw_vertical_gradient`, etc.).
+2. Refaire le fond de barre basse avec degrade multicouche et separations propres.
+3. Harmoniser les couleurs de base (`ui_col_*`) vers une direction plus recente et coloree.
+4. Revoir `draw_panel_frame` pour un rendu panneau plus premium (profondeur + header plus net).
+5. Reviser `draw_top_strip` pour aligner l'identite visuelle avec le nouveau theme.
+6. Refaire `draw_stat_pill` (fond, accent, contraste, hover) sans casser les donnees affichees.
+7. Refaire `draw_small_button` (normal/hover/actif) avec une hierarchie visuelle plus claire.
+8. Ajuster les contrastes textes/ombres pour conserver la lisibilite globale.
+9. S'assurer que les overlays/fenetres utilisant les memes primitives restent coherents.
+10. Nettoyer le code modifie (noms, commentaires courts utiles, suppression des redondances).
+
+## 10 taches de verification completes
+1. Ajouter/adapter un test unitaire de helper visuel pur pour verrouiller le comportement attendu.
+2. Verifier manuellement le rendu de la barre basse en resolution standard.
+3. Verifier manuellement en petite resolution (HUD compact) la lisibilite des boutons.
+4. Verifier manuellement en grande resolution (HUD etendu) la coherence du layout.
+5. Verifier manuellement les etats de boutons vitesse (`Pause`, `1x`, `2x`, `4x`).
+6. Verifier manuellement la lisibilite des pills KPI (notamment valeurs negatives/positives).
+7. Executer `cargo fmt`.
+8. Executer `cargo clippy --all-targets --all-features -- -D warnings`.
+9. Executer `cargo test`.
+10. Executer un smoke test `cargo run`.
+
+# ExecPlan - Menu construction complet (prix) + zones metier + racks 5 niveaux + vente conditionnelle
+
+Date: 2026-02-22
+Portee: transformer le menu construction et la logique associee pour basculer vers des zones metier (stockage/cassage/dehy-finition/vente), un systeme de racks palettes 5 niveaux operable au Clark, et une vente dependante d'un bureau + responsable.
+
+## Objectifs observables
+- Le menu construction liste clairement les elements achetables avec prix estimes (zones, sols, racks, bureau vente).
+- Le stockage est une zone rectangulaire bleue, sans bloc "machine" associe.
+- "Machine A" / "Machine B" deviennent des zones metier:
+  - "Zone de cassage"
+  - "Zone de dehy/finition"
+- Le "tampon" devient des racks palettes avec capacite superposee 5 niveaux par rack.
+- Le Clark peut deposer/prendre une palette sur un niveau precis (RDC + niveaux 1..5) selon la hauteur de mat/fourches.
+- La "vente" devient une zone dediee et n'est activee que si:
+  - un bureau de vente est present dans la zone;
+  - un responsable des ventes est assigne.
+
+## Invariants
+- Tick simulation fixe conserve (60 Hz, pas de logique metier liee au framerate).
+- Separation simulation / rendu preservee.
+- Pas de fallback silencieux: tout blocage metier expose une raison explicite en statut HUD.
+- Compatibilite des saves preservee via `schema_version` et migration tolerance.
+- Determinisme des tests conserve (pas d'aleatoire implicite).
+
+## 10 taches de recherche
+1. Auditer `src/ui_hud.rs` pour isoler les points d'entree du catalogue construction, details, couts, et actions d'application.
+2. Auditer `src/sim.rs` pour identifier les couplages actuels "machines blocs" vs "zones metier".
+3. Auditer `src/modes.rs` pour valider le flux clic gauche/droit build mode et integration des nouvelles actions.
+4. Auditer `src/rendu.rs` pour verifier les overlays zones/couleurs et etiquetage attendu.
+5. Auditer `src/chariot_elevateur.rs` pour mesurer les changements necessaires a la manutention multi-niveaux.
+6. Auditer `src/sauvegarde.rs` et structures RON impactees pour schema/version/migration.
+7. Inventorier les types d'objets achetables (sols, racks, bureau, zones) et definir une grille de prix estimee coherente.
+8. Definir un modele de "zone rectangle" (debut/fin drag) compatible avec l'input actuel.
+9. Definir le contrat metier "vente active" (bureau + responsable) et ses etats explicites.
+10. Identifier les tests de reproduction a ajouter pour chaque bug/regression possible (zones, racks, vente, menu).
+
+## 10 taches d'execution robustes
+1. Introduire un catalogue data-driven d'achats (type, prix, mode d'application) pour le menu construction.
+2. Mettre a jour `ui_hud` pour afficher tous les elements achetables et leurs prix (incluant sols et zones), avec details lisibles.
+3. Renommer les libelles metier visibles:
+   - "Zone stockage" (bleu),
+   - "Zone de cassage",
+   - "Zone de dehy/finition",
+   - "Zone vente".
+4. Implementer l'outil de peinture rectangle de zones (stockage/production/vente) dans le build mode.
+5. Introduire les achats de sols (cout par tuile) dans le flux construction et leur application sur la carte.
+6. Transformer le "tampon" en entite rack palettes:
+   - capacite par rack,
+   - niveaux adressables RDC + 1..5.
+7. Etendre le Clark pour selectionner/viser le niveau de pose/reprise selon hauteur de mat/fourches.
+8. Ajouter la logique metier de vente conditionnelle:
+   - detection bureau de vente dans zone vente,
+   - affectation responsable des ventes,
+   - blocage explicite sinon.
+9. Mettre a jour le debug HUD/overlay pour tracer:
+   - etat des zones,
+   - occupation racks par niveau,
+   - etat activation vente.
+10. Ajouter migration/schema save pour persister zones/racks/affectation et garantir chargement ancien schema.
+
+## 10 taches de verification completes
+1. Ajouter tests unitaires du catalogue achats (prix, disponibilite, mapping type->action).
+2. Ajouter tests unitaires de couts zones/sols (debit/refund/clamp tresorerie).
+3. Ajouter test unitaire de peinture rectangle zone (bornes incluses et in-bounds).
+4. Ajouter test unitaire de racks (capacite max 5 niveaux, collisions de niveau, depot/reprise deterministes).
+5. Ajouter test unitaire Clark->rack (mapping hauteur fourches -> niveau cible).
+6. Ajouter test d'integration vente conditionnelle (sans bureau/sans responsable/avec les deux).
+7. Ajouter test de compatibilite save/load (ancien schema -> migration -> fonctionnement).
+8. Executer `cargo fmt`.
+9. Executer `cargo clippy --all-targets --all-features -- -D warnings`.
+10. Executer `cargo test` puis smoke `cargo run`.
+
+## Fichiers impactes (prevus)
+- `src/ui_hud.rs`
+- `src/sim.rs`
+- `src/modes.rs`
+- `src/rendu.rs`
+- `src/chariot_elevateur.rs`
+- `src/sauvegarde.rs`
+- `src/main.rs`
+- `data/starter_factory.ron` (si rebasage layout de depart requis)
+- `docs/PLANS.md`
+
+## Risques
+- Refonte metier large avec risque de regressions sur la simulation existante.
+- Complexite d'etat pour racks multi-niveaux si non modulee proprement.
+- Incoherence possible entre zone metier et rendu/overlays si migration partielle.
+- Compatibilite save vulnerable si schema non versionne strictement.
+
+## Strategie de test
+- Approche incrementalement testee par sous-systeme (menu, zones, racks, vente).
+- Priorite aux tests de logique pure deterministe avant verification visuelle.
+- Validation complete obligatoire:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke.
+
+# ExecPlan - Ligne de production de `plan.md` (connexion complete + rendu detaille)
+
+Date: 2026-02-22
+Portee: appliquer integralement les blocs de la ligne de production de `plan.md` (entree -> tri -> sacs), avec connexions fonctionnelles en simulation et rendu graphique soigne par element.
+
+## Objectifs observables
+- Tous les elements de `plan.md` sont placables via le menu construction avec prix lisible.
+- La ligne est validee uniquement si les elements sont interconnectes dans le bon ordre.
+- Le flux matiere suit les etapes modernes (lavage, coupe, dehydratation, floconnage, tri, sacs).
+- Chaque bloc de la ligne possede un rendu visuel distinct et travaille.
+- Le joueur peut orienter les blocs directionnels et visualiser l'orientation active.
+
+## Invariants
+- Tick simulation fixe et deterministe conserve.
+- Separation simulation/rendu respectee.
+- Pas de fallback silencieux: toute ligne incomplete expose une raison explicite.
+- Compatibilite saves/layout conservee (defaults serde sur nouveaux champs).
+
+## 10 taches de recherche
+1. Relire `plan.md` et extraire les contraintes dimensionnelles de chaque bloc.
+2. Auditer `src/sim.rs` pour valider le modele de `BlockKind`, footprints et orientation.
+3. Auditer `src/sim.rs` pour verifier la logique de connectivite (ordre et liens autorises).
+4. Auditer `src/ui_hud.rs` pour recenser le catalogue construction et les couts affiches.
+5. Auditer `src/modes.rs` pour les raccourcis build (selection, orientation, echap).
+6. Auditer `src/rendu.rs` pour identifier le point d'entree de rendu des blocs simu.
+7. Definir une grammaire visuelle par bloc (couleurs, pieces, animations, lecture en vue top-down).
+8. Verifier les besoins de culling viewport pour grands footprints (four, tremie, bac).
+9. Identifier les tests logiques minimaux a ajouter (placement footprint, connectivite moderne).
+10. Definir la strategie de validation finale (fmt, clippy, test, smoke run).
+
+## 10 taches d'execution robustes
+1. Finaliser les enums/donnees de simulation pour tous les blocs de `plan.md`.
+2. Verrouiller les footprints orientes et la validation de placement multi-tiles.
+3. Finaliser la verification de connectivite de la ligne moderne dans l'ordre metier.
+4. Finaliser le tick moderne (etapes de production + sacs bleus/rouges + boxes bleues).
+5. Etendre `BUILD_MENU_BLOCKS` avec tous les blocs achetables de la ligne et descriptions metier.
+6. Integrer le raccourci `T` pour rotation d'orientation des blocs en mode construction.
+7. Etendre le rendu overlay avec couleurs exhaustives pour tous les `BlockKind`.
+8. Implementer un rendu detaille dedie par bloc (tremie, convoyeurs, bac eau animee, coupeuse, repartiteur, four, sortie, floconneuse, tuyaux, sortex, descentes sacs).
+9. Adapter l'affichage debug/labels aux footprints (positionnement + culling par rectangle).
+10. Mettre a jour la documentation et les statuts de build pour rendre la ligne lisible en jeu.
+
+## 10 taches de verification completes
+1. Ajouter un test unitaire: footprint oriente du four s'inverse bien (horizontal/vertical).
+2. Ajouter un test unitaire: refus de placement en collision footprint.
+3. Ajouter un test unitaire: la ligne moderne exige les blocs requis et la connectivite.
+4. Verifier manuellement en jeu: placement/rotation des blocs avec `T`.
+5. Verifier manuellement en jeu: activation de la ligne complete et message explicite en cas d'erreur.
+6. Verifier manuellement en jeu: lisibilite visuelle de chaque bloc de la ligne.
+7. Executer `cargo fmt`.
+8. Executer `cargo clippy --all-targets --all-features -- -D warnings`.
+9. Executer `cargo test`.
+10. Executer un smoke run `cargo run`.
+
+## Fichiers impactes (prevus)
+- `docs/PLANS.md`
+- `src/sim.rs`
+- `src/ui_hud.rs`
+- `src/modes.rs`
+- `src/rendu.rs`
+
+## Risques
+- Surcharge visuelle si les details graphiques masquent la lecture gameplay.
+- Regressions de performance si le rendu des gros blocs n'est pas culle correctement.
+- Regressions de compatibilite layout si les footprints ne sont pas normalises au chargement.
+
+## Strategie de test
+- Tests unitaires de logique pure pour footprint/connectivite.
+- Verification manuelle du rendu et de l'ergonomie build.
+- Validation complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke.

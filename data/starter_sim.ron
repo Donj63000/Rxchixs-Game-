@@ -5,7 +5,7 @@
     // 60.0 => 1 real second = 1 simulation minute
     time_scale: 60.0,
 
-    starting_cash: 25000.0,
+    starting_cash: 500000.0,
 
     // Human OPEX
     worker_count: 3,
