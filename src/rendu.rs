@@ -1106,7 +1106,7 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
     }
 }
 
-pub(crate) fn draw_background(palette: &Palette, time: f32) {
+pub(crate) fn draw_background(palette: &Palette, _time: f32) {
     let sw = screen_width();
     let sh = screen_height();
     let lines = sh.max(1.0) as i32;
@@ -1116,16 +1116,6 @@ pub(crate) fn draw_background(palette: &Palette, time: f32) {
         let c = color_lerp(palette.bg_top, palette.bg_bottom, t);
         draw_line(0.0, y as f32, sw, y as f32, 1.0, c);
     }
-
-    let haze_x = sw * 0.5 + (time * 0.23).sin() * sw * 0.18;
-    let haze_y = sh * 0.2 + (time * 0.31).cos() * 8.0;
-    draw_circle(haze_x, haze_y, sw * 0.35, with_alpha(palette.haze, 0.07));
-    draw_circle(
-        sw * 0.2,
-        sh * 0.75,
-        sw * 0.25,
-        with_alpha(palette.haze, 0.05),
-    );
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -2361,7 +2351,7 @@ pub(crate) fn run_main_menu_frame(
             0.0,
             screen_width(),
             screen_height(),
-            Color::from_rgba(6, 12, 20, 88),
+            Color::from_rgba(8, 14, 22, 52),
         );
     } else {
         let bg_time = if menu_state.ambiance_motion {
@@ -2387,24 +2377,9 @@ pub(crate) fn run_main_menu_frame(
             0.0,
             screen_width(),
             screen_height(),
-            Color::from_rgba(6, 11, 18, 78),
+            Color::from_rgba(8, 14, 22, 44),
         );
     }
-
-    let pulse = (time * 1.12).sin() * 0.5 + 0.5;
-    let orb_size = screen_height() * (0.36 + pulse * 0.05);
-    draw_circle(
-        screen_width() - orb_size * 0.26,
-        orb_size * 0.22,
-        orb_size,
-        Color::from_rgba(32, 102, 124, 24),
-    );
-    draw_circle(
-        screen_width() - orb_size * 0.18,
-        orb_size * 0.16,
-        orb_size * 0.58,
-        Color::from_rgba(38, 166, 154, 20),
-    );
 
     let sw = screen_width();
     let sh = screen_height();
@@ -2418,7 +2393,7 @@ pub(crate) fn run_main_menu_frame(
         sh * 0.84,
         sw,
         sh * 0.16,
-        Color::from_rgba(4, 10, 18, 72),
+        Color::from_rgba(8, 14, 22, 40),
     );
 
     let button_w = (sw * 0.28).clamp(300.0, 420.0);
@@ -3011,13 +2986,7 @@ fn draw_belt_motion(
             (rect.h - 4.0).max(1.0),
         )
     };
-    draw_rectangle(
-        lane.x,
-        lane.y,
-        lane.w,
-        lane.h,
-        with_alpha(belt, 0.58),
-    );
+    draw_rectangle(lane.x, lane.y, lane.w, lane.h, with_alpha(belt, 0.58));
     draw_rectangle(
         lane.x + 1.2,
         lane.y + (lane.h * 0.33),
@@ -3077,7 +3046,7 @@ fn draw_belt_motion(
         } else {
             lane.x + lane.w + phase
         };
-        let mut limit = if move_pos {
+        let limit = if move_pos {
             lane.x + lane.w + spacing
         } else {
             lane.x - spacing
@@ -3098,7 +3067,7 @@ fn draw_belt_motion(
         } else {
             lane.y + lane.h + phase
         };
-        let mut limit = if move_pos {
+        let limit = if move_pos {
             lane.y + lane.h + spacing
         } else {
             lane.y - spacing
@@ -3224,13 +3193,7 @@ fn draw_input_hopper_visual(rect: Rect, orientation: sim::BlockOrientation, time
         rect.w.min(rect.h) * 0.09,
         Color::from_rgba(118, 130, 154, 218),
     );
-    draw_circle_lines(
-        cap_x,
-        cap_y,
-        rect.w.min(rect.h) * 0.09,
-        0.9,
-        frame,
-    );
+    draw_circle_lines(cap_x, cap_y, rect.w.min(rect.h) * 0.09, 0.9, frame);
     for i in 0..3 {
         let step = time * 2.6 + i as f32 * 0.9;
         draw_line(
@@ -3448,7 +3411,12 @@ fn draw_distributor_visual(rect: Rect, orientation: sim::BlockOrientation, time:
         with_alpha(Color::from_rgba(248, 252, 255, 226), 0.72),
     );
     let sec = pivot + normal * foot * 0.4;
-    draw_circle(sec.x, sec.y, 2.2, with_alpha(Color::from_rgba(196, 226, 252, 175), 0.9));
+    draw_circle(
+        sec.x,
+        sec.y,
+        2.2,
+        with_alpha(Color::from_rgba(196, 226, 252, 175), 0.9),
+    );
     draw_line(
         pivot.x,
         pivot.y,
@@ -3527,7 +3495,12 @@ fn draw_flaker_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32)
         let dust = (phase.sin() * 0.5 + 0.5) * drum_radius * 0.75;
         let dir = i as f32 / 12.0 * std::f32::consts::TAU;
         let p = center + vec2(dir.cos() * dust, dir.sin() * dust * 0.32);
-        draw_circle(p.x, p.y, 1.0, with_alpha(Color::from_rgba(230, 245, 255, 170), 0.42));
+        draw_circle(
+            p.x,
+            p.y,
+            1.0,
+            with_alpha(Color::from_rgba(230, 245, 255, 170), 0.42),
+        );
     }
 }
 
@@ -3679,7 +3652,10 @@ fn draw_sortex_visual(rect: Rect, time: f32) {
             rect.y + rect.h * (0.34 + (i % 2) as f32 * 0.02),
             rect.w * 0.03,
             rect.h * 0.2,
-            with_alpha(Color::from_rgba(248, 244, 180, 200), 0.2 + (i as f32 * 0.12).min(0.95)),
+            with_alpha(
+                Color::from_rgba(248, 244, 180, 200),
+                0.2 + (i as f32 * 0.12).min(0.95),
+            ),
         );
     }
 }
@@ -3774,11 +3750,14 @@ fn draw_bag_chute_visual(
             bag.x + 3.0 + i as f32 * (bag.w - 6.0) / 3.0,
             wave,
             1.2,
-            with_alpha(if is_blue {
-                Color::from_rgba(132, 196, 255, 220)
-            } else {
-                Color::from_rgba(255, 150, 136, 220)
-            }, 0.62),
+            with_alpha(
+                if is_blue {
+                    Color::from_rgba(132, 196, 255, 220)
+                } else {
+                    Color::from_rgba(255, 150, 136, 220)
+                },
+                0.62,
+            ),
         );
     }
     let gauge_x = rect.x + rect.w * 0.2;
@@ -3915,7 +3894,10 @@ fn draw_seller_visual(rect: Rect, time: f32) {
         rect.x + rect.w * 0.5,
         rect.y + rect.h * 0.72,
         rect.w.min(rect.h) * 0.1,
-        with_alpha(Color::from_rgba(255, 180, 80, 200), 0.22 + blink_ratio(time)),
+        with_alpha(
+            Color::from_rgba(255, 180, 80, 200),
+            0.22 + blink_ratio(time),
+        ),
     );
 }
 
@@ -4007,12 +3989,7 @@ fn draw_machine_cluster_visual(
 
     let core = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.32);
     let core_radius = rect.w.min(rect.h) * 0.11;
-    draw_circle(
-        core.x,
-        core.y,
-        core_radius,
-        with_alpha(steel_glow, 0.38),
-    );
+    draw_circle(core.x, core.y, core_radius, with_alpha(steel_glow, 0.38));
     draw_circle(
         core.x,
         core.y,
@@ -4494,5 +4471,3 @@ mod tests {
         }
     }
 }
-
-

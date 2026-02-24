@@ -545,50 +545,32 @@ pub fn draw_hud(
     }
 }
 
-fn draw_bar_background(bar: Rect, time: f32) {
-    let base_top = rgba(24, 50, 86, 248);
-    let base_bottom = rgba(7, 14, 26, 252);
+fn draw_bar_background(bar: Rect, _time: f32) {
+    let base_top = rgba(42, 62, 86, 248);
+    let base_bottom = rgba(16, 24, 36, 252);
     draw_vertical_gradient(bar, base_top, base_bottom, 34);
 
-    let pulse = (time * 1.25).sin() * 0.5 + 0.5;
-    let cyan_glow = with_alpha(ui_col_glow_cyan(), 0.08 + pulse * 0.07);
-    let teal_glow = with_alpha(ui_col_glow_teal(), 0.05 + pulse * 0.04);
-    draw_rectangle(bar.x, bar.y + bar.h * 0.04, bar.w, bar.h * 0.20, cyan_glow);
-    draw_rectangle(bar.x, bar.y + bar.h * 0.36, bar.w, bar.h * 0.20, teal_glow);
     draw_rectangle(
         bar.x,
         bar.y + bar.h * 0.62,
         bar.w,
         bar.h * 0.38,
-        with_alpha(rgba(0, 0, 0, 255), 0.34),
+        with_alpha(rgba(0, 0, 0, 255), 0.24),
     );
-
-    let stripe_w = (bar.w / 28.0).max(38.0);
-    let mut sx = bar.x - stripe_w;
-    while sx < bar.x + bar.w + stripe_w {
-        draw_rectangle(
-            sx,
-            bar.y + bar.h * 0.70,
-            stripe_w * 0.46,
-            1.0,
-            with_alpha(ui_col_border_hi(), 0.10),
-        );
-        sx += stripe_w;
-    }
 
     draw_rectangle(
         bar.x,
         bar.y,
         bar.w,
         2.0,
-        with_alpha(ui_col_border_hi(), 0.60),
+        with_alpha(ui_col_border_hi(), 0.42),
     );
     draw_rectangle(
         bar.x,
         bar.y + 2.0,
         bar.w,
         1.0,
-        with_alpha(ui_col_glow_cyan(), 0.42),
+        with_alpha(ui_col_border_hi(), 0.24),
     );
     draw_rectangle(
         bar.x,
@@ -611,7 +593,7 @@ fn draw_bar_background(bar: Rect, time: f32) {
         bar.w - 2.0,
         bar.h - 2.0,
         1.0,
-        rgba(10, 20, 34, 228),
+        rgba(22, 30, 40, 228),
     );
 }
 
@@ -762,14 +744,14 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         header_h - 1.0,
     );
     let header_top = if hovered {
-        rgba(56, 124, 184, 248)
+        rgba(84, 118, 154, 248)
     } else {
-        rgba(40, 102, 162, 246)
+        rgba(74, 106, 142, 246)
     };
     let header_bottom = if hovered {
-        rgba(20, 54, 96, 248)
+        rgba(42, 64, 88, 248)
     } else {
-        rgba(17, 44, 84, 246)
+        rgba(36, 58, 82, 246)
     };
     draw_vertical_gradient(header, header_top, header_bottom, 10);
     draw_rectangle(
@@ -788,38 +770,11 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         with_alpha(ui_col_border_hi(), if hovered { 0.78 } else { 0.54 }),
     );
 
-    let accent = if hovered {
-        mix_color(ui_col_accent(), ui_col_glow_cyan(), 0.24)
-    } else {
-        ui_col_accent()
-    };
-    draw_rectangle(rect.x + 8.0, rect.y + 5.0, 4.0, header.h - 8.0, accent);
-    draw_rectangle(
-        rect.x + 14.0,
-        rect.y + 5.0,
-        2.0,
-        header.h - 8.0,
-        with_alpha(ui_col_glow_cyan(), 0.48),
-    );
-    draw_circle(
-        rect.x + rect.w - 12.0,
-        rect.y + 12.0,
-        2.5,
-        with_alpha(
-            if hovered {
-                ui_col_glow_teal()
-            } else {
-                ui_col_glow_cyan()
-            },
-            if hovered { 0.90 } else { 0.65 },
-        ),
-    );
-
     let fs = 16.0;
     let (fill, shadow) = ui_text_and_shadow_for_bg(header_bottom);
     draw_text_shadowed(
         title,
-        rect.x + 20.0,
+        rect.x + 12.0,
         rect.y + 17.5,
         fs,
         if hovered { ui_col_text_primary() } else { fill },

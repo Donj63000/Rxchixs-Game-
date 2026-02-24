@@ -1,5 +1,18 @@
 use macroquad::prelude::*;
 
+const UI_PASS_RESETS_CAMERA: bool = true;
+const UI_PASS_RESETS_MATERIAL: bool = true;
+
+#[inline]
+fn ui_pass_resets_camera() -> bool {
+    UI_PASS_RESETS_CAMERA
+}
+
+#[inline]
+fn ui_pass_resets_material() -> bool {
+    UI_PASS_RESETS_MATERIAL
+}
+
 /// Begin a UI/text pass safely.
 ///
 /// Why: in macroquad, text is rendered as textured quads.
@@ -10,10 +23,14 @@ use macroquad::prelude::*;
 #[inline]
 pub(crate) fn begin_ui_pass() {
     // UI is screen-space.
-    set_default_camera();
+    if ui_pass_resets_camera() {
+        set_default_camera();
+    }
 
     // Absolutely critical: reset any custom shader/material that might still be active.
-    gl_use_default_material();
+    if ui_pass_resets_material() {
+        gl_use_default_material();
+    }
 }
 
 /// Force-reset to default material (useful as a cheap "safety pin").
@@ -21,7 +38,9 @@ pub(crate) fn begin_ui_pass() {
 #[inline]
 #[allow(dead_code)]
 pub(crate) fn ensure_default_material() {
-    gl_use_default_material();
+    if ui_pass_resets_material() {
+        gl_use_default_material();
+    }
 }
 
 /// Safe wrapper to use a custom material without leaking it to other draw calls.
@@ -36,6 +55,19 @@ pub(crate) fn ensure_default_material() {
 pub(crate) fn with_material<R>(material: &Material, f: impl FnOnce() -> R) -> R {
     gl_use_material(material);
     let out = f();
-    gl_use_default_material();
+    if ui_pass_resets_material() {
+        gl_use_default_material();
+    }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_pass_invariants_require_camera_and_material_reset() {
+        assert!(ui_pass_resets_camera());
+        assert!(ui_pass_resets_material());
+    }
 }

@@ -373,7 +373,7 @@ const MODERN_LINE_REQUIRED_KINDS: [BlockKind; 12] = [
     BlockKind::Sortex,
     BlockKind::BlueBagChute,
     BlockKind::RedBagChute,
-    ];
+];
 
 const MODERN_LINE_GUIDE_ORDER: [BlockKind; 10] = [
     BlockKind::InputHopper,
@@ -1524,10 +1524,7 @@ impl FactorySim {
         }
 
         if let Some(reason) = self.modern_line_readiness_reason() {
-            return (
-                format!("Connexion a corriger: {reason}"),
-                false,
-            );
+            return (format!("Connexion a corriger: {reason}"), false);
         }
 
         ("Ligne complete: ce bloc sert de renfort".to_string(), true)
@@ -1663,11 +1660,12 @@ impl FactorySim {
                 return;
             }
         };
-        let (placement_guidance, placement_connected) = if self.block_brush.is_modern_line_component() {
-            self.modern_line_placement_guidance(self.block_brush, tile, footprint)
-        } else {
-            (String::new(), true)
-        };
+        let (placement_guidance, placement_connected) =
+            if self.block_brush.is_modern_line_component() {
+                self.modern_line_placement_guidance(self.block_brush, tile, footprint)
+            } else {
+                (String::new(), true)
+            };
 
         let id = self.next_block_id;
         let capex = self.block_brush.capex();
@@ -3140,10 +3138,11 @@ mod tests {
 
         sim.set_block_brush(BlockKind::FluidityTank);
         sim.set_block_orientation(BlockOrientation::East);
-        let Some(preview) = sim.build_block_preview(&world, (10, 10)) else {
+        let Some(preview) = sim.build_block_preview(&world, (20, 20)) else {
             panic!("preview should exist");
         };
 
+        assert!(preview.can_place, "preview doit etre placable ici");
         assert!(!preview.connects_to_line);
         assert!(preview.guidance.contains("Aucune ligne en cours"));
     }
@@ -3158,14 +3157,14 @@ mod tests {
             sim.apply_build_click(&mut world, tile, true);
         }
 
-        sim.toggle_build_mode();
+        assert!(sim.build_mode_enabled());
         sim.set_block_brush(BlockKind::InputHopper);
         sim.set_block_orientation(BlockOrientation::East);
-        sim.apply_build_click(&mut world, (10, 10), false);
+        sim.apply_build_click(&mut world, (10, 20), false);
 
         sim.set_block_brush(BlockKind::FluidityTank);
         sim.set_block_orientation(BlockOrientation::East);
-        let Some(preview) = sim.build_block_preview(&world, (13, 10)) else {
+        let Some(preview) = sim.build_block_preview(&world, (13, 21)) else {
             panic!("preview should exist");
         };
 
@@ -3176,6 +3175,35 @@ mod tests {
 
     #[test]
     fn modern_line_next_step_is_connectivity_driven() {
+        fn place(
+            sim: &mut FactorySim,
+            world: &mut crate::World,
+            kind: BlockKind,
+            tile: (i32, i32),
+            orientation: BlockOrientation,
+        ) {
+            let before = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            sim.set_block_brush(kind);
+            sim.set_block_orientation(orientation);
+            sim.apply_build_click(world, tile, false);
+            let after = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            assert!(
+                after > before,
+                "placement failed for {:?} at {:?}: {}",
+                kind,
+                tile,
+                sim.status_line()
+            );
+        }
+
         let mut sim = FactorySim::new(StarterSimConfig::default(), 120, 90);
         let mut world = crate::World::new_room(120, 90);
 
@@ -3190,9 +3218,13 @@ mod tests {
             "premier bloc attendu"
         );
 
-        sim.set_block_brush(BlockKind::InputHopper);
-        sim.set_block_orientation(BlockOrientation::East);
-        sim.apply_build_click(&mut world, (10, 10), false);
+        place(
+            &mut sim,
+            &mut world,
+            BlockKind::InputHopper,
+            (10, 20),
+            BlockOrientation::East,
+        );
 
         assert_eq!(
             sim.next_modern_line_step(),
@@ -3200,12 +3232,20 @@ mod tests {
             "apres entree ligne, la prochaine etape est bac fluidite"
         );
 
-        sim.set_block_brush(BlockKind::Conveyor);
-        sim.set_block_orientation(BlockOrientation::East);
-        sim.apply_build_click(&mut world, (13, 13), false);
-        sim.set_block_brush(BlockKind::FluidityTank);
-        sim.set_block_orientation(BlockOrientation::East);
-        sim.apply_build_click(&mut world, (14, 11), false);
+        place(
+            &mut sim,
+            &mut world,
+            BlockKind::Conveyor,
+            (13, 23),
+            BlockOrientation::East,
+        );
+        place(
+            &mut sim,
+            &mut world,
+            BlockKind::FluidityTank,
+            (14, 21),
+            BlockOrientation::East,
+        );
 
         assert_eq!(
             sim.next_modern_line_step(),
@@ -3324,4 +3364,3 @@ mod tests {
         assert!(sim.line.sacs_bleus_total + sim.line.sacs_rouges_total > 0);
     }
 }
-

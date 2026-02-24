@@ -1769,3 +1769,179 @@ fn rand_range_u8(seed: u64, idx: u32, lo: u8, hi: u8) -> u8 {
     let v = (x as u32) % span;
     (lo as u32 + v).min(100) as u8
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state(seed: u64) -> GameState {
+        let map = MapAsset::new_default();
+        let catalog = CharacterCatalog::load_default().expect("catalogue par defaut attendu");
+        build_game_state_from_map(&map, &catalog, seed)
+    }
+
+    fn assert_color_close(actual: Color, expected: Color) {
+        let eps = 1e-6;
+        assert!((actual.r - expected.r).abs() <= eps);
+        assert!((actual.g - expected.g).abs() <= eps);
+        assert!((actual.b - expected.b).abs() <= eps);
+        assert!((actual.a - expected.a).abs() <= eps);
+    }
+
+    #[test]
+    fn pawn_key_and_bar_labels_are_stable() {
+        assert_eq!(PawnKey::Player.short_label(), "Joueur");
+        assert_eq!(PawnKey::Npc.short_label(), "Visiteur");
+        assert_eq!(PawnKey::SimWorker.short_label(), "Employe");
+        assert_eq!(NeedBar::ALL.len(), NeedBar::COUNT);
+        assert_eq!(SkillBar::ALL.len(), SkillBar::COUNT);
+        assert_eq!(TraitBar::ALL.len(), TraitBar::COUNT);
+        assert_eq!(SynthBar::ALL.len(), SynthBar::COUNT);
+    }
+
+    #[test]
+    fn pawn_metrics_seeded_is_deterministic_and_respects_ranges() {
+        let a = PawnMetrics::seeded(0xA55A_33CC_7788_1122);
+        let b = PawnMetrics::seeded(0xA55A_33CC_7788_1122);
+        let c = PawnMetrics::seeded(0x1122_3344_5566_7788);
+
+        assert_eq!(a.needs, b.needs);
+        assert_eq!(a.skills, b.skills);
+        assert_eq!(a.traits, b.traits);
+        assert_eq!(a.synth, b.synth);
+        assert_ne!(a.needs, c.needs);
+
+        for v in a.needs {
+            assert!((62..96).contains(&v));
+        }
+        for v in a.skills {
+            assert!((18..92).contains(&v));
+        }
+        for v in a.traits {
+            assert!((30..88).contains(&v));
+        }
+        assert!((70..100).contains(&a.synth[SynthBar::Sante as usize]));
+        assert!((55..100).contains(&a.synth[SynthBar::Fatigue as usize]));
+        assert!((55..98).contains(&a.synth[SynthBar::Moral as usize]));
+    }
+
+    #[test]
+    fn clamp_all_caps_all_metrics_to_100() {
+        let mut metrics = PawnMetrics {
+            needs: [255; NeedBar::COUNT],
+            skills: [250; SkillBar::COUNT],
+            traits: [245; TraitBar::COUNT],
+            synth: [240; SynthBar::COUNT],
+        };
+
+        metrics.clamp_all();
+
+        assert!(metrics.needs.iter().all(|v| *v == 100));
+        assert!(metrics.skills.iter().all(|v| *v == 100));
+        assert!(metrics.traits.iter().all(|v| *v == 100));
+        assert!(metrics.synth.iter().all(|v| *v == 100));
+    }
+
+    #[test]
+    fn choose_order_actor_prefers_selected_then_falls_back() {
+        let mut state = test_state(0x1234_5678);
+        state.pawn_ui.selected = Some(PawnKey::Npc);
+        assert_eq!(choose_order_actor(&state, PawnKey::Player), PawnKey::Npc);
+
+        state.pawn_ui.selected = Some(PawnKey::Player);
+        assert_eq!(choose_order_actor(&state, PawnKey::Player), PawnKey::Npc);
+    }
+
+    #[test]
+    fn open_context_menu_creates_distinct_actor_target_pair() {
+        let mut state = test_state(0x9999_AAAA);
+        state.pawn_ui.selected = Some(PawnKey::Player);
+
+        open_pawn_context_menu(&mut state, PawnKey::Npc, vec2(123.0, 45.0));
+        let menu = state.pawn_ui.context_menu.expect("menu contextuel attendu");
+        assert_eq!(menu.actor, PawnKey::Player);
+        assert_eq!(menu.target, PawnKey::Npc);
+        assert_eq!(menu.anchor_screen, vec2(123.0, 45.0));
+    }
+
+    #[test]
+    fn hit_test_prefers_nearest_pawn_inside_radius() {
+        let mut state = test_state(0xCAFEBABE);
+        state.player.pos = vec2(100.0, 100.0);
+        state.npc.pos = vec2(110.0, 100.0);
+
+        let hit = hit_test_pawn_world(&state, vec2(108.5, 100.0));
+        assert_eq!(hit, Some(PawnKey::Npc));
+        assert_eq!(hit_test_pawn_world(&state, vec2(400.0, 400.0)), None);
+    }
+
+    #[test]
+    fn pawn_label_uses_card_name_and_falls_back_when_missing() {
+        let mut state = test_state(0xFACE_B00C);
+        let npc_name = state
+            .pawns
+            .iter()
+            .find(|p| p.key == PawnKey::Npc)
+            .map(|p| p.name.clone())
+            .expect("pawn npc attendu");
+        assert_eq!(pawn_label(&state, PawnKey::Npc), npc_name.as_str());
+
+        state.pawns.retain(|p| p.key != PawnKey::SimWorker);
+        assert_eq!(pawn_label(&state, PawnKey::SimWorker), "Employe");
+    }
+
+    #[test]
+    fn history_scroll_uses_social_filter() {
+        let mut state = test_state(0x1111_2222_3333_4444);
+        let panel = Rect::new(10.0, 10.0, 500.0, 420.0);
+
+        let pawn = state
+            .pawns
+            .iter_mut()
+            .find(|p| p.key == PawnKey::Player)
+            .expect("pawn joueur attendu");
+        for i in 0..24 {
+            pawn.history.push(
+                i as f64,
+                if i % 2 == 0 {
+                    LogCategorie::Social
+                } else {
+                    LogCategorie::Debug
+                },
+                format!("evt-{i}"),
+            );
+        }
+
+        let all = history_max_scroll_px(&state, PawnKey::Player, panel, false);
+        let social_only = history_max_scroll_px(&state, PawnKey::Player, panel, true);
+        assert!(all >= social_only);
+        assert!(all > 0.0);
+    }
+
+    #[test]
+    fn sheet_tabs_use_fixed_expected_geometry() {
+        let panel = Rect::new(100.0, 200.0, 450.0, 500.0);
+        let (fiche, history, social) = sheet_tab_rects(panel);
+        assert_eq!(fiche, Rect::new(114.0, 300.0, 96.0, 24.0));
+        assert_eq!(history, Rect::new(216.0, 300.0, 106.0, 24.0));
+        assert_eq!(social, Rect::new(328.0, 300.0, 90.0, 24.0));
+    }
+
+    #[test]
+    fn rand_range_respects_bounds_and_degenerate_ranges() {
+        for idx in 0..256 {
+            let v = rand_range_u8(0xAA55_AA55, idx, 12, 40);
+            assert!((12..40).contains(&v));
+        }
+        assert_eq!(rand_range_u8(123, 0, 50, 50), 50);
+        assert_eq!(rand_range_u8(123, 0, 90, 10), 90);
+    }
+
+    #[test]
+    fn short_labels_and_bar_colors_are_stable() {
+        assert_eq!(short_label(SocialActionKind::DireBonjour), "Salut");
+        assert_eq!(short_label(SocialActionKind::SEngueuler), "Dispute");
+        assert_color_close(bar_color(-1.0), Color::from_rgba(236, 92, 72, 245));
+        assert_color_close(bar_color(2.0), Color::from_rgba(86, 210, 132, 245));
+    }
+}

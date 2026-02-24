@@ -429,3 +429,136 @@ pub(crate) fn build_game_state_from_map(
         last_input: Vec2::ZERO,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_map(w: i32, h: i32) -> MapAsset {
+        let mut world = World {
+            w,
+            h,
+            tiles: vec![Tile::Floor; (w * h) as usize],
+        };
+        enforce_world_border(&mut world);
+        MapAsset {
+            version: MAP_FILE_VERSION,
+            label: "Test".to_string(),
+            world,
+            props: Vec::new(),
+            player_spawn: (1, 1),
+            npc_spawn: (w - 2, h - 2),
+        }
+    }
+
+    #[test]
+    fn border_helpers_detect_and_enforce_walls() {
+        let mut world = World {
+            w: 6,
+            h: 5,
+            tiles: vec![Tile::Floor; 30],
+        };
+        enforce_world_border(&mut world);
+
+        assert!(is_border_tile(&world, (0, 0)));
+        assert!(is_border_tile(&world, (5, 4)));
+        assert!(!is_border_tile(&world, (2, 2)));
+        assert_eq!(world.get(0, 2), Tile::Wall);
+        assert_eq!(world.get(5, 2), Tile::Wall);
+        assert_eq!(world.get(2, 0), Tile::Wall);
+        assert_eq!(world.get(2, 4), Tile::Wall);
+    }
+
+    #[test]
+    fn set_prop_updates_existing_slot_and_rejects_invalid_tiles() {
+        let mut map = test_map(8, 8);
+        let tile = (3, 3);
+
+        assert!(set_prop_at_tile(&mut map, tile, PropKind::Crate));
+        let idx = prop_index_at_tile(&map.props, tile).expect("prop doit exister");
+        assert_eq!(map.props[idx].phase, prop_phase_for_tile(tile));
+        assert_eq!(map.props[idx].kind, PropKind::Crate);
+
+        assert!(!set_prop_at_tile(&mut map, tile, PropKind::Crate));
+        assert!(set_prop_at_tile(&mut map, tile, PropKind::Lamp));
+        let idx = prop_index_at_tile(&map.props, tile).expect("prop doit exister");
+        assert_eq!(map.props[idx].kind, PropKind::Lamp);
+
+        assert!(!set_prop_at_tile(&mut map, (0, 0), PropKind::Pipe));
+        assert!(!set_prop_at_tile(&mut map, (-1, 0), PropKind::Pipe));
+    }
+
+    #[test]
+    fn set_map_tile_enforces_border_and_removes_props_on_wall() {
+        let mut map = test_map(9, 9);
+        let tile = (4, 4);
+        assert!(set_prop_at_tile(&mut map, tile, PropKind::Crystal));
+        assert!(prop_index_at_tile(&map.props, tile).is_some());
+
+        assert!(!set_map_tile(&mut map, (0, 3), Tile::FloorWood));
+        assert!(set_map_tile(&mut map, tile, Tile::WallSteel));
+        assert_eq!(map.world.get(tile.0, tile.1), Tile::WallSteel);
+        assert!(prop_index_at_tile(&map.props, tile).is_none());
+    }
+
+    #[test]
+    fn brush_rect_is_inclusive_for_all_tiles() {
+        let mut map = test_map(12, 12);
+        assert!(editor_apply_brush_rect(
+            &mut map,
+            EditorBrush::FloorWood,
+            (3, 4),
+            (5, 6)
+        ));
+
+        for y in 4..=6 {
+            for x in 3..=5 {
+                assert_eq!(map.world.get(x, y), Tile::FloorWood);
+            }
+        }
+    }
+
+    #[test]
+    fn undo_stack_is_capped_and_stroke_reset_clears_state() {
+        let mut map = test_map(8, 8);
+        let mut editor = EditorState::new();
+        editor.stroke_active = true;
+        editor.stroke_changed = true;
+        editor.drag_start = Some((2, 2));
+
+        for i in 0..(EDITOR_UNDO_LIMIT + 7) {
+            let tile = if i % 2 == 0 {
+                Tile::Floor
+            } else {
+                Tile::FloorMetal
+            };
+            map.world.set(2, 2, tile);
+            editor_push_undo(&mut editor, &map);
+        }
+
+        assert_eq!(editor.undo_stack.len(), EDITOR_UNDO_LIMIT);
+        editor_reset_stroke_state(&mut editor);
+        assert!(!editor.stroke_active);
+        assert!(!editor.stroke_changed);
+        assert!(editor.drag_start.is_none());
+    }
+
+    #[test]
+    fn deserialize_map_rejects_invalid_payload_and_sanitizes_border() {
+        assert!(deserialize_map_asset("not a ron payload").is_err());
+
+        let mut map = test_map(10, 10);
+        map.world.set(0, 5, Tile::FloorMoss);
+        let encoded = serialize_map_asset(&map).expect("serialisation attendue");
+        let decoded = deserialize_map_asset(&encoded).expect("deserialisation attendue");
+        assert_eq!(decoded.world.get(0, 5), Tile::Wall);
+    }
+
+    #[test]
+    fn labels_for_brushes_tools_and_props_are_non_empty() {
+        assert!(!prop_kind_label(PropKind::Lavabo).is_empty());
+        assert!(!editor_brush_label(EditorBrush::CaisseAilBrut).is_empty());
+        assert_eq!(editor_tool_label(EditorTool::Brush), "Pinceau");
+        assert_eq!(editor_tool_label(EditorTool::Rect), "Rectangle");
+    }
+}

@@ -226,7 +226,6 @@ impl Aabb {
 struct Palette {
     bg_top: Color,
     bg_bottom: Color,
-    haze: Color,
     floor_a: Color,
     floor_b: Color,
     floor_c: Color,
@@ -253,7 +252,6 @@ impl Palette {
         Self {
             bg_top: rgba(12, 15, 22, 255),
             bg_bottom: rgba(25, 30, 39, 255),
-            haze: rgba(140, 180, 200, 40),
             floor_a: rgba(56, 67, 76, 255),
             floor_b: rgba(62, 72, 83, 255),
             floor_c: rgba(49, 60, 69, 255),

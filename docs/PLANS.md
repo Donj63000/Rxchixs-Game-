@@ -565,3 +565,45 @@ Portee: appliquer integralement les blocs de la ligne de production de `plan.md`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
   - `cargo run` smoke.
+
+# ExecPlan - Couverture unitaire transverse (modules restants)
+
+Date: 2026-02-23
+Portee: completer la couverture unitaire sur les modules encore peu/pas testes et verrouiller les invariants de logique pure.
+
+## Objectifs observables
+- Ajouter des tests unitaires deterministes sur `edition`, `historique`, `ui_pawns`, `four_texture`, `render_safety`.
+- Couvrir prioritairement les helpers de logique pure (mapping, bornes, etiquettes, determinisme, clamping).
+- Garder la separation simulation/rendu (pas de test dependant d'un contexte GPU ou d'un framerate).
+
+## Invariants
+- Tests 100% deterministes (seed explicite, pas d'aléatoire implicite).
+- Aucun fallback silencieux dans les assertions: chaque echec doit exprimer un contrat metier clair.
+- Pas d'ajout de dependance runtime.
+
+## Milestones
+1. Auditer les fonctions non testees par module.
+2. Ajouter les tests unitaires locaux (`#[cfg(test)]`) pour les chemins logiques purs.
+3. Corriger les warnings existants bloquant `clippy -D warnings`.
+4. Lancer la validation complete: `fmt`, `clippy`, `test`, `run` smoke.
+
+## Fichiers impactes
+- `docs/PLANS.md`
+- `src/edition.rs`
+- `src/historique.rs`
+- `src/ui_pawns.rs`
+- `src/four_texture.rs`
+- `src/render_safety.rs`
+- `src/rendu.rs`
+
+## Risques
+- Fonctions UI/rendu non testables hors contexte macroquad (GPU/window state).
+- Echecs preexistants dans la suite pouvant masquer la qualite des nouveaux tests.
+
+## Strategie de test
+- Tests unitaires de logique pure par module.
+- Validation outillage:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke.
