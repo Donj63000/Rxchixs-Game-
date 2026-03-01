@@ -1685,12 +1685,9 @@ fn draw_text_ellipsized_shadowed(text: &str, x: f32, y: f32, max_w: f32, size: f
 
 fn draw_text_shadowed(text: &str, x: f32, y: f32, size: f32, color: Color) {
     let off = (size / 18.0).clamp(0.9, 1.8);
-    let shadow = with_alpha(BLACK, 0.84);
-    draw_text(text, x - off, y, size, shadow);
-    draw_text(text, x + off, y, size, shadow);
-    draw_text(text, x, y - off, size, shadow);
-    draw_text(text, x, y + off, size, shadow);
-    draw_text(text, x + off, y + off, size, shadow);
+    let shadow = ui_shadow_color_for_text(color);
+    let soft_shadow = with_alpha(shadow, (shadow.a * 0.65).clamp(0.0, 0.12));
+    draw_text(text, x + off * 0.55, y + off * 0.75, size, soft_shadow);
     draw_text(text, x, y, size, color);
 }
 

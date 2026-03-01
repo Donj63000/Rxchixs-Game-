@@ -6,11 +6,13 @@ mod four_texture;
 mod historique;
 mod interactions;
 mod modes;
+mod papa;
 mod render_safety;
 mod rendu;
 mod sauvegarde;
 mod sim;
 mod social;
+mod telephone;
 mod ui_hud;
 mod ui_pawns;
 mod utilitaires;
@@ -58,6 +60,7 @@ const MAP_FILE_PATH: &str = "maps/main_map.ron";
 const SAVE_DIR_PATH: &str = "saves";
 const SAVE_SCHEMA_VERSION: u32 = 1;
 const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
+const PAPA_PLAN_PATH: &str = "data/papa/plan_ligne.ron";
 const FLOOR_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol1.png", "Textures/sol1.png"];
 const FLOOR_METAL_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol2.png", "Textures/sol2.png"];
 const POT_DE_FLEUR_TEXTURE_CANDIDATES: [&str; 2] =
@@ -107,6 +110,13 @@ const MASK_N: u8 = 1 << 0;
 const MASK_E: u8 = 1 << 1;
 const MASK_S: u8 = 1 << 2;
 const MASK_W: u8 = 1 << 3;
+
+fn autosave_status_message(path: &str, save_result: Result<(), String>) -> String {
+    match save_result {
+        Ok(()) => format!("Sauvegarde auto: {path}"),
+        Err(err) => format!("Sauvegarde auto echouee ({path}): {err}"),
+    }
+}
 
 fn window_conf() -> Conf {
     Conf {
@@ -492,10 +502,13 @@ struct GameState {
     player_lineage_index: usize,
     npc_character: CharacterRecord,
     sim_worker_character: CharacterRecord,
+    papa_character: CharacterRecord,
     pawns: Vec<PawnCard>,
     social_state: social::SocialState,
     pawn_ui: PawnsUiState,
     hud_ui: HudUiState,
+    telephone: telephone::TelephoneEtat,
+    papa: papa::PapaEtat,
     pause_menu_open: bool,
     pause_panel: PausePanel,
     pause_status_text: Option<String>,
@@ -830,14 +843,18 @@ async fn main() {
         Ok(loaded) => loaded,
         Err(_) => {
             let default_map = MapAsset::new_default();
-            let _ = save_map_asset(MAP_FILE_PATH, &default_map);
+            if let Err(err) = save_map_asset(MAP_FILE_PATH, &default_map) {
+                eprintln!("Impossible de sauvegarder la carte par defaut ({MAP_FILE_PATH}): {err}");
+            }
             default_map
         }
     };
     let loaded_version = map.version;
     sanitize_map_asset(&mut map);
-    if map.version != loaded_version {
-        let _ = save_map_asset(MAP_FILE_PATH, &map);
+    if map.version != loaded_version
+        && let Err(err) = save_map_asset(MAP_FILE_PATH, &map)
+    {
+        eprintln!("Impossible de sauvegarder la carte migree ({MAP_FILE_PATH}): {err}");
     }
 
     let character_catalog =
@@ -867,6 +884,7 @@ async fn main() {
         let time = get_time() as f32;
         let mut should_quit = false;
 
+        let previous_mode = mode;
         mode = match mode {
             AppMode::MainMenu => {
                 match run_main_menu_frame(&map, &palette, time, frame_dt, &mut main_menu_state) {
@@ -944,17 +962,20 @@ async fn main() {
             }
         };
 
+        if mode != previous_mode {
+            // Defensive reset to avoid carrying any transient render state across mode switches.
+            begin_ui_pass();
+        }
+
         if should_quit {
             break;
         }
 
         if is_key_pressed(KeyCode::F12) {
             sanitize_map_asset(&mut map);
-            let _ = save_map_asset(MAP_FILE_PATH, &map);
-            editor_set_status(
-                &mut editor_state,
-                format!("Sauvegarde auto: {}", MAP_FILE_PATH),
-            );
+            let status =
+                autosave_status_message(MAP_FILE_PATH, save_map_asset(MAP_FILE_PATH, &map));
+            editor_set_status(&mut editor_state, status);
         }
 
         next_frame().await;
@@ -964,6 +985,20 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autosave_status_message_reports_success() {
+        let msg = autosave_status_message("maps/main_map.ron", Ok(()));
+        assert!(msg.contains("Sauvegarde auto: maps/main_map.ron"));
+    }
+
+    #[test]
+    fn autosave_status_message_reports_failure_reason() {
+        let msg = autosave_status_message("maps/main_map.ron", Err("disk full".to_string()));
+        assert!(msg.contains("Sauvegarde auto echouee"));
+        assert!(msg.contains("maps/main_map.ron"));
+        assert!(msg.contains("disk full"));
+    }
 
     #[test]
     fn tile_hash_is_stable_and_varied() {

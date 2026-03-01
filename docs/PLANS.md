@@ -607,3 +607,78 @@ Portee: completer la couverture unitaire sur les modules encore peu/pas testes e
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
   - `cargo run` smoke.
+
+# ExecPlan - Traque et correction profonde des bugs front-end/shader texte
+
+Date: 2026-02-28
+Portee: diagnostic et correction des artefacts d'affichage texte entre jeu + editeur (surlignage noir, coherence ombres, hygiene des etats de rendu).
+
+## Objectifs observables
+- Eliminer le rendu de texte "surligne noir" dans l'editeur et en jeu.
+- Durcir les transitions de mode (menu/jeu/editeur) pour eviter toute fuite d'etat de rendu.
+- Uniformiser les regles d'ombre/contraste texte sur les principaux chemins UI.
+- Ajouter des tests de non-regression sur la logique pure du pipeline texte.
+
+## Invariants
+- Separation simulation/rendu intacte.
+- Tick simulation fixe non impacte.
+- Aucune logique metier dependante du framerate.
+- Aucun fallback silencieux sur les chemins critiques de rendu UI.
+
+## 10 taches de recherche
+1. Inventorier tous les appels de rendu texte (`draw_text`, wrappers `draw_text_shadowed`) dans jeu, HUD, editeur, menu.
+2. Cartographier les resets d'etat de rendu (`begin_ui_pass`, `gl_use_default_material`, `set_default_camera`).
+3. Verifier les transitions `AppMode` (MainMenu -> Playing -> Editor -> Playing) et points de changement de frame.
+4. Identifier les ombres hard-codees agressives (`with_alpha(BLACK, 0.88)` et variantes).
+5. Examiner les wrappers texte dupliques (`utilitaires`, `ui_hud`, `ui_pawns`) et leurs divergences.
+6. Detecter les zones sans garde de materiau avant UI (chemins "defensifs" manquants).
+7. Evaluer les offsets/alpha actuels des ombres et leur impact lisibilite vs halo noir.
+8. Confirmer l'absence d'usage direct de `gl_use_material` hors wrappers securises.
+9. Lister les endroits ou un reset pre-frame est utile pour casser les fuites transitoires.
+10. Definir des criteres testables en logique pure (alpha max ombre, polarite ombre, offset mini).
+
+## 10 taches d'execution robustes
+1. Ajouter un reset defensif de rendu en debut de frame `run_play_frame`.
+2. Ajouter un reset defensif de rendu en debut de frame `run_play_pause_frame`.
+3. Ajouter un reset defensif de rendu en debut de frame `run_editor_frame`.
+4. Ajouter un reset defensif lors des transitions de mode dans la boucle principale.
+5. Reviser `ui_shadow_color_for_text` dans `utilitaires` pour limiter l'alpha d'ombre.
+6. Reviser `draw_text_shadowed` (`utilitaires`) pour un drop shadow plus propre (moins d'effet contour noir).
+7. Remplacer les ombres noires hard-codees de `modes` par une ombre derivee du texte.
+8. Remplacer les ombres noires hard-codees de `rendu` (menu/inspector) par une ombre derivee du texte.
+9. Harmoniser le helper `draw_text_shadowed` de `ui_hud` avec le nouveau style d'ombre.
+10. Harmoniser le helper `draw_text_shadowed` de `ui_pawns` avec le nouveau style d'ombre.
+
+## 10 taches de verification completes
+1. Ajouter un test unitaire: ombre des textes clairs reste sous un seuil alpha anti-halo.
+2. Ajouter un test unitaire: ombre des textes fonces bascule en polarite claire.
+3. Ajouter un test unitaire: offset de shadow UI reste borne et deterministe.
+4. Verifier compilation + tests apres patchs UI (`cargo test` cible module).
+5. Verifier qu'aucune alerte clippy n'apparait sur les nouvelles fonctions/helpers.
+6. Valider qu'aucun code de simulation n'a ete touche fonctionnellement.
+7. Executer `cargo fmt`.
+8. Executer `cargo clippy --all-targets --all-features -- -D warnings`.
+9. Executer `cargo test`.
+10. Executer un smoke run `cargo run` (demarrage + fermeture sans crash).
+
+## Fichiers impactes (prevus)
+- `docs/PLANS.md`
+- `src/main.rs`
+- `src/modes.rs`
+- `src/rendu.rs`
+- `src/utilitaires.rs`
+- `src/ui_hud.rs`
+- `src/ui_pawns.rs`
+
+## Risques
+- Baisse de lisibilite si les ombres deviennent trop faibles sur fonds charges.
+- Regressions de style UI entre modules si les helpers restent incoherents.
+- Faux negatif sur bug visuel difficilement testable en headless.
+
+## Strategie de test
+- Tests unitaires de logique pure (contraste, alpha, offset).
+- Validation outillage complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke.

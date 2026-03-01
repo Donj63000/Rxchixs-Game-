@@ -649,7 +649,7 @@ pub(crate) fn draw_ui_button_sized(
 
     if active {
         // Slightly stronger shadow when active.
-        shadow.a = (shadow.a + 0.08).clamp(0.0, 1.0);
+        shadow.a = (shadow.a + 0.05).clamp(0.0, 0.64);
     }
 
     let offset = ui_shadow_offset(font_size);
@@ -721,11 +721,12 @@ pub(crate) fn ui_best_text_color_for_bg(bg: Color) -> Color {
 
     let light = Color::from_rgba(244, 252, 255, 255);
     let dark = Color::from_rgba(10, 14, 18, 255);
-
-    if contrast_ratio(light, eff_bg) >= contrast_ratio(dark, eff_bg) {
-        light
-    } else {
+    // For this UI theme, keep text light unless background is truly very bright.
+    // This avoids the "all texts look black" failure mode on medium blue/orange panels.
+    if relative_luminance(eff_bg) > 0.72 {
         dark
+    } else {
+        light
     }
 }
 
@@ -733,9 +734,9 @@ pub(crate) fn ui_best_text_color_for_bg(bg: Color) -> Color {
 pub(crate) fn ui_shadow_color_for_text(text: Color) -> Color {
     // Opposite polarity shadow (dark shadow for light text, and vice-versa).
     if relative_luminance(text) > 0.5 {
-        with_alpha(Color::from_rgba(0, 0, 0, 255), 0.82)
+        with_alpha(Color::from_rgba(24, 38, 56, 255), 0.20)
     } else {
-        with_alpha(Color::from_rgba(255, 255, 255, 255), 0.55)
+        with_alpha(Color::from_rgba(250, 254, 255, 255), 0.16)
     }
 }
 
@@ -757,13 +758,10 @@ pub(crate) fn draw_text_shadowed(
     shadow_color: Color,
     shadow_offset: f32,
 ) {
-    // 4-way outline + diagonal pass: noticeably more readable on busy backgrounds.
+    // Very light one-pass drop shadow to avoid any "black highlight" effect.
     let off = shadow_offset.max(0.75);
-    draw_text(text, x - off, y, font_size, shadow_color);
-    draw_text(text, x + off, y, font_size, shadow_color);
-    draw_text(text, x, y - off, font_size, shadow_color);
-    draw_text(text, x, y + off, font_size, shadow_color);
-    draw_text(text, x + off, y + off, font_size, shadow_color);
+    let shadow = with_alpha(shadow_color, (shadow_color.a * 0.65).clamp(0.0, 0.12));
+    draw_text(text, x + off * 0.55, y + off * 0.75, font_size, shadow);
     draw_text(text, x, y, font_size, text_color);
 }
 
@@ -920,6 +918,47 @@ mod tests {
         }
         assert!(outside > 10_000);
         assert!(outside_open * 100 / outside >= 96);
+    }
+
+    #[test]
+    fn light_text_shadow_alpha_stays_below_halo_threshold() {
+        let light_text = Color::from_rgba(242, 250, 255, 255);
+        let shadow = ui_shadow_color_for_text(light_text);
+        assert!(shadow.a <= 0.22);
+        assert!(shadow.r <= 0.12 && shadow.g <= 0.16 && shadow.b <= 0.24);
+    }
+
+    #[test]
+    fn dark_text_uses_light_shadow_with_controlled_alpha() {
+        let dark_text = Color::from_rgba(12, 14, 18, 255);
+        let shadow = ui_shadow_color_for_text(dark_text);
+        assert!(shadow.a <= 0.18);
+        assert!(shadow.r >= 0.97 && shadow.g >= 0.99 && shadow.b >= 0.99);
+    }
+
+    #[test]
+    fn ui_shadow_offset_is_deterministic_and_clamped() {
+        let tiny = ui_shadow_offset(4.0);
+        let medium_a = ui_shadow_offset(22.0);
+        let medium_b = ui_shadow_offset(22.0);
+        let huge = ui_shadow_offset(160.0);
+        assert!((tiny - 0.85).abs() < 0.0001);
+        assert!((medium_a - medium_b).abs() < 0.0001);
+        assert!(huge <= 1.75);
+    }
+
+    #[test]
+    fn ui_prefers_light_text_on_medium_dark_panels() {
+        let medium_blue = Color::from_rgba(70, 102, 128, 255);
+        let text = ui_best_text_color_for_bg(medium_blue);
+        assert!(relative_luminance(text) > 0.8);
+    }
+
+    #[test]
+    fn ui_uses_dark_text_only_on_very_bright_panels() {
+        let bright_bg = Color::from_rgba(242, 240, 224, 255);
+        let text = ui_best_text_color_for_bg(bright_bg);
+        assert!(relative_luminance(text) < 0.1);
     }
 
     #[test]

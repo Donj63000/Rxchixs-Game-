@@ -46,7 +46,7 @@ const BUILD_MENU_BLOCKS: [BuildMenuEntry; 14] = [
     BuildMenuEntry {
         selection: BuildMenuSelection::Block(BlockKind::InputHopper),
         label: "Entree ligne",
-        description: "Tremie 3x8 avec tapis stockeur bleu pour alimenter la ligne.",
+        description: "Tremie 8x3 avec tapis stockeur bleu pour alimenter la ligne.",
         hint: "Ligne",
     },
     BuildMenuEntry {
@@ -76,7 +76,7 @@ const BUILD_MENU_BLOCKS: [BuildMenuEntry; 14] = [
     BuildMenuEntry {
         selection: BuildMenuSelection::Block(BlockKind::DryerOven),
         label: "Four deshydratation",
-        description: "Unite 10x20 avec tunnel thermique et tapis traversant.",
+        description: "Unite 20x10 avec tunnel thermique et tapis traversant.",
         hint: "Four",
     },
     BuildMenuEntry {
@@ -327,6 +327,7 @@ pub struct HudLayout {
     pub pawn_panel: Rect,
     pub build_panel: Rect,
     pub info_panel: Rect,
+    pub telephone_panel: Rect,
     pub minimap_panel: Rect,
 }
 
@@ -351,15 +352,18 @@ pub fn build_hud_layout(_state: &GameState) -> HudLayout {
     let content_y = top_strip_rect.y + top_strip_rect.h;
     let content_h = (bar_rect.h - top_strip_rect.h).max(1.0);
 
-    let pawn_w = (sw * 0.26).clamp(260.0, 420.0);
-    let minimap_w = (sw * 0.22).clamp(240.0, 360.0);
-    let info_w = (sw * 0.26).clamp(300.0, 470.0);
-    let build_w = (sw - pawn_w - minimap_w - info_w).clamp(340.0, 560.0);
+    let (pawn_w, build_w, info_w, phone_w, minimap_w) = compute_bottom_panel_widths(sw);
 
     let pawn_panel = Rect::new(bar_rect.x, content_y, pawn_w, content_h);
     let build_panel = Rect::new(pawn_panel.x + pawn_panel.w, content_y, build_w, content_h);
     let info_panel = Rect::new(build_panel.x + build_panel.w, content_y, info_w, content_h);
-    let minimap_panel = Rect::new(info_panel.x + info_panel.w, content_y, minimap_w, content_h);
+    let telephone_panel = Rect::new(info_panel.x + info_panel.w, content_y, phone_w, content_h);
+    let minimap_panel = Rect::new(
+        telephone_panel.x + telephone_panel.w,
+        content_y,
+        minimap_w,
+        content_h,
+    );
 
     HudLayout {
         bar_rect,
@@ -367,8 +371,35 @@ pub fn build_hud_layout(_state: &GameState) -> HudLayout {
         pawn_panel,
         build_panel,
         info_panel,
+        telephone_panel,
         minimap_panel,
     }
+}
+
+fn compute_bottom_panel_widths(sw: f32) -> (f32, f32, f32, f32, f32) {
+    let sw = sw.max(1.0);
+    let mut pawn_w = (sw * 0.26).clamp(52.0, 420.0);
+    let mut phone_w = (sw * 0.08).clamp(28.0, 118.0);
+    let mut minimap_w = (sw * 0.19).clamp(56.0, 340.0);
+    let mut info_w = (sw * 0.26).clamp(70.0, 470.0);
+    let min_build_w = (sw * 0.14).clamp(20.0, 260.0);
+
+    let fixed_sum = pawn_w + info_w + phone_w + minimap_w;
+    if fixed_sum + min_build_w > sw {
+        let available_for_fixed = (sw - min_build_w).max(0.0);
+        let scale = if fixed_sum > 0.0 {
+            (available_for_fixed / fixed_sum).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        pawn_w *= scale;
+        info_w *= scale;
+        phone_w *= scale;
+        minimap_w *= scale;
+    }
+
+    let build_w = (sw - pawn_w - info_w - phone_w - minimap_w).max(1.0);
+    (pawn_w, build_w, info_w, phone_w, minimap_w)
 }
 
 pub fn process_hud_input(
@@ -459,7 +490,10 @@ pub fn process_hud_input(
     }
 
     let over_bar = point_in_rect(mouse, layout.bar_rect);
+    let over_phone =
+        telephone::telephone_panel_contains_mouse(state, layout.telephone_panel, mouse);
     out.mouse_over_ui = out.mouse_over_ui || over_bar;
+    out.mouse_over_ui = out.mouse_over_ui || over_phone;
 
     if wheel_y.abs() > f32::EPSILON {
         if point_in_rect(mouse, layout.pawn_panel) {
@@ -495,6 +529,12 @@ pub fn process_hud_input(
             out.consumed_click = true;
             return out;
         }
+        if telephone::telephone_panel_contains_mouse(state, layout.telephone_panel, mouse)
+            && telephone::process_telephone_panel_input(state, layout.telephone_panel, mouse)
+        {
+            out.consumed_click = true;
+            return out;
+        }
         if point_in_rect(mouse, layout.minimap_panel)
             && process_minimap_panel_input(state, layout.minimap_panel, mouse)
         {
@@ -511,6 +551,7 @@ pub fn process_hud_input(
         if point_in_rect(mouse, layout.build_panel)
             || point_in_rect(mouse, layout.pawn_panel)
             || point_in_rect(mouse, layout.info_panel)
+            || telephone::telephone_panel_contains_mouse(state, layout.telephone_panel, mouse)
             || point_in_rect(mouse, layout.top_strip_rect)
         {
             out.consumed_click = true;
@@ -529,6 +570,7 @@ pub fn draw_hud(
     world_camera: &Camera2D,
     time: f32,
 ) {
+    begin_ui_pass();
     draw_bar_background(layout.bar_rect, time);
 
     draw_top_strip(state, layout.top_strip_rect, mouse);
@@ -536,6 +578,7 @@ pub fn draw_hud(
     draw_pawn_panel(state, layout.pawn_panel, mouse, time);
     draw_build_panel(state, layout.build_panel, mouse);
     draw_info_panel(state, layout.info_panel, mouse);
+    telephone::draw_telephone_panel(state, layout.telephone_panel, mouse, time);
     draw_minimap_panel(state, layout.minimap_panel, mouse, map_view, world_camera);
     draw_info_window(state, mouse);
     draw_build_menu(state, mouse);
@@ -690,11 +733,8 @@ fn ui_text_and_shadow_for_bg(bg: Color) -> (Color, Color) {
 fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: Color, off: Vec2) {
     let ox = off.x.max(0.75);
     let oy = off.y.max(0.75);
-    draw_text(text, x - ox, y, fs, shadow);
-    draw_text(text, x + ox, y, fs, shadow);
-    draw_text(text, x, y - oy, fs, shadow);
-    draw_text(text, x, y + oy, fs, shadow);
-    draw_text(text, x + ox, y + oy, fs, shadow);
+    let soft_shadow = with_alpha(shadow, (shadow.a * 0.65).clamp(0.0, 0.12));
+    draw_text(text, x + ox * 0.55, y + oy * 0.75, fs, soft_shadow);
     draw_text(text, x, y, fs, fill);
 }
 
@@ -2962,22 +3002,33 @@ fn draw_minimap_panel(
         draw_rectangle(x, y, 4.0, 4.0, rgba(252, 208, 138, 220));
     }
 
-    let pawn_points: [(PawnKey, Vec2, Color); 3] = [
-        (PawnKey::Player, state.player.pos, rgba(120, 220, 160, 240)),
-        (PawnKey::Npc, state.npc.pos, rgba(220, 170, 120, 240)),
-        (
-            PawnKey::SimWorker,
-            tile_center(state.sim.primary_agent_tile()),
-            rgba(150, 200, 250, 240),
-        ),
+    let pawn_points: [Vec2; 3] = [
+        state.player.pos,
+        state.npc.pos,
+        tile_center(state.sim.primary_agent_tile()),
     ];
-    for (_k, pos, col) in pawn_points {
+    let pawn_colors: [Color; 3] = [
+        rgba(120, 220, 160, 240),
+        rgba(220, 170, 120, 240),
+        rgba(150, 200, 250, 240),
+    ];
+    for i in 0..pawn_points.len() {
+        let pos = pawn_points[i];
+        let col = pawn_colors[i];
         let nx = (pos.x / world_w).clamp(0.0, 1.0);
         let ny = (pos.y / world_h).clamp(0.0, 1.0);
         let px = inner.x + nx * inner.w;
         let py = inner.y + ny * inner.h;
         draw_circle(px, py, 3.0, col);
         draw_circle_lines(px, py, 3.2, 1.0, rgba(0, 0, 0, 120));
+    }
+    if let Some(papa) = state.papa.pnj() {
+        let nx = (papa.pos.x / world_w).clamp(0.0, 1.0);
+        let ny = (papa.pos.y / world_h).clamp(0.0, 1.0);
+        let px = inner.x + nx * inner.w;
+        let py = inner.y + ny * inner.h;
+        draw_circle(px, py, 3.2, rgba(212, 246, 190, 244));
+        draw_circle_lines(px, py, 3.4, 1.1, rgba(24, 44, 30, 180));
     }
 
     ensure_default_material();
@@ -3130,5 +3181,22 @@ mod tests {
         assert!(!build_menu_entries(HudBuildTab::Zones).is_empty());
         assert!(!build_menu_entries(HudBuildTab::Sols).is_empty());
         assert!(!build_menu_entries(HudBuildTab::Outils).is_empty());
+    }
+
+    #[test]
+    fn bottom_panel_widths_always_fit_screen() {
+        for sw in [120.0_f32, 240.0, 320.0, 640.0, 800.0, 1024.0, 1600.0] {
+            let (pawn_w, build_w, info_w, phone_w, minimap_w) = compute_bottom_panel_widths(sw);
+            let sum = pawn_w + build_w + info_w + phone_w + minimap_w;
+            assert!(pawn_w > 0.0);
+            assert!(build_w > 0.0);
+            assert!(info_w > 0.0);
+            assert!(phone_w > 0.0);
+            assert!(minimap_w > 0.0);
+            assert!(
+                sum <= sw + 0.001,
+                "sum({sum}) should fit sw({sw}); widths=({pawn_w},{build_w},{info_w},{phone_w},{minimap_w})"
+            );
+        }
     }
 }

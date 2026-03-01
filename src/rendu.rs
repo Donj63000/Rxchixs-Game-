@@ -329,7 +329,7 @@ pub(crate) fn draw_chariot_elevateur(
         rgba(58, 44, 18, 220),
     );
 
-    // Rear counterweight with hazard stripes.
+    // Rear counterweight (plain finish, no warning hatching).
     draw_chariot_quad(
         center + vec2(0.0, wobble),
         forward,
@@ -338,21 +338,8 @@ pub(crate) fn draw_chariot_elevateur(
         -6.2,
         -7.6,
         7.6,
-        yellow_dark,
+        steel_dark,
     );
-    for i in 0..4 {
-        let stripe_f0 = -13.6 + i as f32 * 1.8;
-        draw_chariot_quad(
-            center + vec2(0.0, wobble),
-            forward,
-            side,
-            stripe_f0,
-            stripe_f0 + 0.8,
-            -6.9,
-            6.9,
-            rgba(34, 28, 22, 176),
-        );
-    }
 
     // Cabin floor and overhead guard.
     draw_chariot_quad(
@@ -993,7 +980,7 @@ fn draw_text_lisible(text: &str, x: f32, y: f32, font_size: f32, fill: Color) {
         y,
         font_size,
         fill,
-        with_alpha(BLACK, 0.88),
+        ui_shadow_color_for_text(fill),
         ui_shadow_offset(font_size),
     );
 }
@@ -2320,7 +2307,7 @@ fn draw_menu_text_line(text: &str, x: f32, y: f32, size: f32, color: Color) {
         y,
         size,
         color,
-        with_alpha(BLACK, 0.88),
+        ui_shadow_color_for_text(color),
         ui_shadow_offset(size),
     );
 }
@@ -3112,318 +3099,790 @@ fn draw_belt_motion(
     );
 }
 
-fn draw_input_hopper_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
-    let hull = Color::from_rgba(64, 80, 102, 242);
-    let base = Color::from_rgba(84, 102, 122, 222);
-    let frame = Color::from_rgba(198, 216, 236, 215);
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, hull);
-    draw_rectangle(
-        rect.x + 2.0,
-        rect.y + 2.0,
-        (rect.w - 4.0).max(1.0),
-        (rect.h - 4.0).max(1.0),
-        base,
-    );
-    draw_rectangle_lines(
-        rect.x + 0.8,
-        rect.y + 0.8,
-        rect.w - 1.6,
-        rect.h - 1.6,
-        1.4,
-        frame,
-    );
+fn fract01(v: f32) -> f32 {
+    let f = v.fract();
+    if f < 0.0 { f + 1.0 } else { f }
+}
 
-    let axis = orientation_axis(orientation);
-    let belt_rect = if axis.x.abs() > axis.y.abs() {
-        Rect::new(
-            rect.x + 8.0,
-            rect.y + rect.h * 0.34,
-            (rect.w - 16.0).max(1.0),
-            (rect.h * 0.32).max(2.0),
-        )
-    } else {
-        Rect::new(
-            rect.x + rect.w * 0.34,
-            rect.y + 8.0,
-            (rect.w * 0.32).max(2.0),
-            (rect.h - 16.0).max(1.0),
-        )
-    };
-    draw_belt_motion(
-        belt_rect,
-        orientation,
-        time,
-        Color::from_rgba(26, 62, 116, 232),
-        Color::from_rgba(62, 132, 218, 228),
-        Color::from_rgba(96, 164, 236, 214),
-    );
+fn rect_center(rect: Rect) -> Vec2 {
+    vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5)
+}
 
-    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
-    let funnel_center = center - axis * rect.w.max(rect.h) * 0.24;
-    draw_circle(
-        funnel_center.x,
-        funnel_center.y,
-        rect.w.min(rect.h) * 0.18,
-        Color::from_rgba(138, 148, 166, 236),
-    );
-    draw_circle_lines(
-        funnel_center.x,
-        funnel_center.y,
-        rect.w.min(rect.h) * 0.18,
-        1.2,
-        Color::from_rgba(208, 220, 234, 214),
-    );
+fn rect_inset(rect: Rect, inset: f32) -> Rect {
+    Rect::new(
+        rect.x + inset,
+        rect.y + inset,
+        (rect.w - 2.0 * inset).max(0.0),
+        (rect.h - 2.0 * inset).max(0.0),
+    )
+}
 
-    for i in 0..6 {
-        let t = time * 0.85 + i as f32 * 0.6;
-        let dot = funnel_center + vec2(t.cos() * 7.8, t.sin() * 5.8);
-        draw_circle(
-            dot.x,
-            dot.y,
-            2.0 + (i % 2) as f32 * 0.4,
-            Color::from_rgba(236, 214, 148, 206),
-        );
+fn rect_inset_xy(rect: Rect, inset_x: f32, inset_y: f32) -> Rect {
+    Rect::new(
+        rect.x + inset_x,
+        rect.y + inset_y,
+        (rect.w - 2.0 * inset_x).max(0.0),
+        (rect.h - 2.0 * inset_y).max(0.0),
+    )
+}
+
+#[derive(Clone, Copy)]
+struct BlockBasis {
+    c: Vec2,
+    axis: Vec2,
+    normal: Vec2,
+    along: f32,
+    across: f32,
+}
+
+impl BlockBasis {
+    fn p(&self, u: f32, v: f32) -> Vec2 {
+        self.c + self.axis * (u * self.along) + self.normal * (v * self.across)
     }
+}
 
-    let cap_x = rect.x + rect.w * 0.5;
-    let cap_y = rect.y + rect.h * 0.12;
-    draw_circle(
-        cap_x,
-        cap_y,
-        rect.w.min(rect.h) * 0.09,
-        Color::from_rgba(118, 130, 154, 218),
-    );
-    draw_circle_lines(cap_x, cap_y, rect.w.min(rect.h) * 0.09, 0.9, frame);
-    for i in 0..3 {
-        let step = time * 2.6 + i as f32 * 0.9;
-        draw_line(
-            cap_x + step.cos() * (rect.w.min(rect.h) * 0.06),
-            cap_y + step.sin() * (rect.h.min(rect.h) * 0.06),
-            cap_x + (step + 1.3).sin() * (rect.w.min(rect.h) * 0.06),
-            cap_y + (step + 1.3).cos() * (rect.h.min(rect.h) * 0.06),
-            1.1,
-            with_alpha(Color::from_rgba(220, 236, 252, 200), 0.44),
+fn basis_for_block(rect: Rect, orientation: sim::BlockOrientation) -> BlockBasis {
+    let axis = orientation_axis(orientation);
+    let normal = vec2(-axis.y, axis.x);
+    let horizontal = axis.x.abs() > axis.y.abs();
+    let along = if horizontal {
+        rect.w * 0.5
+    } else {
+        rect.h * 0.5
+    };
+    let across = if horizontal {
+        rect.h * 0.5
+    } else {
+        rect.w * 0.5
+    };
+    BlockBasis {
+        c: rect_center(rect),
+        axis,
+        normal,
+        along,
+        across,
+    }
+}
+
+fn draw_oriented_quad(b: &BlockBasis, u0: f32, v0: f32, u1: f32, v1: f32, color: Color) {
+    let p00 = b.p(u0, v0);
+    let p10 = b.p(u1, v0);
+    let p11 = b.p(u1, v1);
+    let p01 = b.p(u0, v1);
+    draw_triangle(p00, p10, p11, color);
+    draw_triangle(p00, p11, p01, color);
+}
+
+fn draw_oriented_quad_lines(
+    b: &BlockBasis,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    thickness: f32,
+    color: Color,
+) {
+    let p00 = b.p(u0, v0);
+    let p10 = b.p(u1, v0);
+    let p11 = b.p(u1, v1);
+    let p01 = b.p(u0, v1);
+    let t = thickness.max(0.6);
+    draw_line(p00.x, p00.y, p10.x, p10.y, t, color);
+    draw_line(p10.x, p10.y, p11.x, p11.y, t, color);
+    draw_line(p11.x, p11.y, p01.x, p01.y, t, color);
+    draw_line(p01.x, p01.y, p00.x, p00.y, t, color);
+}
+
+fn draw_soft_shadow_rect(rect: Rect, offset: Vec2, spread: f32, alpha: f32) {
+    if alpha <= 0.0 {
+        return;
+    }
+    let steps = 4;
+    for i in 0..steps {
+        let t = i as f32 / (steps as f32 - 1.0);
+        let grow = spread * (0.35 + t);
+        let a = alpha * (1.0 - t) * 0.55;
+        draw_rectangle(
+            rect.x + offset.x - grow,
+            rect.y + offset.y - grow,
+            rect.w + grow * 2.0,
+            rect.h + grow * 2.0,
+            with_alpha(Color::from_rgba(0, 0, 0, 255), a),
         );
     }
 }
 
-fn draw_fluidity_tank_visual(rect: Rect, time: f32) {
+fn draw_vertical_gradient(rect: Rect, top: Color, bottom: Color, steps: usize) {
+    let steps = steps.max(1);
+    let denom = (steps as f32 - 1.0).max(1.0);
+    let h = rect.h / steps as f32;
+    for i in 0..steps {
+        let t = i as f32 / denom;
+        draw_rectangle(
+            rect.x,
+            rect.y + i as f32 * h,
+            rect.w,
+            h + 0.6,
+            color_lerp(top, bottom, t),
+        );
+    }
+}
+
+fn draw_bevel_edges(rect: Rect, thickness: f32, light: Color, dark: Color) {
+    let t = thickness.max(0.7);
+    draw_line(
+        rect.x + 0.6,
+        rect.y + 0.8,
+        rect.x + rect.w - 0.8,
+        rect.y + 0.8,
+        t,
+        light,
+    );
+    draw_line(
+        rect.x + 0.8,
+        rect.y + 0.6,
+        rect.x + 0.8,
+        rect.y + rect.h - 0.8,
+        t,
+        light,
+    );
+    draw_line(
+        rect.x + 0.8,
+        rect.y + rect.h - 0.8,
+        rect.x + rect.w - 0.8,
+        rect.y + rect.h - 0.8,
+        t,
+        dark,
+    );
+    draw_line(
+        rect.x + rect.w - 0.8,
+        rect.y + 0.8,
+        rect.x + rect.w - 0.8,
+        rect.y + rect.h - 0.8,
+        t,
+        dark,
+    );
+}
+
+thread_local! {
+    static LINE_GRAIN_TEX: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+}
+
+fn with_line_grain_tex<R>(f: impl FnOnce(&Texture2D) -> R) -> R {
+    LINE_GRAIN_TEX.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        if opt.is_none() {
+            let w: u16 = 64;
+            let h: u16 = 64;
+            let mut img = Image::gen_image_color(w, h, Color::from_rgba(128, 128, 128, 255));
+            for y in 0..h as i32 {
+                for x in 0..w as i32 {
+                    let hh = tile_hash(x, y);
+                    let mut v = 118 + (hh & 0x3f) as i32 - 31;
+                    v = v.clamp(72, 176);
+                    let vv = v as u8;
+                    img.set_pixel(x as u32, y as u32, Color::from_rgba(vv, vv, vv, 255));
+                }
+            }
+            let tex = Texture2D::from_image(&img);
+            tex.set_filter(FilterMode::Linear);
+            *opt = Some(tex);
+        }
+        f(opt.as_ref().unwrap())
+    })
+}
+
+fn draw_grain_overlay(rect: Rect, alpha: f32) {
+    if alpha <= 0.0 || rect.w <= 2.0 || rect.h <= 2.0 {
+        return;
+    }
+    with_line_grain_tex(|tex| {
+        draw_texture_ex(
+            tex,
+            rect.x,
+            rect.y,
+            with_alpha(WHITE, alpha.clamp(0.0, 1.0)),
+            DrawTextureParams {
+                dest_size: Some(vec2(rect.w, rect.h)),
+                ..Default::default()
+            },
+        );
+    });
+}
+
+fn draw_panel(rect: Rect, base: Color, outline: Color, grain_alpha: f32) {
+    let top = color_lerp(base, Color::from_rgba(255, 255, 255, 255), 0.22);
+    let bottom = color_lerp(base, Color::from_rgba(0, 0, 0, 255), 0.22);
+    draw_vertical_gradient(rect, top, bottom, 8);
+    draw_grain_overlay(rect, grain_alpha);
+    draw_bevel_edges(
+        rect,
+        1.1,
+        with_alpha(Color::from_rgba(255, 255, 255, 255), 0.10),
+        with_alpha(Color::from_rgba(0, 0, 0, 255), 0.28),
+    );
+    draw_rectangle_lines(
+        rect.x + 0.8,
+        rect.y + 0.8,
+        (rect.w - 1.6).max(1.0),
+        (rect.h - 1.6).max(1.0),
+        1.35,
+        outline,
+    );
+}
+
+fn draw_rivet(p: Vec2, r: f32, base: Color) {
+    let rr = r.max(0.7);
+    draw_circle(p.x, p.y, rr, base);
+    draw_circle(
+        p.x - rr * 0.3,
+        p.y - rr * 0.3,
+        rr * 0.35,
+        with_alpha(WHITE, 0.22),
+    );
+    draw_circle_lines(p.x, p.y, rr, 0.75, with_alpha(BLACK, 0.35));
+}
+
+fn draw_led(p: Vec2, r: f32, col: Color, intensity: f32) {
+    let i = intensity.clamp(0.0, 1.0);
+    let rr = r.max(1.0);
+    draw_circle(p.x, p.y, rr * 2.4, with_alpha(col, 0.14 * i));
+    draw_circle(p.x, p.y, rr * 1.5, with_alpha(col, 0.25 * i));
+    draw_circle(p.x, p.y, rr, with_alpha(col, 0.82 * i));
+    draw_circle(
+        p.x - rr * 0.25,
+        p.y - rr * 0.25,
+        rr * 0.35,
+        with_alpha(WHITE, 0.20 * i),
+    );
+}
+
+fn draw_progress_bar(rect: Rect, ratio: f32, fg: Color) {
+    let r = ratio.clamp(0.0, 1.0);
     draw_rectangle(
         rect.x,
         rect.y,
         rect.w,
         rect.h,
-        Color::from_rgba(68, 82, 98, 236),
+        with_alpha(Color::from_rgba(8, 12, 18, 255), 0.62),
+    );
+    draw_rectangle(
+        rect.x + 0.8,
+        rect.y + 0.8,
+        ((rect.w - 1.6).max(1.0)) * r,
+        (rect.h - 1.6).max(1.0),
+        with_alpha(fg, 0.85),
     );
     draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        2.0,
-        Color::from_rgba(182, 202, 222, 220),
+        rect.x + 0.6,
+        rect.y + 0.6,
+        (rect.w - 1.2).max(1.0),
+        (rect.h - 1.2).max(1.0),
+        1.0,
+        with_alpha(Color::from_rgba(220, 232, 244, 255), 0.22),
+    );
+}
+
+fn draw_belt_payload(
+    rect: Rect,
+    orientation: sim::BlockOrientation,
+    time: f32,
+    speed: f32,
+    load: f32,
+) {
+    let s = speed.clamp(0.0, 1.0);
+    let l = load.clamp(0.0, 1.0);
+    if rect.w < 4.0 || rect.h < 4.0 || l <= 0.06 {
+        return;
+    }
+    let axis = orientation_axis(orientation);
+    let horizontal = axis.x.abs() > axis.y.abs();
+    let dir = (axis.x + axis.y).signum().clamp(-1.0, 1.0);
+    let count = (2.0 + l * 7.0).round() as i32;
+
+    let c0 = Color::from_rgba(236, 224, 176, 255);
+    let c1 = Color::from_rgba(206, 184, 120, 255);
+
+    for i in 0..count {
+        let fi = i as f32;
+        let phase = fract01(time * (0.45 + s * 1.4) + fi * 0.23);
+        let t = if dir >= 0.0 { phase } else { 1.0 - phase };
+        let j = fract01(((fi * 12.9898 + 78.233).sin()) * 43_758.547);
+        let j2 = fract01(((fi * 9.231 + 11.91).sin()) * 17713.11);
+
+        let r = (rect.w.min(rect.h) * (0.05 + l * 0.03) * (0.65 + j2 * 0.65)).max(1.0);
+        let col = color_lerp(c0, c1, j2);
+
+        let p = if horizontal {
+            vec2(
+                rect.x + t * rect.w,
+                rect.y + rect.h * (0.25 + 0.5 * j2) + (j - 0.5) * rect.h * 0.16,
+            )
+        } else {
+            vec2(
+                rect.x + rect.w * (0.25 + 0.5 * j2) + (j - 0.5) * rect.w * 0.16,
+                rect.y + t * rect.h,
+            )
+        };
+
+        draw_circle(p.x, p.y, r, with_alpha(col, 0.52 + l * 0.28));
+        draw_circle(
+            p.x - r * 0.35,
+            p.y - r * 0.35,
+            r * 0.35,
+            with_alpha(WHITE, 0.08 + l * 0.10),
+        );
+    }
+}
+
+fn draw_modern_offline_overlay(rect: Rect, time: f32) {
+    let _ = time;
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        with_alpha(Color::from_rgba(0, 0, 0, 255), 0.20),
+    );
+}
+
+fn draw_input_hopper_visual(
+    rect: Rect,
+    orientation: sim::BlockOrientation,
+    time: f32,
+    active: bool,
+    stock_ratio: f32,
+) {
+    let activity = if active { 1.0 } else { 0.0 };
+    let stock = stock_ratio.clamp(0.0, 1.0);
+
+    draw_soft_shadow_rect(rect, vec2(3.0, 3.0), 4.6, 0.22);
+
+    let base = Color::from_rgba(118, 128, 140, 240);
+    let outline = with_alpha(Color::from_rgba(220, 232, 244, 255), 0.72);
+    draw_panel(rect, base, outline, 0.08);
+
+    let r = rect.w.min(rect.h);
+    let riv = (r * 0.03).max(1.0);
+    draw_rivet(
+        vec2(rect.x + 6.0, rect.y + 6.0),
+        riv,
+        with_alpha(Color::from_rgba(210, 220, 232, 255), 0.65),
+    );
+    draw_rivet(
+        vec2(rect.x + rect.w - 6.0, rect.y + 6.0),
+        riv,
+        with_alpha(Color::from_rgba(210, 220, 232, 255), 0.65),
+    );
+    draw_rivet(
+        vec2(rect.x + 6.0, rect.y + rect.h - 6.0),
+        riv,
+        with_alpha(Color::from_rgba(210, 220, 232, 255), 0.65),
+    );
+    draw_rivet(
+        vec2(rect.x + rect.w - 6.0, rect.y + rect.h - 6.0),
+        riv,
+        with_alpha(Color::from_rgba(210, 220, 232, 255), 0.65),
     );
 
-    let water = Rect::new(rect.x + 6.0, rect.y + 6.0, rect.w - 12.0, rect.h - 12.0);
-    let fill_ratio = ((time * 0.5).sin() * 0.14 + 0.58).clamp(0.1, 0.94);
+    let axis = orientation_axis(orientation);
+    let horizontal = axis.x.abs() > axis.y.abs();
+
+    let belt_margin = (r * 0.10).max(6.0);
+    let belt_thick = if horizontal {
+        rect.h * 0.22
+    } else {
+        rect.w * 0.22
+    };
+    let belt_rect = if horizontal {
+        Rect::new(
+            rect.x + belt_margin,
+            rect.y + rect.h * 0.68,
+            rect.w - belt_margin * 2.0,
+            belt_thick,
+        )
+    } else {
+        Rect::new(
+            rect.x + rect.w * 0.68,
+            rect.y + belt_margin,
+            belt_thick,
+            rect.h - belt_margin * 2.0,
+        )
+    };
+
+    draw_belt_motion(
+        belt_rect,
+        orientation,
+        time * activity,
+        Color::from_rgba(38, 132, 238, 250),
+        Color::from_rgba(132, 214, 255, 238),
+        Color::from_rgba(206, 236, 255, 205),
+    );
+    draw_belt_payload(
+        rect_inset(belt_rect, belt_rect.w.min(belt_rect.h) * 0.18),
+        orientation,
+        time,
+        activity,
+        (0.25 + stock * 0.75).clamp(0.0, 1.0),
+    );
+
+    let bowl_center = rect_center(rect) - axis * rect.w.max(rect.h) * 0.20;
+    let rim_r = rect.w.min(rect.h) * 0.26;
+    let bowl_r = rim_r * 0.78;
+
+    draw_circle(
+        bowl_center.x,
+        bowl_center.y,
+        rim_r,
+        with_alpha(Color::from_rgba(52, 60, 70, 255), 0.75),
+    );
+    draw_circle(
+        bowl_center.x,
+        bowl_center.y,
+        bowl_r,
+        with_alpha(Color::from_rgba(142, 154, 168, 255), 0.62),
+    );
+
+    let fill_r = bowl_r * stock.sqrt();
+    draw_circle(
+        bowl_center.x,
+        bowl_center.y,
+        fill_r,
+        with_alpha(Color::from_rgba(236, 214, 160, 255), 0.52),
+    );
+
+    if activity > 0.01 {
+        for i in 0..10 {
+            let a = time * 2.0 + i as f32 * 0.55;
+            let rr = fill_r * (0.25 + (i as f32 * 0.11).sin().abs() * 0.45);
+            draw_circle(
+                bowl_center.x + a.cos() * rr * 0.35,
+                bowl_center.y + a.sin() * rr * 0.35,
+                (r * 0.03).max(1.0),
+                with_alpha(Color::from_rgba(244, 232, 190, 255), 0.12 + stock * 0.10),
+            );
+        }
+    }
+
+    let gauge = Rect::new(
+        rect.x + rect.w * 0.06,
+        rect.y + rect.h * 0.16,
+        rect.w * 0.10,
+        rect.h * 0.46,
+    );
+    draw_rectangle(
+        gauge.x,
+        gauge.y,
+        gauge.w,
+        gauge.h,
+        with_alpha(Color::from_rgba(8, 12, 18, 255), 0.55),
+    );
+    let fh = (gauge.h - 2.0).max(0.0) * stock;
+    draw_rectangle(
+        gauge.x + 1.0,
+        gauge.y + (gauge.h - 1.0 - fh),
+        (gauge.w - 2.0).max(0.0),
+        fh,
+        with_alpha(Color::from_rgba(246, 210, 116, 255), 0.68),
+    );
+    draw_rectangle_lines(
+        gauge.x + 0.6,
+        gauge.y + 0.6,
+        (gauge.w - 1.2).max(1.0),
+        (gauge.h - 1.2).max(1.0),
+        1.0,
+        with_alpha(Color::from_rgba(220, 232, 244, 255), 0.22),
+    );
+
+    let led_pos = vec2(rect.x + rect.w * 0.88, rect.y + rect.h * 0.18);
+    let led_r = (r * 0.05).max(1.4);
+    let led_col = if activity > 0.3 {
+        Color::from_rgba(84, 248, 154, 255)
+    } else {
+        Color::from_rgba(160, 170, 180, 255)
+    };
+    draw_led(led_pos, led_r, led_col, 0.85);
+}
+
+fn draw_fluidity_tank_visual(rect: Rect, time: f32, fill_ratio: f32, active: bool) {
+    let fill = fill_ratio.clamp(0.0, 1.0);
+    let activity = if active { 1.0 } else { 0.0 };
+
+    draw_soft_shadow_rect(rect, vec2(3.0, 3.0), 4.2, 0.20);
+
+    let base = Color::from_rgba(86, 132, 132, 236);
+    let outline = with_alpha(Color::from_rgba(214, 236, 244, 255), 0.70);
+    draw_panel(rect, base, outline, 0.07);
+
+    let inner = rect_inset(rect, rect.w.min(rect.h) * 0.12);
+    draw_rectangle(
+        inner.x,
+        inner.y,
+        inner.w,
+        inner.h,
+        with_alpha(Color::from_rgba(10, 18, 26, 255), 0.35),
+    );
+
+    let water_h = inner.h * fill;
+    let wave = (time * (2.0 + activity * 2.6)).sin() * inner.w.min(inner.h) * 0.03;
+    let water_y = inner.y + (inner.h - water_h).max(0.0);
+    let water = Rect::new(inner.x, water_y, inner.w, water_h);
+
     draw_rectangle(
         water.x,
         water.y,
         water.w,
         water.h,
-        Color::from_rgba(64, 150, 198, 232),
+        with_alpha(Color::from_rgba(56, 176, 214, 255), 0.42 + 0.12 * activity),
     );
-    let fill = Rect::new(
-        water.x + 1.2,
-        water.y + water.h * (1.0 - fill_ratio),
-        (water.w - 2.4).max(1.0),
-        water.h * fill_ratio - 2.4,
+    draw_rectangle(
+        water.x,
+        water.y + wave,
+        water.w,
+        (inner.w.min(inner.h) * 0.06).max(1.0),
+        with_alpha(Color::from_rgba(132, 226, 248, 255), 0.26 + 0.18 * activity),
     );
-    if fill.h > 0.0 {
-        draw_rectangle(
-            fill.x,
-            fill.y,
-            fill.w,
-            fill.h,
-            with_alpha(Color::from_rgba(74, 196, 250, 225), 0.86),
-        );
+
+    if activity > 0.01 {
+        for i in 0..10 {
+            let fi = i as f32;
+            let px = inner.x + inner.w * fract01(time * 0.33 + fi * 0.17);
+            let py = water.y + water.h * fract01(time * 0.42 + fi * 0.31);
+            let rr = (inner.w.min(inner.h) * 0.03).max(1.0);
+            draw_circle(
+                px,
+                py,
+                rr,
+                with_alpha(Color::from_rgba(210, 250, 255, 255), 0.08 + 0.10 * activity),
+            );
+        }
     }
-    for i in 0..4 {
-        let wave_y =
-            water.y + fill.h * ((i + 1) as f32 / 5.0) + (time * 1.8 + i as f32 * 0.7).sin() * 1.9;
+
+    let motor = vec2(rect.x + rect.w * 0.74, rect.y + rect.h * 0.20);
+    let mr = rect.w.min(rect.h) * 0.10;
+    draw_circle(
+        motor.x,
+        motor.y,
+        mr,
+        with_alpha(Color::from_rgba(40, 48, 58, 255), 0.70),
+    );
+    draw_circle(
+        motor.x,
+        motor.y,
+        mr * 0.72,
+        with_alpha(Color::from_rgba(170, 184, 198, 255), 0.55),
+    );
+    for k in 0..3 {
+        let a = time * (2.6 + activity * 3.2) + k as f32 * (std::f32::consts::TAU / 3.0);
         draw_line(
-            water.x + 4.0,
-            wave_y,
-            water.x + water.w - 4.0,
-            wave_y,
-            1.5,
-            Color::from_rgba(184, 238, 255, 188),
+            motor.x,
+            motor.y,
+            motor.x + a.cos() * mr * 0.8,
+            motor.y + a.sin() * mr * 0.8,
+            1.2,
+            with_alpha(Color::from_rgba(220, 244, 255, 255), 0.22 + 0.25 * activity),
         );
     }
-    for i in 0..8 {
-        let phase = time * 0.9 + i as f32 * 0.5;
-        let bx = water.x + 6.0 + (phase.sin() * 0.5 + 0.5) * (water.w - 12.0);
-        let by = water.y + 6.0 + (phase.cos() * 0.5 + 0.5) * (water.h - 12.0);
-        draw_circle(
-            bx,
-            by,
-            1.5 + (i % 3) as f32 * 0.4,
-            Color::from_rgba(218, 248, 255, 196),
-        );
-    }
+
+    let bar = Rect::new(
+        rect.x + rect.w * 0.08,
+        rect.y + rect.h * 0.78,
+        rect.w * 0.22,
+        rect.h * 0.10,
+    );
+    draw_progress_bar(bar, fill, Color::from_rgba(84, 228, 248, 255));
 }
 
-fn draw_cutter_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
-    draw_rectangle(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        Color::from_rgba(145, 158, 170, 234),
-    );
-    draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        1.8,
-        Color::from_rgba(224, 234, 246, 220),
-    );
+fn draw_cutter_visual(
+    rect: Rect,
+    orientation: sim::BlockOrientation,
+    time: f32,
+    active: bool,
+    progress: f32,
+) {
+    let activity = if active { 1.0 } else { 0.0 };
+    let prog = progress.clamp(0.0, 1.0);
+
+    draw_soft_shadow_rect(rect, vec2(3.0, 3.0), 4.4, 0.22);
+
+    let base = Color::from_rgba(122, 118, 112, 236);
+    let outline = with_alpha(Color::from_rgba(226, 232, 238, 255), 0.70);
+    draw_panel(rect, base, outline, 0.08);
+
+    let belt_rect = rect_inset_xy(rect, rect.w * 0.10, rect.h * 0.40);
     draw_belt_motion(
-        Rect::new(rect.x + 3.0, rect.y + 3.0, rect.w - 6.0, rect.h - 6.0),
+        belt_rect,
+        orientation,
+        time * activity,
+        Color::from_rgba(26, 150, 110, 242),
+        Color::from_rgba(120, 238, 194, 228),
+        Color::from_rgba(210, 250, 232, 200),
+    );
+    draw_belt_payload(
+        rect_inset(belt_rect, belt_rect.w.min(belt_rect.h) * 0.18),
         orientation,
         time,
-        Color::from_rgba(42, 78, 122, 214),
-        Color::from_rgba(86, 154, 226, 214),
-        Color::from_rgba(176, 214, 246, 184),
+        activity,
+        0.65,
     );
 
-    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
-    let axis = orientation_axis(orientation);
-    let normal = vec2(-axis.y, axis.x);
-    let ring = rect.w.min(rect.h) * 0.16;
-    draw_circle(
-        center.x,
-        center.y,
-        ring,
-        with_alpha(Color::from_rgba(88, 114, 144, 190), 0.38),
+    let hood = rect_inset_xy(rect, rect.w * 0.10, rect.h * 0.10);
+    draw_rectangle(
+        hood.x,
+        hood.y,
+        hood.w,
+        hood.h * 0.34,
+        with_alpha(Color::from_rgba(14, 18, 24, 255), 0.22),
     );
-    draw_circle_lines(
-        center.x,
-        center.y,
-        ring,
-        1.2,
-        with_alpha(Color::from_rgba(208, 228, 250, 210), 0.62),
+    draw_rectangle_lines(
+        hood.x + 0.7,
+        hood.y + 0.7,
+        (hood.w - 1.4).max(1.0),
+        (hood.h * 0.34 - 1.4).max(1.0),
+        1.0,
+        with_alpha(Color::from_rgba(200, 220, 236, 255), 0.20),
     );
-    for i in -1..=1 {
-        let blade_center = center + normal * i as f32 * rect.w.min(rect.h) * 0.2;
-        let r = rect.w.min(rect.h) * 0.13;
+
+    let blade_r = rect.w.min(rect.h) * 0.18;
+    for i in 0..3 {
+        let x = rect.x + rect.w * (0.26 + i as f32 * 0.24);
+        let y = rect.y + rect.h * 0.52;
         draw_circle(
-            blade_center.x,
-            blade_center.y,
-            r,
-            Color::from_rgba(224, 230, 236, 236),
+            x,
+            y,
+            blade_r * 1.05,
+            with_alpha(Color::from_rgba(32, 38, 44, 255), 0.55),
         );
-        draw_circle_lines(
-            blade_center.x,
-            blade_center.y,
-            r,
-            1.1,
-            Color::from_rgba(118, 126, 136, 230),
+        draw_circle(
+            x,
+            y,
+            blade_r,
+            with_alpha(Color::from_rgba(176, 186, 196, 255), 0.70),
         );
-        let angle = time * 4.2 + i as f32;
-        draw_line(
-            blade_center.x,
-            blade_center.y,
-            blade_center.x + angle.cos() * r,
-            blade_center.y + angle.sin() * r,
-            1.4,
-            Color::from_rgba(76, 84, 92, 228),
+        draw_circle(
+            x,
+            y,
+            blade_r * 0.55,
+            with_alpha(Color::from_rgba(80, 88, 98, 255), 0.55),
         );
+        for k in 0..4 {
+            let a = time * (3.6 + activity * 6.0) + (k as f32 * std::f32::consts::TAU / 4.0);
+            draw_line(
+                x,
+                y,
+                x + a.cos() * blade_r * 0.92,
+                y + a.sin() * blade_r * 0.92,
+                1.0,
+                with_alpha(Color::from_rgba(240, 248, 255, 255), 0.22 + 0.25 * activity),
+            );
+        }
     }
-    for i in 0..8 {
-        let angle = time * 3.1 + i as f32 * std::f32::consts::TAU / 8.0;
-        draw_line(
-            center.x,
-            center.y,
-            center.x + angle.cos() * ring * 0.9,
-            center.y + angle.sin() * ring * 0.9,
-            0.8,
-            with_alpha(Color::from_rgba(232, 244, 255, 180), 0.55),
-        );
-    }
+
+    let bar = Rect::new(
+        rect.x + rect.w * 0.62,
+        rect.y + rect.h * 0.14,
+        rect.w * 0.30,
+        rect.h * 0.10,
+    );
+    draw_progress_bar(bar, prog, Color::from_rgba(84, 248, 154, 255));
+
+    let led_pos = vec2(rect.x + rect.w * 0.88, rect.y + rect.h * 0.86);
+    draw_led(
+        led_pos,
+        rect.w.min(rect.h) * 0.05,
+        Color::from_rgba(84, 248, 154, 255),
+        0.4 + 0.6 * activity,
+    );
 }
 
-fn draw_distributor_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
+fn draw_distributor_visual(
+    rect: Rect,
+    orientation: sim::BlockOrientation,
+    time: f32,
+    active: bool,
+) {
+    let activity = if active { 1.0 } else { 0.0 };
+    draw_soft_shadow_rect(rect, vec2(2.5, 2.5), 3.6, 0.18);
+
     draw_belt_motion(
         rect,
         orientation,
-        time,
-        Color::from_rgba(38, 80, 128, 232),
-        Color::from_rgba(94, 168, 238, 222),
-        Color::from_rgba(164, 220, 250, 206),
+        time * activity,
+        Color::from_rgba(22, 92, 220, 252),
+        Color::from_rgba(110, 198, 255, 238),
+        Color::from_rgba(176, 220, 250, 198),
     );
+
+    let body = rect_inset_xy(rect, rect.w * 0.12, rect.h * 0.18);
     draw_rectangle(
-        rect.x + 2.0,
-        rect.y + 2.0,
-        (rect.w - 4.0).max(1.0),
-        (rect.h - 4.0).max(1.0),
-        with_alpha(Color::from_rgba(55, 70, 98, 190), 0.52),
+        body.x,
+        body.y,
+        body.w,
+        body.h,
+        with_alpha(Color::from_rgba(22, 28, 36, 255), 0.10),
     );
-    let pivot = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
-    let foot = rect.h.min(rect.w) * 0.38;
+    draw_grain_overlay(body, 0.06);
+
     let axis = orientation_axis(orientation);
     let normal = vec2(-axis.y, axis.x);
-    for i in 0..6 {
-        let gate = pivot + normal * (i as f32 - 2.5) * (rect.w.min(rect.h) * 0.045);
-        draw_rectangle(
-            gate.x,
-            gate.y,
-            rect.w.min(rect.h) * 0.02,
-            rect.w.min(rect.h) * 0.06,
-            with_alpha(Color::from_rgba(216, 236, 255, 168), 0.32),
-        );
-    }
-    draw_rectangle(
-        pivot.x - foot * 0.5,
-        pivot.y - foot * 0.5,
-        foot,
-        foot,
-        Color::from_rgba(76, 86, 102, 235),
+    let pivot = rect_center(rect);
+    let foot = rect.w.min(rect.h) * 0.12;
+
+    draw_circle(
+        pivot.x,
+        pivot.y,
+        foot * 0.95,
+        with_alpha(Color::from_rgba(18, 22, 28, 255), 0.55),
     );
+    draw_circle(
+        pivot.x,
+        pivot.y,
+        foot * 0.72,
+        with_alpha(Color::from_rgba(210, 220, 232, 255), 0.55),
+    );
+
     let base_angle = axis.y.atan2(axis.x);
-    let swing = (time * 1.3).sin() * 35.0_f32.to_radians();
+    let swing = (time * 1.3).sin() * 35.0_f32.to_radians() * activity;
     let arm_angle = base_angle + swing;
     let arm_len = rect.w.max(rect.h) * 0.46;
     let tip = pivot + vec2(arm_angle.cos(), arm_angle.sin()) * arm_len;
+
     draw_line(
         pivot.x,
         pivot.y,
         tip.x,
         tip.y,
-        2.4,
-        Color::from_rgba(206, 214, 226, 228),
+        2.6,
+        with_alpha(Color::from_rgba(210, 220, 232, 255), 0.75),
     );
     draw_circle(
         tip.x,
         tip.y,
-        3.4,
-        with_alpha(Color::from_rgba(248, 252, 255, 226), 0.72),
+        3.6,
+        with_alpha(Color::from_rgba(248, 252, 255, 255), 0.58),
     );
-    let sec = pivot + normal * foot * 0.4;
-    draw_circle(
-        sec.x,
-        sec.y,
-        2.2,
-        with_alpha(Color::from_rgba(196, 226, 252, 175), 0.9),
+
+    let servo = pivot - normal * rect.w.min(rect.h) * 0.20;
+    draw_rectangle(
+        servo.x - 6.0,
+        servo.y - 4.0,
+        12.0,
+        8.0,
+        with_alpha(Color::from_rgba(24, 28, 34, 255), 0.55),
     );
-    draw_line(
-        pivot.x,
-        pivot.y,
-        sec.x,
-        sec.y,
-        1.5,
-        with_alpha(Color::from_rgba(196, 226, 252, 185), 0.6),
+    draw_rectangle_lines(
+        servo.x - 6.0,
+        servo.y - 4.0,
+        12.0,
+        8.0,
+        1.0,
+        with_alpha(Color::from_rgba(220, 232, 244, 255), 0.18),
+    );
+    draw_led(
+        servo + normal * 7.0,
+        1.6,
+        Color::from_rgba(84, 248, 154, 255),
+        0.3 + 0.7 * activity,
     );
 }
 
@@ -3431,77 +3890,105 @@ fn draw_dryer_oven_visual(rect: Rect, orientation: sim::BlockOrientation, time: 
     crate::four_texture::draw_dryer_oven_visual(rect, orientation, time);
 }
 
-fn draw_flaker_visual(rect: Rect, orientation: sim::BlockOrientation, time: f32) {
-    draw_rectangle(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        Color::from_rgba(126, 124, 118, 232),
-    );
-    draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        1.7,
-        Color::from_rgba(214, 220, 226, 216),
-    );
+fn draw_flaker_visual(
+    rect: Rect,
+    orientation: sim::BlockOrientation,
+    time: f32,
+    active: bool,
+    progress: f32,
+) {
+    let activity = if active { 1.0 } else { 0.0 };
+    let prog = progress.clamp(0.0, 1.0);
 
-    let center = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
-    let drum_radius = rect.w.min(rect.h) * 0.24;
+    draw_soft_shadow_rect(rect, vec2(3.0, 3.0), 4.0, 0.20);
+
+    let base = Color::from_rgba(124, 122, 116, 236);
+    let outline = with_alpha(Color::from_rgba(214, 220, 226, 255), 0.70);
+    draw_panel(rect, base, outline, 0.08);
+
+    let center = rect_center(rect);
+    let drum_r = rect.w.min(rect.h) * 0.26;
+
     draw_circle(
         center.x,
         center.y,
-        drum_radius,
-        Color::from_rgba(178, 184, 194, 236),
+        drum_r * 1.08,
+        with_alpha(Color::from_rgba(26, 30, 36, 255), 0.52),
     );
-    draw_circle_lines(
+    draw_circle(
         center.x,
         center.y,
-        drum_radius,
-        1.2,
-        Color::from_rgba(92, 102, 118, 236),
+        drum_r,
+        with_alpha(Color::from_rgba(184, 190, 198, 255), 0.75),
     );
-    for i in 0..5 {
-        let angle = time * 4.0 + i as f32 * std::f32::consts::TAU / 5.0;
+    draw_circle(
+        center.x,
+        center.y,
+        drum_r * 0.62,
+        with_alpha(Color::from_rgba(92, 98, 108, 255), 0.55),
+    );
+
+    for i in 0..6 {
+        let a = time * (2.6 + activity * 6.5) + i as f32 * (std::f32::consts::TAU / 6.0);
         draw_line(
             center.x,
             center.y,
-            center.x + angle.cos() * drum_radius,
-            center.y + angle.sin() * drum_radius,
+            center.x + a.cos() * drum_r * 0.92,
+            center.y + a.sin() * drum_r * 0.92,
             1.2,
-            Color::from_rgba(82, 90, 108, 230),
+            with_alpha(Color::from_rgba(240, 248, 255, 255), 0.12 + 0.25 * activity),
         );
     }
 
     let axis = orientation_axis(orientation);
-    let normal = vec2(-axis.y, axis.x);
-    let chute_center = center + axis * rect.w.min(rect.h) * 0.28;
-    draw_circle(
-        center.x,
-        center.y,
-        drum_radius * 0.88,
-        with_alpha(Color::from_rgba(112, 132, 156, 128), 0.18),
+    let chute_center = center + axis * rect.w.min(rect.h) * 0.34;
+    let chute = Rect::new(chute_center.x - 6.0, chute_center.y - 9.0, 12.0, 18.0);
+    draw_rectangle(
+        chute.x,
+        chute.y,
+        chute.w,
+        chute.h,
+        with_alpha(Color::from_rgba(36, 42, 50, 255), 0.62),
     );
-    draw_triangle(
-        chute_center + normal * 5.0,
-        chute_center - normal * 5.0,
-        chute_center + axis * 10.0,
-        Color::from_rgba(214, 192, 144, 210),
+    draw_rectangle_lines(
+        chute.x + 0.6,
+        chute.y + 0.6,
+        (chute.w - 1.2).max(1.0),
+        (chute.h - 1.2).max(1.0),
+        1.0,
+        with_alpha(Color::from_rgba(220, 232, 244, 255), 0.18),
     );
-    for i in 0..12 {
-        let phase = time * 3.6 + i as f32 * 0.4;
-        let dust = (phase.sin() * 0.5 + 0.5) * drum_radius * 0.75;
-        let dir = i as f32 / 12.0 * std::f32::consts::TAU;
-        let p = center + vec2(dir.cos() * dust, dir.sin() * dust * 0.32);
-        draw_circle(
-            p.x,
-            p.y,
-            1.0,
-            with_alpha(Color::from_rgba(230, 245, 255, 170), 0.42),
-        );
+
+    if activity > 0.01 {
+        for i in 0..12 {
+            let fi = i as f32;
+            let t = fract01(time * 0.8 + fi * 0.11);
+            let p = chute_center
+                + axis * (t * rect.w.min(rect.h) * 0.24)
+                + vec2(((fi * 7.1).sin()) * 2.4, ((fi * 5.3).cos()) * 2.4);
+            draw_circle(
+                p.x,
+                p.y,
+                1.4,
+                with_alpha(Color::from_rgba(236, 224, 176, 255), 0.14 + 0.20 * activity),
+            );
+        }
     }
+
+    let bar = Rect::new(
+        rect.x + rect.w * 0.10,
+        rect.y + rect.h * 0.12,
+        rect.w * 0.32,
+        rect.h * 0.10,
+    );
+    draw_progress_bar(bar, prog, Color::from_rgba(84, 248, 154, 255));
+
+    draw_led(
+        vec2(rect.x + rect.w * 0.84, rect.y + rect.h * 0.84),
+        rect.w.min(rect.h) * 0.05,
+        Color::from_rgba(84, 248, 154, 255),
+        0.35 + 0.65 * activity,
+    );
 }
 
 #[derive(Clone, Copy, Default)]
@@ -3544,241 +4031,384 @@ fn suction_pipe_connections(
     }
 }
 
-fn draw_suction_pipe_visual(rect: Rect, conn: PipeConnections, time: f32) {
+fn draw_suction_pipe_visual(rect: Rect, conn: PipeConnections, time: f32, flow: f32) {
+    let f = flow.clamp(0.0, 1.0);
+
+    draw_soft_shadow_rect(rect, vec2(2.0, 2.0), 2.6, 0.14);
+
+    let base = Color::from_rgba(82, 90, 102, 240);
+    let hi = with_alpha(Color::from_rgba(210, 224, 236, 255), 0.46);
+    let lo = with_alpha(Color::from_rgba(10, 12, 14, 255), 0.36);
+
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, with_alpha(base, 0.55));
+    draw_grain_overlay(rect, 0.04);
+
     let cx = rect.x + rect.w * 0.5;
     let cy = rect.y + rect.h * 0.5;
-    let thick = rect.w.min(rect.h) * 0.26;
-    let pipe_color = Color::from_rgba(148, 162, 178, 238);
-    let edge_color = Color::from_rgba(86, 98, 114, 240);
-    let flow_color = with_alpha(
-        Color::from_rgba(194, 234, 255, 220),
-        0.24 + (time * 1.8).sin().abs() * 0.32,
-    );
+    let thick = rect.w.min(rect.h) * 0.32;
+    let half = rect.w.min(rect.h) * 0.5;
+
     if conn.north {
-        draw_rectangle(cx - thick * 0.5, rect.y, thick, rect.h * 0.5, pipe_color);
+        draw_rectangle(cx - thick * 0.5, rect.y, thick, half, base);
+        draw_line(
+            cx - thick * 0.35,
+            rect.y + 1.0,
+            cx - thick * 0.35,
+            rect.y + half - 1.0,
+            1.0,
+            hi,
+        );
+        draw_line(
+            cx + thick * 0.35,
+            rect.y + 1.0,
+            cx + thick * 0.35,
+            rect.y + half - 1.0,
+            1.0,
+            lo,
+        );
     }
     if conn.south {
-        draw_rectangle(cx - thick * 0.5, cy, thick, rect.h * 0.5, pipe_color);
+        draw_rectangle(cx - thick * 0.5, cy, thick, half, base);
+        draw_line(
+            cx - thick * 0.35,
+            cy + 1.0,
+            cx - thick * 0.35,
+            rect.y + rect.h - 1.0,
+            1.0,
+            hi,
+        );
+        draw_line(
+            cx + thick * 0.35,
+            cy + 1.0,
+            cx + thick * 0.35,
+            rect.y + rect.h - 1.0,
+            1.0,
+            lo,
+        );
     }
     if conn.west {
-        draw_rectangle(rect.x, cy - thick * 0.5, rect.w * 0.5, thick, pipe_color);
+        draw_rectangle(rect.x, cy - thick * 0.5, half, thick, base);
+        draw_line(
+            rect.x + 1.0,
+            cy - thick * 0.35,
+            rect.x + half - 1.0,
+            cy - thick * 0.35,
+            1.0,
+            hi,
+        );
+        draw_line(
+            rect.x + 1.0,
+            cy + thick * 0.35,
+            rect.x + half - 1.0,
+            cy + thick * 0.35,
+            1.0,
+            lo,
+        );
     }
     if conn.east {
-        draw_rectangle(cx, cy - thick * 0.5, rect.w * 0.5, thick, pipe_color);
+        draw_rectangle(cx, cy - thick * 0.5, half, thick, base);
+        draw_line(
+            cx + 1.0,
+            cy - thick * 0.35,
+            rect.x + rect.w - 1.0,
+            cy - thick * 0.35,
+            1.0,
+            hi,
+        );
+        draw_line(
+            cx + 1.0,
+            cy + thick * 0.35,
+            rect.x + rect.w - 1.0,
+            cy + thick * 0.35,
+            1.0,
+            lo,
+        );
     }
-    draw_circle(cx, cy, thick * 0.85, pipe_color);
-    draw_circle_lines(cx, cy, thick * 0.9, 1.1, edge_color);
-    draw_circle(cx, cy, thick * 0.64, flow_color);
-    draw_circle_lines(cx, cy, thick * 1.05, 0.7, edge_color);
 
-    let flow = (time * 2.6).sin() * 0.5 + 0.5;
     draw_circle(
-        cx + (flow - 0.5) * rect.w * 0.45,
+        cx,
         cy,
-        thick * 0.24,
-        Color::from_rgba(204, 236, 255, 224),
+        thick * 0.64,
+        with_alpha(Color::from_rgba(36, 42, 50, 255), 0.65),
     );
-    if conn.north || conn.south || conn.east || conn.west {
-        for i in 0..3 {
-            let offset = (i as f32) * 2.2 + time * 1.2;
-            let bx = cx + (offset.cos() * rect.w * 0.12);
-            let by = cy + (offset.sin() * rect.h * 0.12);
-            draw_circle(
-                bx,
-                by,
-                1.1,
-                with_alpha(Color::from_rgba(220, 248, 255, 212), 0.6 - i as f32 * 0.12),
-            );
-        }
+    draw_circle(
+        cx,
+        cy,
+        thick * 0.48,
+        with_alpha(Color::from_rgba(176, 190, 204, 255), 0.42),
+    );
+
+    let pulse = fract01(time * (0.8 + 1.8 * f));
+    let dot_r = (rect.w.min(rect.h) * 0.08).max(1.0);
+    let dot_col = with_alpha(Color::from_rgba(120, 210, 255, 255), 0.10 + 0.35 * f);
+    if conn.north {
+        draw_circle(cx, cy - pulse * half * 0.90, dot_r, dot_col);
+    }
+    if conn.south {
+        draw_circle(cx, cy + pulse * half * 0.90, dot_r, dot_col);
+    }
+    if conn.west {
+        draw_circle(cx - pulse * half * 0.90, cy, dot_r, dot_col);
+    }
+    if conn.east {
+        draw_circle(cx + pulse * half * 0.90, cy, dot_r, dot_col);
     }
 }
 
-fn draw_sortex_visual(rect: Rect, time: f32) {
+fn draw_sortex_visual(
+    rect: Rect,
+    orientation: sim::BlockOrientation,
+    time: f32,
+    active: bool,
+    progress: f32,
+) {
+    let activity = if active { 1.0 } else { 0.0 };
+    let prog = progress.clamp(0.0, 1.0);
+
+    draw_soft_shadow_rect(rect, vec2(3.0, 3.0), 4.6, 0.22);
+
+    let base = Color::from_rgba(118, 122, 128, 238);
+    let outline = with_alpha(Color::from_rgba(220, 232, 244, 255), 0.72);
+    draw_panel(rect, base, outline, 0.08);
+
+    let b = basis_for_block(rect, orientation);
+
+    draw_oriented_quad(
+        &b,
+        -0.70,
+        -0.38,
+        0.30,
+        0.38,
+        with_alpha(Color::from_rgba(14, 18, 24, 255), 0.28),
+    );
+    draw_oriented_quad_lines(
+        &b,
+        -0.70,
+        -0.38,
+        0.30,
+        0.38,
+        1.2,
+        with_alpha(Color::from_rgba(220, 232, 244, 255), 0.18),
+    );
+
+    let scan = (time * (1.4 + 2.0 * activity)).sin() * 0.32;
+    let beam_col = with_alpha(Color::from_rgba(120, 220, 255, 255), 0.10 + 0.28 * activity);
+    let p0 = b.p(-0.62, scan);
+    let p1 = b.p(0.22, scan);
+    draw_line(p0.x, p0.y, p1.x, p1.y, 2.0, beam_col);
+
+    let in_port = Rect::new(
+        rect.x + rect.w * 0.08,
+        rect.y + rect.h * 0.42,
+        rect.w * 0.10,
+        rect.h * 0.16,
+    );
     draw_rectangle(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        Color::from_rgba(82, 104, 92, 236),
+        in_port.x,
+        in_port.y,
+        in_port.w,
+        in_port.h,
+        with_alpha(Color::from_rgba(32, 38, 46, 255), 0.55),
     );
     draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        1.9,
-        Color::from_rgba(192, 226, 204, 214),
+        in_port.x + 0.6,
+        in_port.y + 0.6,
+        (in_port.w - 1.2).max(1.0),
+        (in_port.h - 1.2).max(1.0),
+        1.0,
+        with_alpha(Color::from_rgba(220, 232, 244, 255), 0.18),
     );
-    let sensor_y = rect.y + rect.h * 0.42;
-    for i in 0..5 {
-        let t = time * 2.2 + i as f32 * 0.7;
-        let x = rect.x + rect.w * (0.15 + i as f32 * 0.17);
-        let blink = 0.26 + ((t.sin() * 0.5 + 0.5) * 0.5);
-        draw_circle(
-            x,
-            sensor_y,
-            3.2,
-            with_alpha(Color::from_rgba(198, 248, 214, 255), blink),
-        );
-    }
-    draw_rectangle(
-        rect.x + rect.w * 0.14,
-        rect.y + rect.h * 0.66,
-        rect.w * 0.27,
-        rect.h * 0.24,
-        Color::from_rgba(92, 150, 224, 212),
+
+    draw_oriented_quad(
+        &b,
+        0.42,
+        -0.52,
+        0.86,
+        -0.10,
+        with_alpha(Color::from_rgba(36, 82, 220, 255), 0.52),
     );
-    draw_rectangle(
-        rect.x + rect.w * 0.59,
-        rect.y + rect.h * 0.66,
-        rect.w * 0.27,
-        rect.h * 0.24,
-        Color::from_rgba(220, 110, 94, 212),
+    draw_oriented_quad(
+        &b,
+        0.42,
+        0.10,
+        0.86,
+        0.52,
+        with_alpha(Color::from_rgba(210, 86, 72, 255), 0.52),
     );
-    let divider = rect.w * 0.5;
-    draw_line(
-        rect.x + divider,
-        rect.y + rect.h * 0.14,
-        rect.x + divider,
-        rect.y + rect.h * 0.86,
-        1.2,
-        with_alpha(Color::from_rgba(214, 232, 244, 170), 0.6),
+    draw_oriented_quad_lines(
+        &b,
+        0.42,
+        -0.52,
+        0.86,
+        -0.10,
+        1.1,
+        with_alpha(Color::from_rgba(232, 242, 250, 255), 0.18),
     );
-    for i in 0..8 {
-        let t = (time * 0.9 + i as f32 * 0.35).fract();
-        let x = rect.x + rect.w * (0.18 + t * 0.64);
-        draw_rectangle(
-            x,
-            rect.y + rect.h * (0.34 + (i % 2) as f32 * 0.02),
-            rect.w * 0.03,
-            rect.h * 0.2,
-            with_alpha(
-                Color::from_rgba(248, 244, 180, 200),
-                0.2 + (i as f32 * 0.12).min(0.95),
-            ),
-        );
-    }
+    draw_oriented_quad_lines(
+        &b,
+        0.42,
+        0.10,
+        0.86,
+        0.52,
+        1.1,
+        with_alpha(Color::from_rgba(250, 232, 232, 255), 0.18),
+    );
+
+    let led_a = 0.45 + 0.55 * activity;
+    draw_led(
+        b.p(-0.15, -0.55),
+        rect.w.min(rect.h) * 0.05,
+        Color::from_rgba(84, 248, 154, 255),
+        led_a,
+    );
+    draw_led(
+        b.p(-0.05, 0.55),
+        rect.w.min(rect.h) * 0.05,
+        Color::from_rgba(84, 248, 154, 255),
+        led_a,
+    );
+
+    let bar = Rect::new(
+        rect.x + rect.w * 0.12,
+        rect.y + rect.h * 0.82,
+        rect.w * 0.32,
+        rect.h * 0.10,
+    );
+    draw_progress_bar(bar, prog, Color::from_rgba(84, 248, 154, 255));
 }
 
 fn draw_bag_chute_visual(
     rect: Rect,
+    orientation: sim::BlockOrientation,
     is_blue: bool,
     fill_ratio: f32,
     beacon_active: bool,
     time: f32,
 ) {
-    draw_rectangle(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        Color::from_rgba(98, 106, 116, 236),
-    );
-    draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        1.6,
-        Color::from_rgba(194, 208, 222, 212),
-    );
-
-    let chute = Rect::new(
-        rect.x + rect.w * 0.36,
-        rect.y + rect.h * 0.06,
-        rect.w * 0.28,
-        rect.h * 0.4,
-    );
-    draw_rectangle(
-        chute.x,
-        chute.y,
-        chute.w,
-        chute.h,
-        Color::from_rgba(128, 138, 150, 228),
-    );
-
-    let bag = Rect::new(
-        rect.x + rect.w * 0.18,
-        rect.y + rect.h * 0.46,
-        rect.w * 0.64,
-        rect.h * 0.46,
-    );
-    let bag_color = if is_blue {
-        Color::from_rgba(94, 152, 232, 232)
-    } else {
-        Color::from_rgba(226, 106, 92, 232)
-    };
-    draw_rectangle(
-        bag.x,
-        bag.y,
-        bag.w,
-        bag.h,
-        Color::from_rgba(54, 62, 72, 214),
-    );
-    draw_rectangle(
-        bag.x + 1.5,
-        bag.y + bag.h * (1.0 - fill_ratio.clamp(0.0, 1.0)),
-        (bag.w - 3.0).max(1.0),
-        (bag.h * fill_ratio.clamp(0.0, 1.0)).max(1.0),
-        bag_color,
-    );
-    draw_rectangle_lines(
-        bag.x + 0.5,
-        bag.y + 0.5,
-        bag.w - 1.0,
-        bag.h - 1.0,
-        1.0,
-        Color::from_rgba(222, 236, 248, 196),
-    );
-
+    let fill = fill_ratio.clamp(0.0, 1.0);
     let blink = if beacon_active {
-        0.44 + ((time * 7.5).sin() * 0.5 + 0.5) * 0.56
+        blink_ratio(time)
     } else {
-        0.18
+        0.0
     };
-    draw_circle(
-        rect.x + rect.w * 0.5,
-        rect.y + rect.h * 0.08,
-        rect.w.min(rect.h) * 0.1,
-        with_alpha(Color::from_rgba(248, 72, 68, 255), blink),
+
+    draw_soft_shadow_rect(rect, vec2(3.0, 3.0), 4.0, 0.20);
+
+    let base = if is_blue {
+        Color::from_rgba(90, 118, 162, 236)
+    } else {
+        Color::from_rgba(168, 96, 92, 236)
+    };
+    let outline = with_alpha(Color::from_rgba(224, 236, 248, 255), 0.70);
+    draw_panel(rect, base, outline, 0.07);
+
+    let b = basis_for_block(rect, orientation);
+
+    draw_oriented_quad(
+        &b,
+        -0.86,
+        -0.20,
+        -0.22,
+        0.20,
+        with_alpha(Color::from_rgba(34, 40, 48, 255), 0.62),
     );
-    let fill_ratio = fill_ratio.clamp(0.0, 1.0);
-    let fill_top = bag.y + bag.h * (1.0 - fill_ratio);
+    draw_oriented_quad_lines(
+        &b,
+        -0.86,
+        -0.20,
+        -0.22,
+        0.20,
+        1.1,
+        with_alpha(Color::from_rgba(220, 232, 244, 255), 0.18),
+    );
+
+    let bag_u0 = 0.02;
+    let bag_u1 = 0.92;
+    let bag_v0 = -0.50;
+    let bag_v1 = 0.50;
+
+    draw_oriented_quad(
+        &b,
+        bag_u0,
+        bag_v0,
+        bag_u1,
+        bag_v1,
+        with_alpha(Color::from_rgba(232, 242, 248, 255), 0.26),
+    );
+    draw_oriented_quad_lines(
+        &b,
+        bag_u0,
+        bag_v0,
+        bag_u1,
+        bag_v1,
+        1.2,
+        with_alpha(Color::from_rgba(240, 248, 255, 255), 0.22),
+    );
+
+    let fill_start = bag_u0 + (1.0 - fill) * (bag_u1 - bag_u0);
+    let fill_col = if is_blue {
+        with_alpha(Color::from_rgba(54, 96, 214, 255), 0.46)
+    } else {
+        with_alpha(Color::from_rgba(214, 88, 70, 255), 0.46)
+    };
+    draw_oriented_quad(
+        &b,
+        fill_start,
+        bag_v0 + 0.04,
+        bag_u1 - 0.02,
+        bag_v1 - 0.04,
+        fill_col,
+    );
+
     for i in 0..3 {
-        let wave = fill_top + ((time * 3.0 + i as f32).sin() * 1.5);
-        draw_circle(
-            bag.x + 3.0 + i as f32 * (bag.w - 6.0) / 3.0,
-            wave,
-            1.2,
-            with_alpha(
-                if is_blue {
-                    Color::from_rgba(132, 196, 255, 220)
-                } else {
-                    Color::from_rgba(255, 150, 136, 220)
-                },
-                0.62,
-            ),
+        let u = bag_u0 + 0.18 + i as f32 * 0.22;
+        let p0 = b.p(u, bag_v0 + 0.06);
+        let p1 = b.p(u + 0.04, bag_v1 - 0.06);
+        draw_line(
+            p0.x,
+            p0.y,
+            p1.x,
+            p1.y,
+            1.0,
+            with_alpha(Color::from_rgba(255, 255, 255, 255), 0.06),
         );
     }
-    let gauge_x = rect.x + rect.w * 0.2;
-    let gauge_w = rect.w * 0.6;
-    let gauge_y = rect.y + rect.h * 0.9;
-    draw_rectangle(
-        gauge_x,
-        gauge_y,
-        gauge_w,
-        1.8,
-        with_alpha(Color::from_rgba(30, 40, 48, 180), 0.55),
+
+    let clamp_pos = b.p(bag_u0 - 0.06, 0.0);
+    draw_circle(
+        clamp_pos.x,
+        clamp_pos.y,
+        rect.w.min(rect.h) * 0.06,
+        with_alpha(Color::from_rgba(34, 40, 48, 255), 0.62),
     );
-    draw_rectangle(
-        gauge_x,
-        gauge_y,
-        gauge_w * fill_ratio,
-        1.8,
+    draw_circle(
+        clamp_pos.x,
+        clamp_pos.y,
+        rect.w.min(rect.h) * 0.04,
+        with_alpha(Color::from_rgba(210, 220, 232, 255), 0.35),
+    );
+
+    let beacon_pos = b.p(-0.78, -0.72);
+    let beacon_col = if is_blue {
+        Color::from_rgba(80, 160, 255, 255)
+    } else {
+        Color::from_rgba(255, 120, 90, 255)
+    };
+    draw_led(beacon_pos, rect.w.min(rect.h) * 0.06, beacon_col, blink);
+
+    let bar = Rect::new(
+        rect.x + rect.w * 0.10,
+        rect.y + rect.h * 0.82,
+        rect.w * 0.34,
+        rect.h * 0.10,
+    );
+    draw_progress_bar(
+        bar,
+        fill,
         if is_blue {
-            with_alpha(Color::from_rgba(112, 166, 255, 220), 0.8)
+            Color::from_rgba(120, 190, 255, 255)
         } else {
-            with_alpha(Color::from_rgba(255, 128, 112, 220), 0.8)
+            Color::from_rgba(255, 170, 140, 255)
         },
     );
 }
@@ -4049,37 +4679,124 @@ fn draw_modern_block_visual(
     sim: &sim::FactorySim,
     blocks: &[sim::BlockDebugView],
     time: f32,
+    modern_ready: bool,
 ) {
+    let lavage = modern_ready && sim.modern_lavage_busy();
+    let lavage_progress = if modern_ready {
+        sim.modern_lavage_progress_ratio()
+    } else {
+        0.0
+    };
+    let coupe = modern_ready && sim.modern_coupe_busy();
+    let four = modern_ready && sim.modern_four_busy();
+    let floc = modern_ready && sim.modern_floc_busy();
+    let sortex = modern_ready && sim.modern_sortex_busy();
+    let line_active = lavage || coupe || four || floc || sortex;
+
     match block.kind {
-        sim::BlockKind::InputHopper => draw_input_hopper_visual(rect, block.orientation, time),
-        sim::BlockKind::Conveyor => draw_belt_motion(
-            rect,
-            block.orientation,
-            time,
-            Color::from_rgba(26, 108, 220, 252),
-            Color::from_rgba(110, 198, 255, 238),
-            Color::from_rgba(176, 220, 250, 198),
-        ),
-        sim::BlockKind::FluidityTank => draw_fluidity_tank_visual(rect, time),
-        sim::BlockKind::Cutter => draw_cutter_visual(rect, block.orientation, time),
-        sim::BlockKind::DistributorBelt => draw_distributor_visual(rect, block.orientation, time),
-        sim::BlockKind::DryerOven => draw_dryer_oven_visual(rect, block.orientation, time),
-        sim::BlockKind::OvenExitConveyor => draw_belt_motion(
-            rect,
-            block.orientation,
-            time,
-            Color::from_rgba(38, 120, 220, 232),
-            Color::from_rgba(122, 201, 255, 224),
-            Color::from_rgba(206, 232, 250, 192),
-        ),
-        sim::BlockKind::Flaker => draw_flaker_visual(rect, block.orientation, time),
+        sim::BlockKind::InputHopper => {
+            let stock_ratio = (sim.line.raw as f32 / 25.0).clamp(0.0, 1.0);
+            draw_input_hopper_visual(
+                rect,
+                block.orientation,
+                time,
+                lavage || lavage_progress > 0.0,
+                stock_ratio,
+            );
+        }
+        sim::BlockKind::Conveyor => {
+            draw_belt_motion(
+                rect,
+                block.orientation,
+                time * if line_active { 1.0 } else { 0.0 },
+                Color::from_rgba(26, 108, 220, 252),
+                Color::from_rgba(110, 198, 255, 238),
+                Color::from_rgba(176, 220, 250, 198),
+            );
+            draw_belt_payload(
+                rect_inset(rect, rect.w.min(rect.h) * 0.18),
+                block.orientation,
+                time,
+                if line_active { 1.0 } else { 0.0 },
+                (sim.line.wip as f32 / 24.0).clamp(0.0, 1.0),
+            );
+        }
+        sim::BlockKind::FluidityTank => {
+            let fill_ratio = (sim.line.washed as f32 / 10.0).clamp(0.0, 1.0);
+            draw_fluidity_tank_visual(rect, time, fill_ratio, lavage || coupe);
+        }
+        sim::BlockKind::Cutter => {
+            draw_cutter_visual(
+                rect,
+                block.orientation,
+                time,
+                coupe,
+                sim.modern_coupe_progress_ratio(),
+            );
+        }
+        sim::BlockKind::DistributorBelt => {
+            draw_distributor_visual(rect, block.orientation, time, coupe || four);
+        }
+        sim::BlockKind::DryerOven => {
+            draw_dryer_oven_visual(rect, block.orientation, time);
+            if four {
+                let heat = 0.25 + 0.75 * sim.modern_four_progress_ratio();
+                draw_rectangle(
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                    with_alpha(Color::from_rgba(255, 148, 64, 255), 0.06 * heat),
+                );
+            }
+        }
+        sim::BlockKind::OvenExitConveyor => {
+            draw_belt_motion(
+                rect,
+                block.orientation,
+                time * if four || floc || sortex { 1.0 } else { 0.0 },
+                Color::from_rgba(38, 120, 220, 232),
+                Color::from_rgba(122, 201, 255, 224),
+                Color::from_rgba(206, 232, 250, 192),
+            );
+            draw_belt_payload(
+                rect_inset(rect, rect.w.min(rect.h) * 0.18),
+                block.orientation,
+                time,
+                if four || floc || sortex { 1.0 } else { 0.0 },
+                (sim.line.dehydrated as f32 / 10.0).clamp(0.0, 1.0),
+            );
+        }
+        sim::BlockKind::Flaker => {
+            draw_flaker_visual(
+                rect,
+                block.orientation,
+                time,
+                floc,
+                sim.modern_floc_progress_ratio(),
+            );
+        }
         sim::BlockKind::SuctionPipe => {
             let conn = suction_pipe_connections(block, blocks);
-            draw_suction_pipe_visual(rect, conn, time);
+            let flow = if modern_ready {
+                (floc as i32 + sortex as i32) as f32 * 0.5
+            } else {
+                0.0
+            };
+            draw_suction_pipe_visual(rect, conn, time, flow);
         }
-        sim::BlockKind::Sortex => draw_sortex_visual(rect, time),
+        sim::BlockKind::Sortex => {
+            draw_sortex_visual(
+                rect,
+                block.orientation,
+                time,
+                sortex,
+                sim.modern_sortex_progress_ratio(),
+            );
+        }
         sim::BlockKind::BlueBagChute => draw_bag_chute_visual(
             rect,
+            block.orientation,
             true,
             sim.descente_bleue_fill_ratio(),
             sim.descente_bleue_beacon_active(),
@@ -4087,6 +4804,7 @@ fn draw_modern_block_visual(
         ),
         sim::BlockKind::RedBagChute => draw_bag_chute_visual(
             rect,
+            block.orientation,
             false,
             sim.descente_rouge_fill_ratio(),
             sim.descente_rouge_beacon_active(),
@@ -4120,17 +4838,6 @@ fn draw_modern_block_visual(
                 2.4,
                 time,
             );
-            let top = rect.x + rect.w * 0.3;
-            for i in 0..3 {
-                let x = top + i as f32 * rect.w * 0.18;
-                draw_rectangle(
-                    x,
-                    rect.y + rect.h * 0.58,
-                    rect.w * 0.1,
-                    rect.h * 0.12,
-                    with_alpha(Color::from_rgba(224, 242, 255, 210), 0.22 + i as f32 * 0.1),
-                );
-            }
         }
         sim::BlockKind::MachineB => {
             let activity = (time * 1.6 + block.id as f32 * 0.17).sin() * 0.5 + 0.5;
@@ -4143,22 +4850,13 @@ fn draw_modern_block_visual(
                 2.9,
                 time,
             );
-            let c = vec2(rect.x + rect.w * 0.5, rect.y + rect.h * 0.64);
-            let r = rect.w.min(rect.h) * 0.17;
-            for i in 0..6 {
-                let a = time * 4.4 + i as f32 * (std::f32::consts::TAU / 6.0);
-                draw_line(
-                    c.x,
-                    c.y,
-                    c.x + a.cos() * r,
-                    c.y + a.sin() * r,
-                    1.0 + activity * 0.6,
-                    with_alpha(Color::from_rgba(228, 244, 255, 200), 0.45 + activity * 0.5),
-                );
-            }
         }
         sim::BlockKind::Buffer => draw_buffer_rack_visual(rect, &block.rack_levels),
         sim::BlockKind::Seller => draw_seller_visual(rect, time),
+    }
+
+    if block.kind.is_modern_line_component() && !modern_ready {
+        draw_modern_offline_overlay(rect, time);
     }
 }
 
@@ -4183,7 +4881,12 @@ pub(crate) fn draw_sim_blocks_overlay(
 ) {
     let storage_texture = storage_raw_texture();
     let time = get_time() as f32;
-    let blocks = sim.block_debug_views();
+    let modern_ready = sim.modern_line_ready();
+    let blocks = if show_labels {
+        sim.block_debug_views()
+    } else {
+        sim.block_debug_views_minimal()
+    };
     for block in &blocks {
         if let Some(tile_bounds) = bounds
             && !block_intersects_bounds(block.tile, block.footprint, tile_bounds)
@@ -4192,7 +4895,7 @@ pub(crate) fn draw_sim_blocks_overlay(
         }
         let rect = sim_block_rect(block.tile, block.footprint);
         let color = sim_block_overlay_color(block.kind);
-        draw_modern_block_visual(block, rect, sim, &blocks, time);
+        draw_modern_block_visual(block, rect, sim, &blocks, time, modern_ready);
         draw_rectangle_lines(
             rect.x + 1.5,
             rect.y + 1.5,
@@ -4247,7 +4950,7 @@ pub(crate) fn draw_build_block_preview(
 
     let rect = sim_block_rect(preview.tile, preview.footprint);
     let time = get_time() as f32;
-    let existing_blocks = sim.block_debug_views();
+    let existing_blocks = sim.block_debug_views_minimal();
     let ghost = sim::BlockDebugView {
         id: 0,
         kind: preview.kind,
@@ -4259,7 +4962,8 @@ pub(crate) fn draw_build_block_preview(
         rack_levels: [false; 6],
     };
 
-    draw_modern_block_visual(&ghost, rect, sim, &existing_blocks, time);
+    let modern_ready = sim.modern_line_ready();
+    draw_modern_block_visual(&ghost, rect, sim, &existing_blocks, time, modern_ready);
     draw_rectangle(
         rect.x,
         rect.y,

@@ -122,6 +122,46 @@ pub(crate) fn editor_load_current_map(editor: &mut EditorState, map: &mut MapAss
     }
 }
 
+pub(crate) fn editor_set_player_spawn(
+    editor: &mut EditorState,
+    map: &mut MapAsset,
+    tile: (i32, i32),
+) -> Result<(), &'static str> {
+    if !map.world.in_bounds(tile.0, tile.1) {
+        return Err("tuile hors carte");
+    }
+    if map.world.is_solid(tile.0, tile.1) {
+        return Err("tuile non marchable");
+    }
+    if map.player_spawn == tile {
+        return Err("deja sur cette tuile");
+    }
+    editor_push_undo(editor, map);
+    map.player_spawn = tile;
+    editor.redo_stack.clear();
+    Ok(())
+}
+
+pub(crate) fn editor_set_npc_spawn(
+    editor: &mut EditorState,
+    map: &mut MapAsset,
+    tile: (i32, i32),
+) -> Result<(), &'static str> {
+    if !map.world.in_bounds(tile.0, tile.1) {
+        return Err("tuile hors carte");
+    }
+    if map.world.is_solid(tile.0, tile.1) {
+        return Err("tuile non marchable");
+    }
+    if map.npc_spawn == tile {
+        return Err("deja sur cette tuile");
+    }
+    editor_push_undo(editor, map);
+    map.npc_spawn = tile;
+    editor.redo_stack.clear();
+    Ok(())
+}
+
 pub(crate) fn editor_undo(editor: &mut EditorState, map: &mut MapAsset) -> bool {
     let Some(snapshot) = editor.undo_stack.pop() else {
         editor_set_status(editor, "Annulation vide");
@@ -353,6 +393,7 @@ pub(crate) fn build_game_state_from_map(
         character_catalog.spawn_founder("Promeneur", lineage_seed ^ 0x55AA_7788_1133_2244);
     let sim_worker_character =
         character_catalog.spawn_founder("Employe-01", lineage_seed ^ 0xCC11_22DD_33EE_44FF);
+    let papa_character = character_catalog.spawn_founder("Papa", lineage_seed ^ 0xA114_5A2A);
 
     let sim = sim::FactorySim::load_or_default(SIM_CONFIG_PATH, map_copy.world.w, map_copy.world.h);
 
@@ -411,10 +452,13 @@ pub(crate) fn build_game_state_from_map(
         player_lineage_index: 2,
         npc_character,
         sim_worker_character,
+        papa_character,
         pawns,
         social_state,
         pawn_ui,
         hud_ui: HudUiState::default(),
+        telephone: crate::telephone::TelephoneEtat::default(),
+        papa: crate::papa::PapaEtat::charger_depuis_fichier(PAPA_PLAN_PATH),
         pause_menu_open: false,
         pause_panel: PausePanel::Aucun,
         pause_status_text: None,
@@ -560,5 +604,32 @@ mod tests {
         assert!(!editor_brush_label(EditorBrush::CaisseAilBrut).is_empty());
         assert_eq!(editor_tool_label(EditorTool::Brush), "Pinceau");
         assert_eq!(editor_tool_label(EditorTool::Rect), "Rectangle");
+    }
+
+    #[test]
+    fn set_player_spawn_tracks_undo_and_clears_redo() {
+        let mut map = test_map(10, 10);
+        let mut editor = EditorState::new();
+        editor.redo_stack.push(editor_capture_snapshot(&map));
+        let before_undo = editor.undo_stack.len();
+
+        let target = (3, 3);
+        assert!(editor_set_player_spawn(&mut editor, &mut map, target).is_ok());
+        assert_eq!(map.player_spawn, target);
+        assert_eq!(editor.undo_stack.len(), before_undo + 1);
+        assert!(editor.redo_stack.is_empty());
+    }
+
+    #[test]
+    fn set_npc_spawn_rejects_invalid_tiles_without_side_effect() {
+        let mut map = test_map(10, 10);
+        let mut editor = EditorState::new();
+        let before_npc = map.npc_spawn;
+        let before_undo = editor.undo_stack.len();
+
+        assert!(editor_set_npc_spawn(&mut editor, &mut map, (0, 0)).is_err());
+        assert_eq!(map.npc_spawn, before_npc);
+        assert_eq!(editor.undo_stack.len(), before_undo);
+        assert!(editor.redo_stack.is_empty());
     }
 }

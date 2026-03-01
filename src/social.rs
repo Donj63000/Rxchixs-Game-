@@ -1363,13 +1363,18 @@ fn can_actor_reach_tile(
     if start == target {
         return true;
     }
+    let speed_px_s = actor_move_speed(actor, player, npc).max(1.0);
+    let eta_budget_s = ORDER_TIMEOUT_S * 0.85;
+    let min_dist_px = manhattan(start, target) as f32 * TILE_SIZE;
+    if min_dist_px / speed_px_s > eta_budget_s {
+        return false;
+    }
     let Some(path) = a_star_path(world, start, target) else {
         return false;
     };
     let path_dist_px = (path.len().saturating_sub(1) as f32) * TILE_SIZE;
-    let speed_px_s = actor_move_speed(actor, player, npc).max(1.0);
     let eta_s = path_dist_px / speed_px_s;
-    eta_s <= ORDER_TIMEOUT_S * 0.85
+    eta_s <= eta_budget_s
 }
 
 fn actor_move_speed(actor: PawnKey, player: &Player, npc: &NpcWanderer) -> f32 {

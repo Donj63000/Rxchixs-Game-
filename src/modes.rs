@@ -42,6 +42,72 @@ fn normalize_wheel_units(raw_delta: f32) -> f32 {
     normalized.clamp(-8.0, 8.0)
 }
 
+fn compute_editor_panel_widths(sw: f32, margin: f32) -> (f32, f32, f32) {
+    let inner_w = (sw - margin * 4.0).max(1.0);
+    let mut left_panel_w = (sw * 0.18).clamp(220.0, 300.0);
+    let mut right_panel_w = (sw * 0.24).clamp(280.0, 390.0);
+
+    let desired_map_w = 420.0;
+    let min_map_w = 180.0;
+    let min_left_w = 140.0;
+    let min_right_w = 170.0;
+
+    let mut map_w = inner_w - left_panel_w - right_panel_w;
+    if map_w < desired_map_w {
+        let mut deficit = desired_map_w - map_w;
+        let shrink_right = deficit.min((right_panel_w - min_right_w).max(0.0));
+        right_panel_w -= shrink_right;
+        deficit -= shrink_right;
+        let shrink_left = deficit.min((left_panel_w - min_left_w).max(0.0));
+        left_panel_w -= shrink_left;
+        map_w = inner_w - left_panel_w - right_panel_w;
+    }
+
+    if map_w < min_map_w {
+        let remaining_for_side_panels = (inner_w - min_map_w).max(0.0);
+        let side_sum = (left_panel_w + right_panel_w).max(0.0001);
+        let scale = (remaining_for_side_panels / side_sum).clamp(0.0, 1.0);
+        left_panel_w *= scale;
+        right_panel_w *= scale;
+    }
+
+    left_panel_w = left_panel_w.max(0.0);
+    right_panel_w = right_panel_w.max(0.0);
+    map_w = (inner_w - left_panel_w - right_panel_w).max(1.0);
+
+    (left_panel_w, right_panel_w, map_w)
+}
+
+fn layout_save_failure_status(err: &str) -> String {
+    format!("Sauvegarde layout echouee: {err}")
+}
+
+fn editor_ui_columns_hit_test(
+    mouse: Vec2,
+    top_bar_rect: Rect,
+    left_panel_rect: Rect,
+    right_panel_rect: Rect,
+    panel_top: f32,
+    screen_h: f32,
+) -> bool {
+    let column_h = (screen_h - panel_top).max(1.0);
+    let left_column_rect = Rect::new(
+        left_panel_rect.x,
+        panel_top,
+        left_panel_rect.w.max(0.0),
+        column_h,
+    );
+    let right_column_rect = Rect::new(
+        right_panel_rect.x,
+        panel_top,
+        right_panel_rect.w.max(0.0),
+        column_h,
+    );
+    point_in_rect(mouse, top_bar_rect)
+        || point_in_rect(mouse, left_column_rect)
+        || point_in_rect(mouse, right_column_rect)
+}
+
 fn draw_overlay_panel(rect: Rect) {
     draw_rectangle(
         rect.x,
@@ -76,7 +142,7 @@ fn draw_overlay_panel(rect: Rect) {
 }
 
 fn draw_overlay_line(text: &str, x: f32, y: f32, font_size: f32, color: Color) {
-    let shadow = with_alpha(BLACK, 0.88);
+    let shadow = ui_shadow_color_for_text(color);
     draw_text_shadowed(
         text,
         x,
@@ -837,6 +903,7 @@ fn draw_pause_menu_overlay(state: &mut GameState, mouse: Vec2, left_click: bool)
 }
 
 fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut f32) -> PlayAction {
+    begin_ui_pass();
     tick_pause_status(state, frame_dt);
     *accumulator = 0.0;
 
@@ -975,6 +1042,7 @@ pub(crate) fn run_play_frame(
     frame_dt: f32,
     accumulator: &mut f32,
 ) -> PlayAction {
+    begin_ui_pass();
     if is_key_pressed(KeyCode::Escape) {
         match resolve_escape_intent(
             state.pause_menu_open,
@@ -1063,8 +1131,11 @@ pub(crate) fn run_play_frame(
     if is_key_pressed(KeyCode::K) {
         state.sim.cycle_floor_brush();
     }
-    if is_key_pressed(KeyCode::F8) {
-        let _ = state.sim.save_layout();
+    if is_key_pressed(KeyCode::F8)
+        && let Err(err) = state.sim.save_layout()
+    {
+        state.sim.set_status_line(layout_save_failure_status(&err));
+        eprintln!("Echec sauvegarde layout usine: {err}");
     }
 
     // --- UI first: it can consume clicks & wheel, and may move the camera (jump/follow) ---
@@ -1090,6 +1161,37 @@ pub(crate) fn run_play_frame(
         wheel_y,
         time_now,
     );
+    if let Some(contact) = state.telephone.prendre_requete_appel() {
+        match contact {
+            telephone::ContactTelephone::PereBatisseur => {
+                match state
+                    .papa
+                    .declencher_appel(&state.world, &state.sim, state.player.pos)
+                {
+                    Ok(msg) => {
+                        state.telephone.definir_statut("Appel connecte: Papa");
+                        push_player_history(
+                            state,
+                            now_sim_s,
+                            crate::historique::LogCategorie::Systeme,
+                            msg,
+                        );
+                    }
+                    Err(err) => {
+                        state
+                            .telephone
+                            .definir_statut(format!("Echec appel: {err}"));
+                        push_player_history(
+                            state,
+                            now_sim_s,
+                            crate::historique::LogCategorie::Etat,
+                            format!("Appel Pere batisseur echoue: {err}"),
+                        );
+                    }
+                }
+            }
+        }
+    }
     let sw = screen_width();
     let margin = PLAY_CAMERA_MARGIN;
     let input_view_rect = Rect::new(
@@ -1589,6 +1691,15 @@ pub(crate) fn run_play_frame(
             state.player.pos = state.chariot.pos;
         }
         update_npc_wanderer(&mut state.npc, &state.world, FIXED_DT);
+        if let Some(event) = state.papa.tick(FIXED_DT, &state.world, &mut state.sim) {
+            state.telephone.definir_statut(event.clone());
+            push_player_history(
+                state,
+                sim_now_s,
+                crate::historique::LogCategorie::Systeme,
+                event,
+            );
+        }
         *accumulator -= FIXED_DT;
         sim_steps += 1;
     }
@@ -1631,6 +1742,7 @@ pub(crate) fn run_play_frame(
         Player,
         Npc,
         SimWorker,
+        Papa,
         Chariot,
     }
 
@@ -1640,6 +1752,9 @@ pub(crate) fn run_play_frame(
         (state.npc.pos.y, DrawEntity::Npc),
         (worker_pos.y, DrawEntity::SimWorker),
     ];
+    if let Some(papa) = state.papa.pnj() {
+        draw_order.push((papa.pos.y, DrawEntity::Papa));
+    }
     if !state.chariot.pilote_a_bord {
         draw_order.push((state.chariot.pos.y, DrawEntity::Chariot));
     }
@@ -1785,6 +1900,52 @@ pub(crate) fn run_play_frame(
                         debug: false,
                     },
                 );
+            }
+            DrawEntity::Papa => {
+                if let Some(papa) = state.papa.pnj() {
+                    let gesture = if papa.termine {
+                        CharacterGesture::Wave
+                    } else {
+                        CharacterGesture::None
+                    };
+                    draw_character(
+                        &state.papa_character,
+                        CharacterRenderParams {
+                            center: papa.pos,
+                            scale: 0.96,
+                            facing: papa.facing,
+                            facing_left: papa.facing_left,
+                            is_walking: !papa.termine && papa.blocage.is_none(),
+                            walk_cycle: papa.walk_cycle + time * 0.4,
+                            gesture,
+                            time,
+                            debug: false,
+                        },
+                    );
+                    let label = papa.nom.as_str();
+                    let label_sz = 16.0;
+                    let dims = measure_text(label, None, label_sz as u16, 1.0);
+                    let label_fill = Color::from_rgba(238, 248, 255, 246);
+                    draw_text_shadowed(
+                        label,
+                        papa.pos.x - dims.width * 0.5,
+                        papa.pos.y - state.player.half.y - 20.0,
+                        label_sz,
+                        label_fill,
+                        ui_shadow_color_for_text(label_fill),
+                        1.1,
+                    );
+                    if state.debug {
+                        draw_rectangle_lines(
+                            papa.pos.x - 10.0,
+                            papa.pos.y - 14.0,
+                            20.0,
+                            28.0,
+                            1.2,
+                            Color::from_rgba(160, 220, 250, 210),
+                        );
+                    }
+                }
             }
             DrawEntity::Chariot => {
                 draw_chariot_elevateur(&state.chariot, &state.palette, time, None, state.debug);
@@ -2014,6 +2175,7 @@ pub(crate) fn run_editor_frame(
     palette: &Palette,
     time: f32,
 ) -> EditorAction {
+    begin_ui_pass();
     if editor.status_timer > 0.0 {
         editor.status_timer = (editor.status_timer - get_frame_time()).max(0.0);
     }
@@ -2032,24 +2194,10 @@ pub(crate) fn run_editor_frame(
     let margin = 10.0;
     let top_bar_h = 64.0;
     let panel_top = margin + top_bar_h + margin;
-    let panel_h = (sh - panel_top - margin).max(180.0);
+    let panel_h = (sh - panel_top - margin).max(1.0);
+    let (left_panel_w, right_panel_w, map_w) = compute_editor_panel_widths(sw, margin);
 
-    let mut left_panel_w = (sw * 0.18).clamp(220.0, 300.0);
-    let mut right_panel_w = (sw * 0.24).clamp(280.0, 390.0);
-    let min_map_w = 420.0;
-    let mut map_w = sw - left_panel_w - right_panel_w - margin * 4.0;
-    if map_w < min_map_w {
-        let mut deficit = min_map_w - map_w;
-        let shrink_right = deficit.min((right_panel_w - 240.0).max(0.0));
-        right_panel_w -= shrink_right;
-        deficit -= shrink_right;
-        let shrink_left = deficit.min((left_panel_w - 190.0).max(0.0));
-        left_panel_w -= shrink_left;
-        map_w = sw - left_panel_w - right_panel_w - margin * 4.0;
-    }
-    map_w = map_w.max(180.0);
-
-    let top_bar_rect = Rect::new(margin, margin, (sw - margin * 2.0).max(240.0), top_bar_h);
+    let top_bar_rect = Rect::new(margin, margin, (sw - margin * 2.0).max(1.0), top_bar_h);
     let left_panel_rect = Rect::new(margin, panel_top, left_panel_w, panel_h);
     let map_slot_rect = Rect::new(
         left_panel_rect.x + left_panel_rect.w + margin,
@@ -2202,22 +2350,31 @@ pub(crate) fn run_editor_frame(
 
     if is_key_pressed(KeyCode::P)
         && let Some(tile) = editor.hover_tile
-        && !map.world.is_solid(tile.0, tile.1)
     {
-        map.player_spawn = tile;
-        editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1));
+        match editor_set_player_spawn(editor, map, tile) {
+            Ok(()) => {
+                editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1))
+            }
+            Err(reason) => editor_set_status(editor, format!("Point joueur invalide: {reason}")),
+        }
     }
     if is_key_pressed(KeyCode::N)
         && let Some(tile) = editor.hover_tile
-        && !map.world.is_solid(tile.0, tile.1)
     {
-        map.npc_spawn = tile;
-        editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1));
+        match editor_set_npc_spawn(editor, map, tile) {
+            Ok(()) => editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1)),
+            Err(reason) => editor_set_status(editor, format!("Point PNJ invalide: {reason}")),
+        }
     }
 
-    let over_ui = point_in_rect(mouse, top_bar_rect)
-        || point_in_rect(mouse, left_panel_rect)
-        || point_in_rect(mouse, right_panel_rect);
+    let over_ui = editor_ui_columns_hit_test(
+        mouse,
+        top_bar_rect,
+        left_panel_rect,
+        right_panel_rect,
+        panel_top,
+        sh,
+    );
     let can_edit_map = mouse_over_map && !over_ui;
 
     if editor.tool == EditorTool::Brush {
@@ -2750,10 +2907,13 @@ pub(crate) fn run_editor_frame(
         false,
         13.0,
     ) && let Some(tile) = editor.hover_tile
-        && !map.world.is_solid(tile.0, tile.1)
     {
-        map.player_spawn = tile;
-        editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1));
+        match editor_set_player_spawn(editor, map, tile) {
+            Ok(()) => {
+                editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1))
+            }
+            Err(reason) => editor_set_status(editor, format!("Point joueur invalide: {reason}")),
+        }
     }
 
     let set_npc_rect = Rect::new(
@@ -2770,10 +2930,11 @@ pub(crate) fn run_editor_frame(
         false,
         13.0,
     ) && let Some(tile) = editor.hover_tile
-        && !map.world.is_solid(tile.0, tile.1)
     {
-        map.npc_spawn = tile;
-        editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1));
+        match editor_set_npc_spawn(editor, map, tile) {
+            Ok(()) => editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1)),
+            Err(reason) => editor_set_status(editor, format!("Point PNJ invalide: {reason}")),
+        }
     }
 
     draw_ui_text_tinted_on(
@@ -2834,5 +2995,76 @@ mod tests {
         assert_eq!(second, EscapeIntent::ExitBuildMode);
         let third = resolve_escape_intent(false, false, false);
         assert_eq!(third, EscapeIntent::OpenPause);
+    }
+
+    #[test]
+    fn editor_panel_widths_fit_screen_even_when_window_is_small() {
+        let margin = 10.0;
+        for sw in [420.0_f32, 520.0, 640.0, 800.0, 1024.0, 1600.0] {
+            let (left, right, map) = compute_editor_panel_widths(sw, margin);
+            assert!(left >= 0.0);
+            assert!(right >= 0.0);
+            assert!(map >= 1.0);
+            let total = left + right + map + margin * 4.0;
+            assert!(
+                total <= sw + 0.001,
+                "layout overflow: sw={sw}, total={total}, left={left}, right={right}, map={map}"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_save_failure_status_contains_reason() {
+        let msg = layout_save_failure_status("permission denied");
+        assert!(msg.contains("Sauvegarde layout echouee"));
+        assert!(msg.contains("permission denied"));
+    }
+
+    #[test]
+    fn editor_ui_hit_test_counts_side_columns_below_panels_as_ui() {
+        let top_bar_rect = Rect::new(10.0, 10.0, 800.0, 64.0);
+        let panel_top = 84.0;
+        let screen_h = 900.0;
+        let left_panel_rect = Rect::new(10.0, panel_top, 220.0, 220.0);
+        let right_panel_rect = Rect::new(1010.0, panel_top, 280.0, 220.0);
+
+        let left_below_panel = vec2(40.0, 860.0);
+        assert!(editor_ui_columns_hit_test(
+            left_below_panel,
+            top_bar_rect,
+            left_panel_rect,
+            right_panel_rect,
+            panel_top,
+            screen_h
+        ));
+
+        let right_below_panel = vec2(1120.0, 880.0);
+        assert!(editor_ui_columns_hit_test(
+            right_below_panel,
+            top_bar_rect,
+            left_panel_rect,
+            right_panel_rect,
+            panel_top,
+            screen_h
+        ));
+    }
+
+    #[test]
+    fn editor_ui_hit_test_keeps_map_column_editable() {
+        let top_bar_rect = Rect::new(10.0, 10.0, 800.0, 64.0);
+        let panel_top = 84.0;
+        let screen_h = 900.0;
+        let left_panel_rect = Rect::new(10.0, panel_top, 220.0, 220.0);
+        let right_panel_rect = Rect::new(1010.0, panel_top, 280.0, 220.0);
+
+        let map_column_point = vec2(520.0, 700.0);
+        assert!(!editor_ui_columns_hit_test(
+            map_column_point,
+            top_bar_rect,
+            left_panel_rect,
+            right_panel_rect,
+            panel_top,
+            screen_h
+        ));
     }
 }

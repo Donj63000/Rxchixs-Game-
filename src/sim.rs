@@ -4,6 +4,7 @@ use ron::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
@@ -13,6 +14,11 @@ const RESERVATION_TTL_SECONDS: f64 = 8.0;
 const RACK_NIVEAU_COUNT: usize = 6;
 const SAC_CAPACITY_UNITS: u32 = 14;
 const SACS_PAR_BOX: u32 = 21;
+const MODERN_CYCLE_LAVAGE_S: f64 = 16.0;
+const MODERN_CYCLE_COUPE_S: f64 = 11.0;
+const MODERN_CYCLE_FOUR_S: f64 = 42.0;
+const MODERN_CYCLE_FLOC_S: f64 = 14.0;
+const MODERN_CYCLE_SORTEX_S: f64 = 9.0;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct SimClock {
@@ -341,6 +347,15 @@ impl BlockOrientation {
     pub fn is_vertical(self) -> bool {
         matches!(self, Self::North | Self::South)
     }
+
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::East => Self::West,
+            Self::West => Self::East,
+            Self::South => Self::North,
+            Self::North => Self::South,
+        }
+    }
 }
 
 const PLAYER_BUYABLE_BLOCKS: [BlockKind; 14] = [
@@ -473,12 +488,12 @@ impl BlockKind {
 
     pub fn base_footprint(self) -> (i32, i32) {
         match self {
-            Self::InputHopper => (3, 8),
+            Self::InputHopper => (8, 3),
             Self::Conveyor => (1, 1),
             Self::FluidityTank => (5, 5),
             Self::Cutter => (3, 3),
             Self::DistributorBelt => (7, 1),
-            Self::DryerOven => (10, 20),
+            Self::DryerOven => (20, 10),
             Self::OvenExitConveyor => (7, 1),
             Self::Flaker => (3, 3),
             Self::SuctionPipe => (1, 1),
@@ -988,11 +1003,17 @@ impl FactorySim {
         if let Some(reason) = self.modern_line_readiness_reason() {
             self.tick_legacy_line(dt_sim, dt_hours);
             if self.modern_line_present() {
-                self.build_status = format!("Ligne de production non operationnelle: {reason}");
+                self.build_status.clear();
+                let _ = write!(
+                    &mut self.build_status,
+                    "Ligne de production non operationnelle: {reason}"
+                );
             }
         } else {
             self.tick_modern_line(dt_sim);
-            self.build_status = format!(
+            self.build_status.clear();
+            let _ = write!(
+                &mut self.build_status,
                 "Ligne complete active | sacs bleus={} sacs rouges={} boxes bleues={}",
                 self.line.sacs_bleus_total,
                 self.line.sacs_rouges_total,
@@ -1310,6 +1331,144 @@ impl FactorySim {
         (self.line.red_bag_fill as f32 / SAC_CAPACITY_UNITS as f32).clamp(0.0, 1.0)
     }
 
+    pub fn modern_line_ready(&self) -> bool {
+        for kind in MODERN_LINE_REQUIRED_KINDS {
+            if self.first_block_by_kind(kind).is_none() {
+                return false;
+            }
+        }
+
+        let mut frontier = self.block_indices_of_kind(BlockKind::InputHopper);
+        if frontier.is_empty() {
+            return false;
+        }
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
+            BlockKind::FluidityTank,
+            &[BlockKind::Conveyor],
+        );
+        if frontier.is_empty() {
+            return false;
+        }
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
+            BlockKind::Cutter,
+            &[BlockKind::Conveyor],
+        );
+        if frontier.is_empty() {
+            return false;
+        }
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
+            BlockKind::DistributorBelt,
+            &[BlockKind::Conveyor],
+        );
+        if frontier.is_empty() {
+            return false;
+        }
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::DryerOven, &[]);
+        if frontier.is_empty() {
+            return false;
+        }
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::OvenExitConveyor, &[]);
+        if frontier.is_empty() {
+            return false;
+        }
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::Flaker, &[]);
+        if frontier.is_empty() {
+            return false;
+        }
+        let sortex_frontier = self.reachable_targets_from_starts(
+            &frontier,
+            BlockKind::Sortex,
+            &[BlockKind::SuctionPipe],
+        );
+        if sortex_frontier.is_empty() {
+            return false;
+        }
+        if self
+            .reachable_targets_from_starts(
+                &sortex_frontier,
+                BlockKind::BlueBagChute,
+                &[BlockKind::SuctionPipe],
+            )
+            .is_empty()
+        {
+            return false;
+        }
+        if self
+            .reachable_targets_from_starts(
+                &sortex_frontier,
+                BlockKind::RedBagChute,
+                &[BlockKind::SuctionPipe],
+            )
+            .is_empty()
+        {
+            return false;
+        }
+        true
+    }
+
+    pub fn modern_lavage_busy(&self) -> bool {
+        self.line.lavage_busy
+    }
+
+    pub fn modern_coupe_busy(&self) -> bool {
+        self.line.coupe_busy
+    }
+
+    pub fn modern_four_busy(&self) -> bool {
+        self.line.four_busy
+    }
+
+    pub fn modern_floc_busy(&self) -> bool {
+        self.line.floc_busy
+    }
+
+    pub fn modern_sortex_busy(&self) -> bool {
+        self.line.sortex_busy
+    }
+
+    pub fn modern_lavage_progress_ratio(&self) -> f32 {
+        if !self.line.lavage_busy {
+            0.0
+        } else {
+            (self.line.lavage_progress_s / MODERN_CYCLE_LAVAGE_S).clamp(0.0, 1.0) as f32
+        }
+    }
+
+    pub fn modern_coupe_progress_ratio(&self) -> f32 {
+        if !self.line.coupe_busy {
+            0.0
+        } else {
+            (self.line.coupe_progress_s / MODERN_CYCLE_COUPE_S).clamp(0.0, 1.0) as f32
+        }
+    }
+
+    pub fn modern_four_progress_ratio(&self) -> f32 {
+        if !self.line.four_busy {
+            0.0
+        } else {
+            (self.line.four_progress_s / MODERN_CYCLE_FOUR_S).clamp(0.0, 1.0) as f32
+        }
+    }
+
+    pub fn modern_floc_progress_ratio(&self) -> f32 {
+        if !self.line.floc_busy {
+            0.0
+        } else {
+            (self.line.floc_progress_s / MODERN_CYCLE_FLOC_S).clamp(0.0, 1.0) as f32
+        }
+    }
+
+    pub fn modern_sortex_progress_ratio(&self) -> f32 {
+        if !self.line.sortex_busy {
+            0.0
+        } else {
+            (self.line.sortex_progress_s / MODERN_CYCLE_SORTEX_S).clamp(0.0, 1.0) as f32
+        }
+    }
+
     pub fn block_kind_at_tile(&self, tile: (i32, i32)) -> Option<BlockKind> {
         self.block_at_tile(tile).map(|block| block.kind)
     }
@@ -1354,6 +1513,7 @@ impl FactorySim {
                         self.block_brush,
                         tile,
                         valid_footprint,
+                        orientation,
                     );
                     (true, message, connects_to_line)
                 } else {
@@ -1373,59 +1533,138 @@ impl FactorySim {
         })
     }
 
+    pub fn valider_pose_bloc_script(
+        &self,
+        world: &crate::World,
+        kind: BlockKind,
+        tile: (i32, i32),
+        orientation: BlockOrientation,
+    ) -> Result<(i32, i32), String> {
+        if !kind.is_player_buyable() {
+            return Err("Bloc non achetable par le joueur".to_string());
+        }
+        self.can_place_block_at(world, kind, tile, orientation, None)
+    }
+
+    pub fn poser_bloc_script(
+        &mut self,
+        world: &crate::World,
+        kind: BlockKind,
+        tile: (i32, i32),
+        orientation: BlockOrientation,
+        facturer_capex: bool,
+    ) -> Result<BlockId, String> {
+        let footprint = self.valider_pose_bloc_script(world, kind, tile, orientation)?;
+        let capex = kind.capex();
+        if facturer_capex && self.economy.cash < capex {
+            return Err(format!(
+                "Tresorerie insuffisante: {} EUR requis",
+                format_int_fr(capex.round() as i64)
+            ));
+        }
+
+        let id = self.next_block_id;
+        self.next_block_id = self.next_block_id.saturating_add(1);
+        if facturer_capex && capex > 0.0 {
+            self.economy.spend(capex);
+        }
+
+        let mut block = self.make_block(id, kind, tile, orientation);
+        block.footprint = footprint;
+        self.blocks.push(block);
+
+        let (guidance, connected) = if kind.is_modern_line_component() {
+            self.modern_line_placement_guidance(kind, tile, footprint, orientation)
+        } else {
+            (String::new(), true)
+        };
+        let mut status = format!(
+            "Script pose {} #{} [{} {}x{}]",
+            kind.buyable_label(),
+            id,
+            orientation.label(),
+            footprint.0,
+            footprint.1
+        );
+        if !guidance.is_empty() {
+            if connected {
+                status.push_str(" | ");
+            } else {
+                status.push_str(" | Alerte: ");
+            }
+            status.push_str(&guidance);
+        }
+        self.build_status = status;
+        Ok(id)
+    }
+
     fn next_modern_line_step(&self) -> Option<BlockKind> {
-        if self.first_block_by_kind(BlockKind::InputHopper).is_none() {
+        let mut frontier = self.block_indices_of_kind(BlockKind::InputHopper);
+        if frontier.is_empty() {
             return Some(BlockKind::InputHopper);
         }
-        if !self.kinds_connected_via(
-            BlockKind::InputHopper,
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::FluidityTank,
             &[BlockKind::Conveyor],
-        ) {
+        );
+        if frontier.is_empty() {
             return Some(BlockKind::FluidityTank);
         }
-        if !self.kinds_connected_via(
-            BlockKind::FluidityTank,
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::Cutter,
             &[BlockKind::Conveyor],
-        ) {
+        );
+        if frontier.is_empty() {
             return Some(BlockKind::Cutter);
         }
-        if !self.kinds_connected_via(
-            BlockKind::Cutter,
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::DistributorBelt,
             &[BlockKind::Conveyor],
-        ) {
+        );
+        if frontier.is_empty() {
             return Some(BlockKind::DistributorBelt);
         }
-        if !self.kinds_connected_via(BlockKind::DistributorBelt, BlockKind::DryerOven, &[]) {
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::DryerOven, &[]);
+        if frontier.is_empty() {
             return Some(BlockKind::DryerOven);
         }
-        if !self.kinds_connected_via(BlockKind::DryerOven, BlockKind::OvenExitConveyor, &[]) {
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::OvenExitConveyor, &[]);
+        if frontier.is_empty() {
             return Some(BlockKind::OvenExitConveyor);
         }
-        if !self.kinds_connected_via(BlockKind::OvenExitConveyor, BlockKind::Flaker, &[]) {
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::Flaker, &[]);
+        if frontier.is_empty() {
             return Some(BlockKind::Flaker);
         }
-        if !self.kinds_connected_via(
-            BlockKind::Flaker,
+        let sortex_frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::Sortex,
             &[BlockKind::SuctionPipe],
-        ) {
+        );
+        if sortex_frontier.is_empty() {
             return Some(BlockKind::Sortex);
         }
-        if !self.kinds_connected_via(
-            BlockKind::Sortex,
-            BlockKind::BlueBagChute,
-            &[BlockKind::SuctionPipe],
-        ) {
+        if self
+            .reachable_targets_from_starts(
+                &sortex_frontier,
+                BlockKind::BlueBagChute,
+                &[BlockKind::SuctionPipe],
+            )
+            .is_empty()
+        {
             return Some(BlockKind::BlueBagChute);
         }
-        if !self.kinds_connected_via(
-            BlockKind::Sortex,
-            BlockKind::RedBagChute,
-            &[BlockKind::SuctionPipe],
-        ) {
+        if self
+            .reachable_targets_from_starts(
+                &sortex_frontier,
+                BlockKind::RedBagChute,
+                &[BlockKind::SuctionPipe],
+            )
+            .is_empty()
+        {
             return Some(BlockKind::RedBagChute);
         }
         MODERN_LINE_GUIDE_ORDER
@@ -1436,22 +1675,25 @@ impl FactorySim {
 
     fn modern_line_touching_kinds(
         &self,
+        kind: BlockKind,
         tile: (i32, i32),
         footprint: (i32, i32),
+        orientation: BlockOrientation,
     ) -> Vec<BlockKind> {
-        let expanded_origin = (tile.0 - 1, tile.1 - 1);
-        let expanded_size = (footprint.0 + 2, footprint.1 + 2);
         let mut touched: Vec<BlockKind> = Vec::new();
 
         for block in &self.blocks {
             if !block.kind.is_modern_line_component() {
                 continue;
             }
-            if !Self::tiles_rect_intersect(
-                expanded_origin,
-                expanded_size,
-                block.origin_tile,
-                block.footprint,
+            if !Self::modern_line_blocks_touch(
+                (kind, tile, footprint, orientation),
+                (
+                    block.kind,
+                    block.origin_tile,
+                    block.footprint,
+                    block.orientation,
+                ),
             ) {
                 continue;
             }
@@ -1467,8 +1709,9 @@ impl FactorySim {
         kind: BlockKind,
         tile: (i32, i32),
         footprint: (i32, i32),
+        orientation: BlockOrientation,
     ) -> (String, bool) {
-        let touching = self.modern_line_touching_kinds(tile, footprint);
+        let touching = self.modern_line_touching_kinds(kind, tile, footprint, orientation);
         if !self.modern_line_present() {
             return (
                 if kind == BlockKind::InputHopper {
@@ -1662,7 +1905,12 @@ impl FactorySim {
         };
         let (placement_guidance, placement_connected) =
             if self.block_brush.is_modern_line_component() {
-                self.modern_line_placement_guidance(self.block_brush, tile, footprint)
+                self.modern_line_placement_guidance(
+                    self.block_brush,
+                    tile,
+                    footprint,
+                    self.block_orientation,
+                )
             } else {
                 (String::new(), true)
             };
@@ -1719,40 +1967,24 @@ impl FactorySim {
     }
 
     pub fn block_debug_views(&self) -> Vec<BlockDebugView> {
+        self.block_debug_views_with_options(true)
+    }
+
+    pub fn block_debug_views_minimal(&self) -> Vec<BlockDebugView> {
+        self.block_debug_views_with_options(false)
+    }
+
+    fn block_debug_views_with_options(
+        &self,
+        include_inventory_summary: bool,
+    ) -> Vec<BlockDebugView> {
         self.blocks
             .iter()
             .map(|block| {
-                let inventory_summary = match block.kind {
-                    BlockKind::Buffer => {
-                        let occ = block
-                            .rack_palettes
-                            .iter()
-                            .filter(|occupied| **occupied)
-                            .count();
-                        format!("rack palettes: {occ}/{RACK_NIVEAU_COUNT}")
-                    }
-                    BlockKind::BlueBagChute => format!(
-                        "bleu fill={:.0}% sacs={} boxes={}",
-                        self.descente_bleue_fill_ratio() * 100.0,
-                        self.line.sacs_bleus_total,
-                        self.line.boxes_bleues_total
-                    ),
-                    BlockKind::RedBagChute => format!(
-                        "rouge fill={:.0}% sacs={}",
-                        self.descente_rouge_fill_ratio() * 100.0,
-                        self.line.sacs_rouges_total
-                    ),
-                    BlockKind::Sortex => format!(
-                        "tri flakes={} bleu={} rouge={}",
-                        self.line.flakes, self.line.sacs_bleus_total, self.line.sacs_rouges_total
-                    ),
-                    _ => format!(
-                        "mat:{} enc:{} fini:{} rebut:{}",
-                        block.inventory.total_of(ItemKind::Raw),
-                        block.inventory.total_of(ItemKind::Wip),
-                        block.inventory.total_of(ItemKind::Finished),
-                        block.inventory.total_of(ItemKind::Scrap)
-                    ),
+                let inventory_summary = if include_inventory_summary {
+                    self.block_inventory_summary(block)
+                } else {
+                    String::new()
                 };
                 BlockDebugView {
                     raw_qty: block.inventory.total_of(ItemKind::Raw),
@@ -1766,6 +1998,41 @@ impl FactorySim {
                 }
             })
             .collect()
+    }
+
+    fn block_inventory_summary(&self, block: &BlockInstance) -> String {
+        match block.kind {
+            BlockKind::Buffer => {
+                let occ = block
+                    .rack_palettes
+                    .iter()
+                    .filter(|occupied| **occupied)
+                    .count();
+                format!("rack palettes: {occ}/{RACK_NIVEAU_COUNT}")
+            }
+            BlockKind::BlueBagChute => format!(
+                "bleu fill={:.0}% sacs={} boxes={}",
+                self.descente_bleue_fill_ratio() * 100.0,
+                self.line.sacs_bleus_total,
+                self.line.boxes_bleues_total
+            ),
+            BlockKind::RedBagChute => format!(
+                "rouge fill={:.0}% sacs={}",
+                self.descente_rouge_fill_ratio() * 100.0,
+                self.line.sacs_rouges_total
+            ),
+            BlockKind::Sortex => format!(
+                "tri flakes={} bleu={} rouge={}",
+                self.line.flakes, self.line.sacs_bleus_total, self.line.sacs_rouges_total
+            ),
+            _ => format!(
+                "mat:{} enc:{} fini:{} rebut:{}",
+                block.inventory.total_of(ItemKind::Raw),
+                block.inventory.total_of(ItemKind::Wip),
+                block.inventory.total_of(ItemKind::Finished),
+                block.inventory.total_of(ItemKind::Scrap)
+            ),
+        }
     }
 
     pub fn agent_debug_views(&self) -> Vec<AgentDebugView> {
@@ -1817,6 +2084,10 @@ impl FactorySim {
 
     pub fn status_line(&self) -> &str {
         &self.build_status
+    }
+
+    pub fn set_status_line(&mut self, status: impl Into<String>) {
+        self.build_status = status.into();
     }
 
     fn apply_zone_rect_click(&mut self, tile: (i32, i32), right_click: bool) {
@@ -1963,6 +2234,136 @@ impl FactorySim {
         a_min_x <= b_max_x && a_max_x >= b_min_x && a_min_y <= b_max_y && a_max_y >= b_min_y
     }
 
+    fn tiles_rect_touch_cardinal(
+        a_origin: (i32, i32),
+        a_size: (i32, i32),
+        b_origin: (i32, i32),
+        b_size: (i32, i32),
+    ) -> bool {
+        let a_min_x = a_origin.0;
+        let a_min_y = a_origin.1;
+        let a_max_x = a_origin.0 + a_size.0 - 1;
+        let a_max_y = a_origin.1 + a_size.1 - 1;
+        let b_min_x = b_origin.0;
+        let b_min_y = b_origin.1;
+        let b_max_x = b_origin.0 + b_size.0 - 1;
+        let b_max_y = b_origin.1 + b_size.1 - 1;
+
+        let gap_x = if a_max_x < b_min_x {
+            b_min_x - a_max_x
+        } else if b_max_x < a_min_x {
+            a_min_x - b_max_x
+        } else {
+            0
+        };
+        let gap_y = if a_max_y < b_min_y {
+            b_min_y - a_max_y
+        } else if b_max_y < a_min_y {
+            a_min_y - b_max_y
+        } else {
+            0
+        };
+
+        (gap_x <= 1 && gap_y == 0) || (gap_y <= 1 && gap_x == 0)
+    }
+
+    fn spans_overlap(a_min: i32, a_max: i32, b_min: i32, b_max: i32) -> bool {
+        a_min <= b_max && a_max >= b_min
+    }
+
+    fn touching_side(
+        origin: (i32, i32),
+        size: (i32, i32),
+        other_origin: (i32, i32),
+        other_size: (i32, i32),
+    ) -> Option<BlockOrientation> {
+        let min_x = origin.0;
+        let min_y = origin.1;
+        let max_x = origin.0 + size.0 - 1;
+        let max_y = origin.1 + size.1 - 1;
+        let o_min_x = other_origin.0;
+        let o_min_y = other_origin.1;
+        let o_max_x = other_origin.0 + other_size.0 - 1;
+        let o_max_y = other_origin.1 + other_size.1 - 1;
+
+        if o_min_x == max_x + 1 && Self::spans_overlap(min_y, max_y, o_min_y, o_max_y) {
+            return Some(BlockOrientation::East);
+        }
+        if o_max_x + 1 == min_x && Self::spans_overlap(min_y, max_y, o_min_y, o_max_y) {
+            return Some(BlockOrientation::West);
+        }
+        if o_min_y == max_y + 1 && Self::spans_overlap(min_x, max_x, o_min_x, o_max_x) {
+            return Some(BlockOrientation::South);
+        }
+        if o_max_y + 1 == min_y && Self::spans_overlap(min_x, max_x, o_min_x, o_max_x) {
+            return Some(BlockOrientation::North);
+        }
+
+        None
+    }
+
+    fn modern_side_allows_output(
+        kind: BlockKind,
+        orientation: BlockOrientation,
+        side: BlockOrientation,
+    ) -> bool {
+        match kind {
+            // Start of line: only one outlet extremity.
+            BlockKind::InputHopper => side == orientation,
+            // Linear blocks push along orientation.
+            BlockKind::Conveyor
+            | BlockKind::DistributorBelt
+            | BlockKind::DryerOven
+            | BlockKind::OvenExitConveyor => side == orientation,
+            // Chutes are terminal sinks.
+            BlockKind::BlueBagChute | BlockKind::RedBagChute => false,
+            _ => true,
+        }
+    }
+
+    fn modern_side_allows_input(
+        kind: BlockKind,
+        orientation: BlockOrientation,
+        side: BlockOrientation,
+    ) -> bool {
+        match kind {
+            // Hopper is a source, not an inbound target.
+            BlockKind::InputHopper => false,
+            // Linear blocks accept from opposite extremity.
+            BlockKind::Conveyor
+            | BlockKind::DistributorBelt
+            | BlockKind::DryerOven
+            | BlockKind::OvenExitConveyor => side == orientation.opposite(),
+            _ => true,
+        }
+    }
+
+    fn modern_line_flow_from_to(
+        a: (BlockKind, (i32, i32), (i32, i32), BlockOrientation),
+        b: (BlockKind, (i32, i32), (i32, i32), BlockOrientation),
+    ) -> bool {
+        let (a_kind, a_origin, a_size, a_orientation) = a;
+        let (b_kind, b_origin, b_size, b_orientation) = b;
+        if !Self::tiles_rect_touch_cardinal(a_origin, a_size, b_origin, b_size) {
+            return false;
+        }
+
+        let Some(a_side_to_b) = Self::touching_side(a_origin, a_size, b_origin, b_size) else {
+            return false;
+        };
+        let b_side_to_a = a_side_to_b.opposite();
+
+        Self::modern_side_allows_output(a_kind, a_orientation, a_side_to_b)
+            && Self::modern_side_allows_input(b_kind, b_orientation, b_side_to_a)
+    }
+
+    fn modern_line_blocks_touch(
+        a: (BlockKind, (i32, i32), (i32, i32), BlockOrientation),
+        b: (BlockKind, (i32, i32), (i32, i32), BlockOrientation),
+    ) -> bool {
+        Self::modern_line_flow_from_to(a, b) || Self::modern_line_flow_from_to(b, a)
+    }
+
     fn can_place_block_at(
         &self,
         world: &crate::World,
@@ -2053,9 +2454,10 @@ impl FactorySim {
     }
 
     fn block_footprints_touch(a: &BlockInstance, b: &BlockInstance) -> bool {
-        let expanded_origin = (a.origin_tile.0 - 1, a.origin_tile.1 - 1);
-        let expanded_size = (a.footprint.0 + 2, a.footprint.1 + 2);
-        Self::tiles_rect_intersect(expanded_origin, expanded_size, b.origin_tile, b.footprint)
+        Self::modern_line_flow_from_to(
+            (a.kind, a.origin_tile, a.footprint, a.orientation),
+            (b.kind, b.origin_tile, b.footprint, b.orientation),
+        )
     }
 
     fn block_indices_of_kind(&self, kind: BlockKind) -> Vec<usize> {
@@ -2066,28 +2468,30 @@ impl FactorySim {
             .collect()
     }
 
-    fn kinds_connected_via(
+    fn reachable_targets_from_starts(
         &self,
-        from_kind: BlockKind,
-        to_kind: BlockKind,
+        starts: &[usize],
+        target_kind: BlockKind,
         allowed_middle: &[BlockKind],
-    ) -> bool {
-        let starts = self.block_indices_of_kind(from_kind);
-        if starts.is_empty() || self.block_indices_of_kind(to_kind).is_empty() {
-            return false;
+    ) -> Vec<usize> {
+        if starts.is_empty() || !self.blocks.iter().any(|block| block.kind == target_kind) {
+            return Vec::new();
         }
 
+        let mut is_start = vec![false; self.blocks.len()];
         let mut visited = vec![false; self.blocks.len()];
         let mut queue = std::collections::VecDeque::new();
-        for idx in starts {
+        for &idx in starts {
+            if idx >= self.blocks.len() {
+                continue;
+            }
+            is_start[idx] = true;
             visited[idx] = true;
             queue.push_back(idx);
         }
+        let mut targets = Vec::new();
 
         while let Some(idx) = queue.pop_front() {
-            if self.blocks[idx].kind == to_kind {
-                return true;
-            }
             for (n, seen) in visited.iter_mut().enumerate() {
                 if *seen {
                     continue;
@@ -2096,14 +2500,19 @@ impl FactorySim {
                     continue;
                 }
                 let nk = self.blocks[n].kind;
-                if nk == to_kind || nk == from_kind || allowed_middle.contains(&nk) {
-                    *seen = true;
-                    queue.push_back(n);
+                let traversable = nk == target_kind || is_start[n] || allowed_middle.contains(&nk);
+                if !traversable {
+                    continue;
+                }
+                *seen = true;
+                queue.push_back(n);
+                if nk == target_kind {
+                    targets.push(n);
                 }
             }
         }
 
-        false
+        targets
     }
 
     fn modern_line_present(&self) -> bool {
@@ -2119,61 +2528,81 @@ impl FactorySim {
             }
         }
 
-        if !self.kinds_connected_via(
-            BlockKind::InputHopper,
+        let mut frontier = self.block_indices_of_kind(BlockKind::InputHopper);
+        if frontier.is_empty() {
+            return Some(format!(
+                "Bloc manquant: {}",
+                BlockKind::InputHopper.buyable_label()
+            ));
+        }
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::FluidityTank,
             &[BlockKind::Conveyor],
-        ) {
+        );
+        if frontier.is_empty() {
             return Some(
                 "Connexion invalide: Entree ligne -> Bac fluidite (via convoyeur)".to_string(),
             );
         }
-        if !self.kinds_connected_via(
-            BlockKind::FluidityTank,
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::Cutter,
             &[BlockKind::Conveyor],
-        ) {
+        );
+        if frontier.is_empty() {
             return Some(
                 "Connexion invalide: Bac fluidite -> Coupeuse (via convoyeur)".to_string(),
             );
         }
-        if !self.kinds_connected_via(
-            BlockKind::Cutter,
+        frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::DistributorBelt,
             &[BlockKind::Conveyor],
-        ) {
+        );
+        if frontier.is_empty() {
             return Some("Connexion invalide: Coupeuse -> Tapis repartiteur".to_string());
         }
-        if !self.kinds_connected_via(BlockKind::DistributorBelt, BlockKind::DryerOven, &[]) {
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::DryerOven, &[]);
+        if frontier.is_empty() {
             return Some(
                 "Connexion invalide: Tapis repartiteur -> Four deshydratation".to_string(),
             );
         }
-        if !self.kinds_connected_via(BlockKind::DryerOven, BlockKind::OvenExitConveyor, &[]) {
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::OvenExitConveyor, &[]);
+        if frontier.is_empty() {
             return Some("Connexion invalide: Four -> Tapis sortie four".to_string());
         }
-        if !self.kinds_connected_via(BlockKind::OvenExitConveyor, BlockKind::Flaker, &[]) {
+        frontier = self.reachable_targets_from_starts(&frontier, BlockKind::Flaker, &[]);
+        if frontier.is_empty() {
             return Some("Connexion invalide: Tapis sortie four -> Floconneuse".to_string());
         }
-        if !self.kinds_connected_via(
-            BlockKind::Flaker,
+        let sortex_frontier = self.reachable_targets_from_starts(
+            &frontier,
             BlockKind::Sortex,
             &[BlockKind::SuctionPipe],
-        ) {
+        );
+        if sortex_frontier.is_empty() {
             return Some("Connexion invalide: Floconneuse -> Sortex (via tuyaux)".to_string());
         }
-        if !self.kinds_connected_via(
-            BlockKind::Sortex,
-            BlockKind::BlueBagChute,
-            &[BlockKind::SuctionPipe],
-        ) {
+        if self
+            .reachable_targets_from_starts(
+                &sortex_frontier,
+                BlockKind::BlueBagChute,
+                &[BlockKind::SuctionPipe],
+            )
+            .is_empty()
+        {
             return Some("Connexion invalide: Sortex -> Descente sac bleu".to_string());
         }
-        if !self.kinds_connected_via(
-            BlockKind::Sortex,
-            BlockKind::RedBagChute,
-            &[BlockKind::SuctionPipe],
-        ) {
+        if self
+            .reachable_targets_from_starts(
+                &sortex_frontier,
+                BlockKind::RedBagChute,
+                &[BlockKind::SuctionPipe],
+            )
+            .is_empty()
+        {
             return Some("Connexion invalide: Sortex -> Descente sac rouge".to_string());
         }
         None
@@ -2251,12 +2680,6 @@ impl FactorySim {
         self.line.descente_bleue_beacon_s = (self.line.descente_bleue_beacon_s - dt_sim).max(0.0);
         self.line.descente_rouge_beacon_s = (self.line.descente_rouge_beacon_s - dt_sim).max(0.0);
 
-        let cycle_lavage = 16.0;
-        let cycle_coupe = 11.0;
-        let cycle_four = 42.0;
-        let cycle_floc = 14.0;
-        let cycle_sortex = 9.0;
-
         if !self.line.lavage_busy && self.line.raw > 0 {
             self.line.raw -= 1;
             self.line.lavage_busy = true;
@@ -2264,7 +2687,7 @@ impl FactorySim {
         }
         if self.line.lavage_busy {
             self.line.lavage_progress_s += dt_sim;
-            if self.line.lavage_progress_s >= cycle_lavage {
+            if self.line.lavage_progress_s >= MODERN_CYCLE_LAVAGE_S {
                 self.line.lavage_busy = false;
                 self.line.lavage_progress_s = 0.0;
                 self.line.washed = self.line.washed.saturating_add(1);
@@ -2282,7 +2705,7 @@ impl FactorySim {
         }
         if self.line.coupe_busy {
             self.line.coupe_progress_s += dt_sim;
-            if self.line.coupe_progress_s >= cycle_coupe {
+            if self.line.coupe_progress_s >= MODERN_CYCLE_COUPE_S {
                 self.line.coupe_busy = false;
                 self.line.coupe_progress_s = 0.0;
                 self.line.sliced = self.line.sliced.saturating_add(1);
@@ -2297,7 +2720,7 @@ impl FactorySim {
         }
         if self.line.four_busy {
             self.line.four_progress_s += dt_sim;
-            if self.line.four_progress_s >= cycle_four {
+            if self.line.four_progress_s >= MODERN_CYCLE_FOUR_S {
                 self.line.four_busy = false;
                 self.line.four_progress_s = 0.0;
                 self.line.dehydrated = self.line.dehydrated.saturating_add(1);
@@ -2314,7 +2737,7 @@ impl FactorySim {
         }
         if self.line.floc_busy {
             self.line.floc_progress_s += dt_sim;
-            if self.line.floc_progress_s >= cycle_floc {
+            if self.line.floc_progress_s >= MODERN_CYCLE_FLOC_S {
                 self.line.floc_busy = false;
                 self.line.floc_progress_s = 0.0;
                 self.line.flakes = self.line.flakes.saturating_add(1);
@@ -2328,7 +2751,7 @@ impl FactorySim {
         }
         if self.line.sortex_busy {
             self.line.sortex_progress_s += dt_sim;
-            if self.line.sortex_progress_s >= cycle_sortex {
+            if self.line.sortex_progress_s >= MODERN_CYCLE_SORTEX_S {
                 self.line.sortex_busy = false;
                 self.line.sortex_progress_s = 0.0;
                 let split_seed = self.line.sacs_bleus_total
@@ -2570,7 +2993,10 @@ impl FactorySim {
             job.kind == kind
                 && matches!(
                     job.state,
-                    JobState::Pending | JobState::Claimed | JobState::InProgress
+                    JobState::Pending
+                        | JobState::Claimed
+                        | JobState::InProgress
+                        | JobState::Blocked(_)
                 )
         });
         if exists {
@@ -2605,7 +3031,10 @@ impl FactorySim {
                     self.agent.current_job = None;
                     self.agent.job_progress_s = 0.0;
                     self.release_reservations(job_id);
-                    self.agent.decision_debug = "tache terminee".to_string();
+                    if self.agent.decision_debug != "tache terminee" {
+                        self.agent.decision_debug.clear();
+                        self.agent.decision_debug.push_str("tache terminee");
+                    }
                 }
                 return;
             }
@@ -2617,7 +3046,7 @@ impl FactorySim {
             .jobs
             .iter()
             .enumerate()
-            .filter(|(_, job)| matches!(job.state, JobState::Pending))
+            .filter(|(_, job)| matches!(job.state, JobState::Pending | JobState::Blocked(_)))
             .max_by_key(|(_, job)| job.priority)
             .map(|(idx, _)| idx)
         {
@@ -2639,11 +3068,26 @@ impl FactorySim {
                     self.jobs[job_idx].score_debug
                 );
             } else {
-                self.jobs[job_idx].state = JobState::Blocked("conflit reservation".to_string());
-                self.agent.decision_debug = "bloque: conflit reservation".to_string();
+                if !matches!(
+                    self.jobs[job_idx].state,
+                    JobState::Blocked(ref reason) if reason == "conflit reservation"
+                ) {
+                    self.jobs[job_idx].state = JobState::Blocked("conflit reservation".to_string());
+                }
+                if self.agent.decision_debug != "bloque: conflit reservation" {
+                    self.agent.decision_debug.clear();
+                    self.agent
+                        .decision_debug
+                        .push_str("bloque: conflit reservation");
+                }
             }
         } else {
-            self.agent.decision_debug = "inactif(aucune tache en attente)".to_string();
+            if self.agent.decision_debug != "inactif(aucune tache en attente)" {
+                self.agent.decision_debug.clear();
+                self.agent
+                    .decision_debug
+                    .push_str("inactif(aucune tache en attente)");
+            }
             self.agent.fatigue = (self.agent.fatigue - dt_sim / 3600.0).clamp(0.0, 100.0);
             self.agent.stress = (self.agent.stress - dt_sim / 3600.0 * 0.8).clamp(0.0, 100.0);
         }
@@ -2991,6 +3435,110 @@ mod tests {
     }
 
     #[test]
+    fn minimal_block_debug_views_keep_structure_without_inventory_strings() {
+        let sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let full = sim.block_debug_views();
+        let minimal = sim.block_debug_views_minimal();
+
+        assert_eq!(full.len(), minimal.len());
+        for (lhs, rhs) in full.iter().zip(minimal.iter()) {
+            assert_eq!(lhs.id, rhs.id);
+            assert_eq!(lhs.kind, rhs.kind);
+            assert_eq!(lhs.tile, rhs.tile);
+            assert_eq!(lhs.footprint, rhs.footprint);
+            assert_eq!(lhs.orientation, rhs.orientation);
+            assert_eq!(lhs.raw_qty, rhs.raw_qty);
+            assert_eq!(lhs.rack_levels, rhs.rack_levels);
+            assert!(rhs.inventory_summary.is_empty());
+        }
+    }
+
+    #[test]
+    fn refresh_jobs_does_not_duplicate_existing_blocked_kind() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        sim.jobs.clear();
+
+        let storage_id = sim
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockKind::Storage)
+            .expect("storage block should exist")
+            .id;
+        let machine_a_id = sim
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockKind::MachineA)
+            .expect("machine A block should exist")
+            .id;
+        let blocked_kind = JobKind::Haul {
+            from_block: storage_id,
+            to_block: machine_a_id,
+            item_kind: ItemKind::Raw,
+            qty: 1,
+        };
+        sim.jobs.push(Job {
+            id: 9000,
+            kind: blocked_kind.clone(),
+            state: JobState::Blocked("conflit reservation".to_string()),
+            priority: 50,
+            score_debug: String::new(),
+            assigned_agent: None,
+        });
+        sim.line.raw = 24;
+
+        for _ in 0..20 {
+            sim.refresh_jobs();
+        }
+
+        let same_kind = sim
+            .jobs
+            .iter()
+            .filter(|job| job.kind == blocked_kind)
+            .count();
+        assert_eq!(
+            same_kind, 1,
+            "refresh_jobs should not append duplicates for an already blocked kind"
+        );
+    }
+
+    #[test]
+    fn tick_agent_retries_blocked_job_when_reservations_are_available() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        sim.jobs.clear();
+        sim.reservations.clear();
+
+        let machine_a_id = sim
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockKind::MachineA)
+            .expect("machine A block should exist")
+            .id;
+        let blocked_job_id = 77;
+        sim.jobs.push(Job {
+            id: blocked_job_id,
+            kind: JobKind::OperateMachine {
+                block_id: machine_a_id,
+            },
+            state: JobState::Blocked("conflit reservation".to_string()),
+            priority: 60,
+            score_debug: String::new(),
+            assigned_agent: None,
+        });
+
+        sim.agent.current_job = None;
+        sim.agent.job_progress_s = 0.0;
+        sim.tick_agent(1.0 / 60.0);
+
+        assert_eq!(sim.agent.current_job, Some(blocked_job_id));
+        let job = sim
+            .jobs
+            .iter()
+            .find(|j| j.id == blocked_job_id)
+            .expect("blocked test job should still exist");
+        assert!(matches!(job.state, JobState::Claimed));
+    }
+
+    #[test]
     fn default_layout_flow_is_coherent_with_zones() {
         let sim = FactorySim::new(StarterSimConfig::default(), 168, 108);
         let views = sim.block_debug_views();
@@ -3083,8 +3631,16 @@ mod tests {
     fn dryer_oven_footprint_rotates_with_orientation() {
         let horizontal = BlockKind::DryerOven.footprint_for_orientation(BlockOrientation::East);
         let vertical = BlockKind::DryerOven.footprint_for_orientation(BlockOrientation::South);
-        assert_eq!(horizontal, (10, 20));
-        assert_eq!(vertical, (20, 10));
+        assert_eq!(horizontal, (20, 10));
+        assert_eq!(vertical, (10, 20));
+    }
+
+    #[test]
+    fn input_hopper_footprint_rotates_with_orientation() {
+        let horizontal = BlockKind::InputHopper.footprint_for_orientation(BlockOrientation::East);
+        let vertical = BlockKind::InputHopper.footprint_for_orientation(BlockOrientation::South);
+        assert_eq!(horizontal, (8, 3));
+        assert_eq!(vertical, (3, 8));
     }
 
     #[test]
@@ -3164,7 +3720,7 @@ mod tests {
 
         sim.set_block_brush(BlockKind::FluidityTank);
         sim.set_block_orientation(BlockOrientation::East);
-        let Some(preview) = sim.build_block_preview(&world, (13, 21)) else {
+        let Some(preview) = sim.build_block_preview(&world, (18, 20)) else {
             panic!("preview should exist");
         };
 
@@ -3236,14 +3792,14 @@ mod tests {
             &mut sim,
             &mut world,
             BlockKind::Conveyor,
-            (13, 23),
+            (18, 22),
             BlockOrientation::East,
         );
         place(
             &mut sim,
             &mut world,
             BlockKind::FluidityTank,
-            (14, 21),
+            (19, 20),
             BlockOrientation::East,
         );
 
@@ -3251,6 +3807,143 @@ mod tests {
             sim.next_modern_line_step(),
             Some(BlockKind::Cutter),
             "apres raccord flux, la suivante etape doit etre la coupeuse"
+        );
+    }
+
+    #[test]
+    fn modern_line_rejects_side_connection_from_input_hopper() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 120, 90);
+        let mut world = crate::World::new_room(120, 90);
+        sim.toggle_build_mode();
+
+        for tile in sim.block_debug_views().into_iter().map(|b| b.tile) {
+            sim.apply_build_click(&mut world, tile, true);
+        }
+
+        let mut place = |kind: BlockKind, tile: (i32, i32)| {
+            let before = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            sim.set_block_brush(kind);
+            sim.set_block_orientation(BlockOrientation::East);
+            sim.apply_build_click(&mut world, tile, false);
+            let after = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            assert!(
+                after > before,
+                "placement failed for {:?} at {:?}: {}",
+                kind,
+                tile,
+                sim.status_line()
+            );
+        };
+
+        place(BlockKind::InputHopper, (10, 20));
+        place(BlockKind::Conveyor, (13, 23));
+        place(BlockKind::FluidityTank, (14, 23));
+
+        assert_eq!(
+            sim.next_modern_line_step(),
+            Some(BlockKind::FluidityTank),
+            "connexion laterale de l'entree ligne ne doit pas valider le flux vers le bac"
+        );
+    }
+
+    #[test]
+    fn modern_line_rejects_reverse_conveyor_direction_after_input_hopper() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 120, 90);
+        let mut world = crate::World::new_room(120, 90);
+        sim.toggle_build_mode();
+
+        for tile in sim.block_debug_views().into_iter().map(|b| b.tile) {
+            sim.apply_build_click(&mut world, tile, true);
+        }
+
+        let mut place = |kind: BlockKind, tile: (i32, i32), orientation: BlockOrientation| {
+            let before = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            sim.set_block_brush(kind);
+            sim.set_block_orientation(orientation);
+            sim.apply_build_click(&mut world, tile, false);
+            let after = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            assert!(
+                after > before,
+                "placement failed for {:?} at {:?}: {}",
+                kind,
+                tile,
+                sim.status_line()
+            );
+        };
+
+        place(BlockKind::InputHopper, (10, 20), BlockOrientation::East);
+        place(BlockKind::Conveyor, (18, 22), BlockOrientation::West);
+        place(BlockKind::FluidityTank, (19, 20), BlockOrientation::East);
+
+        assert_eq!(
+            sim.next_modern_line_step(),
+            Some(BlockKind::FluidityTank),
+            "convoyeur inverse apres entree ligne ne doit pas valider la connexion vers le bac"
+        );
+    }
+
+    #[test]
+    fn modern_line_rejects_side_connection_from_dryer_oven() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 140, 100);
+        let mut world = crate::World::new_room(140, 100);
+        sim.toggle_build_mode();
+
+        for tile in sim.block_debug_views().into_iter().map(|b| b.tile) {
+            sim.apply_build_click(&mut world, tile, true);
+        }
+
+        let mut place = |kind: BlockKind, tile: (i32, i32)| {
+            let before = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            sim.set_block_brush(kind);
+            sim.set_block_orientation(BlockOrientation::East);
+            sim.apply_build_click(&mut world, tile, false);
+            let after = sim
+                .block_debug_views()
+                .into_iter()
+                .filter(|b| b.kind == kind)
+                .count();
+            assert!(
+                after > before,
+                "placement failed for {:?} at {:?}: {}",
+                kind,
+                tile,
+                sim.status_line()
+            );
+        };
+
+        place(BlockKind::InputHopper, (10, 20));
+        place(BlockKind::Conveyor, (18, 22));
+        place(BlockKind::FluidityTank, (19, 20));
+        place(BlockKind::Conveyor, (24, 22));
+        place(BlockKind::Cutter, (25, 21));
+        place(BlockKind::DistributorBelt, (28, 22));
+        place(BlockKind::DryerOven, (35, 17));
+        place(BlockKind::OvenExitConveyor, (40, 27));
+
+        assert_eq!(
+            sim.next_modern_line_step(),
+            Some(BlockKind::OvenExitConveyor),
+            "connexion laterale du four ne doit pas valider le tapis sortie four"
         );
     }
 
@@ -3298,21 +3991,21 @@ mod tests {
         };
 
         place(BlockKind::InputHopper, (10, 20), BlockOrientation::East);
-        place(BlockKind::Conveyor, (13, 23), BlockOrientation::East);
-        place(BlockKind::FluidityTank, (14, 21), BlockOrientation::East);
+        place(BlockKind::Conveyor, (18, 22), BlockOrientation::East);
+        place(BlockKind::FluidityTank, (19, 20), BlockOrientation::East);
         place(BlockKind::Cutter, (70, 50), BlockOrientation::East);
         place(BlockKind::DistributorBelt, (73, 51), BlockOrientation::East);
         place(BlockKind::DryerOven, (80, 42), BlockOrientation::East);
         place(
             BlockKind::OvenExitConveyor,
-            (90, 51),
+            (100, 51),
             BlockOrientation::East,
         );
-        place(BlockKind::Flaker, (97, 50), BlockOrientation::East);
-        place(BlockKind::SuctionPipe, (100, 51), BlockOrientation::East);
-        place(BlockKind::Sortex, (101, 49), BlockOrientation::East);
-        place(BlockKind::BlueBagChute, (105, 49), BlockOrientation::East);
-        place(BlockKind::RedBagChute, (105, 52), BlockOrientation::East);
+        place(BlockKind::Flaker, (107, 50), BlockOrientation::East);
+        place(BlockKind::SuctionPipe, (110, 51), BlockOrientation::East);
+        place(BlockKind::Sortex, (111, 49), BlockOrientation::East);
+        place(BlockKind::BlueBagChute, (115, 49), BlockOrientation::East);
+        place(BlockKind::RedBagChute, (115, 52), BlockOrientation::East);
 
         sim.step(1.0 / 60.0);
 
@@ -3337,23 +4030,23 @@ mod tests {
         };
 
         place(BlockKind::InputHopper, (10, 20), BlockOrientation::East);
-        place(BlockKind::Conveyor, (13, 23), BlockOrientation::East);
-        place(BlockKind::FluidityTank, (14, 21), BlockOrientation::East);
-        place(BlockKind::Conveyor, (19, 23), BlockOrientation::East);
-        place(BlockKind::Cutter, (20, 22), BlockOrientation::East);
-        place(BlockKind::DistributorBelt, (23, 23), BlockOrientation::East);
-        place(BlockKind::DryerOven, (30, 14), BlockOrientation::East);
+        place(BlockKind::Conveyor, (18, 22), BlockOrientation::East);
+        place(BlockKind::FluidityTank, (19, 20), BlockOrientation::East);
+        place(BlockKind::Conveyor, (24, 22), BlockOrientation::East);
+        place(BlockKind::Cutter, (25, 21), BlockOrientation::East);
+        place(BlockKind::DistributorBelt, (28, 22), BlockOrientation::East);
+        place(BlockKind::DryerOven, (35, 17), BlockOrientation::East);
         place(
             BlockKind::OvenExitConveyor,
-            (40, 23),
+            (55, 22),
             BlockOrientation::East,
         );
-        place(BlockKind::Flaker, (47, 22), BlockOrientation::East);
-        place(BlockKind::SuctionPipe, (50, 23), BlockOrientation::East);
-        place(BlockKind::SuctionPipe, (51, 23), BlockOrientation::East);
-        place(BlockKind::Sortex, (52, 21), BlockOrientation::East);
-        place(BlockKind::BlueBagChute, (56, 21), BlockOrientation::East);
-        place(BlockKind::RedBagChute, (56, 24), BlockOrientation::East);
+        place(BlockKind::Flaker, (62, 21), BlockOrientation::East);
+        place(BlockKind::SuctionPipe, (65, 22), BlockOrientation::East);
+        place(BlockKind::SuctionPipe, (66, 22), BlockOrientation::East);
+        place(BlockKind::Sortex, (67, 20), BlockOrientation::East);
+        place(BlockKind::BlueBagChute, (71, 20), BlockOrientation::East);
+        place(BlockKind::RedBagChute, (71, 23), BlockOrientation::East);
 
         for _ in 0..1000 {
             sim.step(1.0 / 60.0);
@@ -3362,5 +4055,180 @@ mod tests {
         assert!(!sim.status_line().contains("non operationnelle"));
         assert!(sim.line.produced_wip_total > 0);
         assert!(sim.line.sacs_bleus_total + sim.line.sacs_rouges_total > 0);
+    }
+
+    #[test]
+    fn modern_line_ready_rejects_pairwise_connected_but_disjoint_chain() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 220, 220);
+        let world = crate::World::new_room(220, 220);
+        sim.blocks.clear();
+
+        let mut place = |kind: BlockKind, tile: (i32, i32)| {
+            sim.poser_bloc_script(&world, kind, tile, BlockOrientation::East, false)
+                .unwrap_or_else(|err| {
+                    panic!("placement failed for {:?} at {:?}: {err}", kind, tile)
+                });
+        };
+
+        // Segment A: Input -> Fluidity.
+        place(BlockKind::InputHopper, (20, 20));
+        place(BlockKind::Conveyor, (28, 22));
+        place(BlockKind::FluidityTank, (29, 20));
+
+        // Segment B: Fluidity -> Cutter (different fluidity tank).
+        place(BlockKind::FluidityTank, (20, 60));
+        place(BlockKind::Conveyor, (25, 62));
+        place(BlockKind::Cutter, (26, 61));
+
+        // Segment C: Cutter -> Distributor (different cutter).
+        place(BlockKind::Cutter, (20, 100));
+        place(BlockKind::Conveyor, (23, 101));
+        place(BlockKind::DistributorBelt, (24, 101));
+
+        // Segment D: Distributor -> Dryer (different distributor).
+        place(BlockKind::DistributorBelt, (60, 100));
+        place(BlockKind::DryerOven, (67, 91));
+
+        // Segment E: Dryer -> Oven exit (different dryer).
+        place(BlockKind::DryerOven, (100, 90));
+        place(BlockKind::OvenExitConveyor, (110, 100));
+
+        // Segment F: Oven exit -> Flaker (different oven exit).
+        place(BlockKind::OvenExitConveyor, (140, 100));
+        place(BlockKind::Flaker, (147, 99));
+
+        // Segment G: Flaker -> Sortex via suction (different flaker).
+        place(BlockKind::Flaker, (170, 100));
+        place(BlockKind::SuctionPipe, (173, 101));
+        place(BlockKind::Sortex, (174, 99));
+
+        // Segment H: Sortex -> blue/red chutes via suction (different sortex).
+        place(BlockKind::Sortex, (170, 140));
+        place(BlockKind::SuctionPipe, (174, 141));
+        place(BlockKind::SuctionPipe, (174, 142));
+        place(BlockKind::BlueBagChute, (175, 140));
+        place(BlockKind::RedBagChute, (175, 143));
+
+        assert!(
+            !sim.modern_line_ready(),
+            "line should be rejected: pairwise links exist but no coherent end-to-end chain"
+        );
+    }
+
+    #[test]
+    fn modern_line_rejects_diagonal_only_link_between_stages() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 120, 90);
+        let world = crate::World::new_room(120, 90);
+        sim.blocks.clear();
+
+        let mut place = |kind: BlockKind, tile: (i32, i32)| {
+            sim.poser_bloc_script(&world, kind, tile, BlockOrientation::East, false)
+                .unwrap_or_else(|err| {
+                    panic!("placement failed for {:?} at {:?}: {err}", kind, tile)
+                });
+        };
+
+        // Input -> conveyor is cardinally adjacent.
+        place(BlockKind::InputHopper, (10, 20));
+        place(BlockKind::Conveyor, (18, 22));
+        // Conveyor -> tank is only corner-to-corner (diagonal), should not validate.
+        place(BlockKind::FluidityTank, (19, 23));
+        place(BlockKind::Conveyor, (24, 25));
+        place(BlockKind::Cutter, (25, 24));
+        place(BlockKind::DistributorBelt, (28, 25));
+        place(BlockKind::DryerOven, (35, 16));
+        place(BlockKind::OvenExitConveyor, (55, 25));
+        place(BlockKind::Flaker, (62, 24));
+        place(BlockKind::SuctionPipe, (65, 25));
+        place(BlockKind::SuctionPipe, (66, 25));
+        place(BlockKind::Sortex, (67, 23));
+        place(BlockKind::BlueBagChute, (71, 23));
+        place(BlockKind::RedBagChute, (71, 26));
+
+        assert!(
+            !sim.modern_line_ready(),
+            "line should be rejected when one stage only connects diagonally"
+        );
+    }
+
+    #[test]
+    fn build_preview_does_not_mark_diagonal_only_connection_as_linked() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 120, 90);
+        let world = crate::World::new_room(120, 90);
+        sim.blocks.clear();
+        sim.toggle_build_mode();
+
+        sim.poser_bloc_script(
+            &world,
+            BlockKind::InputHopper,
+            (10, 20),
+            BlockOrientation::East,
+            false,
+        )
+        .expect("input should be placeable");
+        sim.poser_bloc_script(
+            &world,
+            BlockKind::Conveyor,
+            (18, 22),
+            BlockOrientation::East,
+            false,
+        )
+        .expect("conveyor should be placeable");
+
+        sim.set_block_brush(BlockKind::FluidityTank);
+        sim.set_block_orientation(BlockOrientation::East);
+        let preview = sim
+            .build_block_preview(&world, (19, 23))
+            .expect("preview should exist in build mode");
+        assert!(preview.can_place, "placement should still be valid");
+        assert!(
+            !preview.connects_to_line,
+            "diagonal-only candidate should not be considered connected"
+        );
+    }
+
+    #[test]
+    fn scripted_block_placement_works_without_build_mode() {
+        let cfg = StarterSimConfig::default();
+        let mut sim = FactorySim::new(cfg, 60, 40);
+        let world = crate::World::new_room(60, 40);
+        assert!(!sim.build_mode_enabled());
+
+        let id = sim
+            .poser_bloc_script(
+                &world,
+                BlockKind::InputHopper,
+                (24, 24),
+                BlockOrientation::East,
+                false,
+            )
+            .expect("scripted placement should succeed");
+        assert!(id > 0);
+        assert_eq!(
+            sim.block_kind_at_tile((24, 24)),
+            Some(BlockKind::InputHopper),
+            "block should be present at requested origin"
+        );
+    }
+
+    #[test]
+    fn scripted_validation_rejects_overlap() {
+        let cfg = StarterSimConfig::default();
+        let mut sim = FactorySim::new(cfg, 60, 40);
+        let world = crate::World::new_room(60, 40);
+
+        sim.poser_bloc_script(
+            &world,
+            BlockKind::FluidityTank,
+            (24, 24),
+            BlockOrientation::East,
+            false,
+        )
+        .expect("initial scripted placement should succeed");
+
+        let err = sim
+            .valider_pose_bloc_script(&world, BlockKind::Cutter, (26, 26), BlockOrientation::East)
+            .expect_err("overlap should be rejected");
+        assert!(err.contains("occupee"), "unexpected error: {err}");
     }
 }
