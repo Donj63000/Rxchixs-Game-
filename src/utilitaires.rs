@@ -255,6 +255,7 @@ fn add_prop_if_walkable_unique(
         tile_y: tile.1,
         kind,
         phase: prop_phase_for_tile(tile),
+        rotation_quarter: 0,
     });
 }
 
@@ -574,6 +575,7 @@ pub(crate) fn tile_in_bounds(tile: (i32, i32), bounds: (i32, i32, i32, i32)) -> 
     tile.0 >= bounds.0 && tile.0 <= bounds.1 && tile.1 >= bounds.2 && tile.1 <= bounds.3
 }
 
+#[allow(dead_code)]
 pub(crate) fn draw_ui_button(
     rect: Rect,
     label: &str,

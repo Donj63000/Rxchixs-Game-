@@ -331,10 +331,12 @@ fn set_pause_status(state: &mut GameState, message: impl Into<String>) {
 
 fn snapshot_map_from_state(state: &GameState) -> MapAsset {
     MapAsset {
+        schema_version: MAP_SCHEMA_VERSION,
         version: MAP_FILE_VERSION,
         label: "Partie en cours".to_string(),
         world: state.world.clone(),
         props: state.props.clone(),
+        zones: Vec::new(),
         player_spawn: tile_from_world_clamped(&state.world, state.player.pos),
         npc_spawn: tile_from_world_clamped(&state.world, state.npc.pos),
     }
@@ -2169,6 +2171,43 @@ fn gesture_from_social(gesture: crate::interactions::SocialGesture) -> Character
     }
 }
 
+fn capture_editor_runtime_frame(editor: &mut EditorState) -> EditorRuntimeFrame {
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    let left_pressed = is_mouse_button_pressed(MouseButton::Left);
+    let left_down = is_mouse_button_down(MouseButton::Left);
+    let left_released = is_mouse_button_released(MouseButton::Left);
+    let right_pressed = is_mouse_button_pressed(MouseButton::Right);
+    let middle_down = is_mouse_button_down(MouseButton::Middle);
+    let ctrl_down = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+    let shift_down = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+    let alt_down = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
+    let space_down = is_key_down(KeyCode::Space);
+    let wheel = normalize_wheel_units(mouse_wheel().1);
+
+    let _ = compute_editor_panel_widths(screen_width(), 10.0);
+    let layout = ui_editor::editor_compute_layout(&editor.ui);
+    ui_editor::editor_ui_handle_splits(&mut editor.ui, &layout, mouse);
+    let map_view_rect = layout.map_view;
+    let mouse_over_map = point_in_rect(mouse, map_view_rect);
+
+    EditorRuntimeFrame {
+        mouse,
+        left_pressed,
+        left_down,
+        left_released,
+        right_pressed,
+        middle_down,
+        ctrl_down,
+        shift_down,
+        alt_down,
+        space_down,
+        wheel,
+        layout,
+        map_view_rect,
+        mouse_over_map,
+    }
+}
+
 pub(crate) fn run_editor_frame(
     editor: &mut EditorState,
     map: &mut MapAsset,
@@ -2179,39 +2218,36 @@ pub(crate) fn run_editor_frame(
     if editor.status_timer > 0.0 {
         editor.status_timer = (editor.status_timer - get_frame_time()).max(0.0);
     }
+    editor.validation_refresh_timer = (editor.validation_refresh_timer - get_frame_time()).max(0.0);
+    if editor.validation_refresh_timer <= f32::EPSILON {
+        editor.validation_issues = validate_map_asset(map);
+        editor.validation_refresh_timer = if editor.ui.right_tab == EditorRightTab::Validation {
+            0.2
+        } else {
+            0.6
+        };
+    }
+    if editor.ui.layout_entries.is_empty() {
+        refresh_editor_layouts(editor);
+    }
 
     let frame_dt = get_frame_time().min(0.05);
-    let mouse = vec2(mouse_position().0, mouse_position().1);
-    let left_pressed = is_mouse_button_pressed(MouseButton::Left);
-    let left_down = is_mouse_button_down(MouseButton::Left);
-    let left_released = is_mouse_button_released(MouseButton::Left);
-    let middle_down = is_mouse_button_down(MouseButton::Middle);
-    let ctrl_down = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
-    let space_down = is_key_down(KeyCode::Space);
+    if editor.ui.dirty {
+        editor.autosave_timer += frame_dt;
+        if editor.autosave_timer >= EDITOR_AUTOSAVE_INTERVAL_S {
+            editor.autosave_timer = 0.0;
+            if let Err(err) = editor_autosave_map(editor, map, EDITOR_AUTOSAVE_PATH) {
+                editor_set_status(editor, format!("Autosave editeur echoue: {err}"));
+            }
+        }
+    } else {
+        editor.autosave_timer = 0.0;
+    }
 
-    let sw = screen_width();
-    let sh = screen_height();
-    let margin = 10.0;
-    let top_bar_h = 64.0;
-    let panel_top = margin + top_bar_h + margin;
-    let panel_h = (sh - panel_top - margin).max(1.0);
-    let (left_panel_w, right_panel_w, map_w) = compute_editor_panel_widths(sw, margin);
-
-    let top_bar_rect = Rect::new(margin, margin, (sw - margin * 2.0).max(1.0), top_bar_h);
-    let left_panel_rect = Rect::new(margin, panel_top, left_panel_w, panel_h);
-    let map_slot_rect = Rect::new(
-        left_panel_rect.x + left_panel_rect.w + margin,
-        panel_top,
-        map_w,
-        panel_h,
-    );
-    let right_panel_rect = Rect::new(
-        map_slot_rect.x + map_slot_rect.w + margin,
-        panel_top,
-        right_panel_w,
-        panel_h,
-    );
-    let map_view_rect = map_slot_rect;
+    let frame = capture_editor_runtime_frame(editor);
+    let mouse = frame.mouse;
+    let map_view_rect = frame.map_view_rect;
+    let layout = frame.layout;
 
     if !editor.camera_initialized {
         editor.camera_center = tile_center(map.player_spawn);
@@ -2219,10 +2255,8 @@ pub(crate) fn run_editor_frame(
         editor.camera_initialized = true;
     }
 
-    let mouse_over_map = point_in_rect(mouse, map_view_rect);
-    let wheel = mouse_wheel().1;
-    if mouse_over_map && wheel.abs() > f32::EPSILON {
-        let zoom_factor = (1.0 + wheel * EDITOR_CAMERA_ZOOM_STEP).max(0.2);
+    if frame.mouse_over_map && frame.wheel.abs() > f32::EPSILON {
+        let zoom_factor = (1.0 + frame.wheel * EDITOR_CAMERA_ZOOM_STEP).max(0.2);
         editor.camera_zoom = (editor.camera_zoom * zoom_factor)
             .clamp(EDITOR_CAMERA_ZOOM_MIN, EDITOR_CAMERA_ZOOM_MAX);
     }
@@ -2238,12 +2272,12 @@ pub(crate) fn run_editor_frame(
         editor.camera_center = tile_center(map.player_spawn);
     }
 
-    let pan_input = read_editor_pan_input(space_down);
+    let pan_input = read_editor_pan_input(frame.space_down);
     if pan_input.length_squared() > 0.0 {
         let pan_speed = EDITOR_CAMERA_PAN_SPEED / editor.camera_zoom.max(0.01);
         editor.camera_center += pan_input * pan_speed * frame_dt;
     }
-    if middle_down && mouse_over_map {
+    if frame.middle_down && frame.mouse_over_map {
         let delta = mouse_delta_position();
         editor.camera_center -= delta / editor.camera_zoom.max(0.01);
     }
@@ -2263,7 +2297,7 @@ pub(crate) fn run_editor_frame(
         map.world.w as f32 * TILE_SIZE,
         map.world.h as f32 * TILE_SIZE,
     );
-    let world_mouse = if mouse_over_map {
+    let world_mouse = if frame.mouse_over_map {
         let mut pos = world_camera.screen_to_world(mouse);
         pos.x = pos.x.clamp(0.0, (world_size_px.x - 0.001).max(0.0));
         pos.y = pos.y.clamp(0.0, (world_size_px.y - 0.001).max(0.0));
@@ -2274,168 +2308,194 @@ pub(crate) fn run_editor_frame(
     editor.hover_tile = world_mouse.map(|pos| tile_from_world_clamped(&map.world, pos));
     let visible_bounds = tile_bounds_from_camera(&map.world, &world_camera, map_view_rect, 2);
 
-    if is_key_pressed(KeyCode::Key1) {
-        editor.brush = EditorBrush::Floor;
-    }
-    if is_key_pressed(KeyCode::Key2) {
-        editor.brush = EditorBrush::FloorMetal;
-    }
-    if is_key_pressed(KeyCode::Key3) {
-        editor.brush = EditorBrush::FloorWood;
-    }
-    if is_key_pressed(KeyCode::Key4) {
-        editor.brush = EditorBrush::FloorMoss;
-    }
-    if is_key_pressed(KeyCode::Key5) {
-        editor.brush = EditorBrush::FloorSand;
-    }
-    if is_key_pressed(KeyCode::Key6) {
-        editor.brush = EditorBrush::Wall;
-    }
-    if is_key_pressed(KeyCode::Key7) {
-        editor.brush = EditorBrush::WallBrick;
-    }
-    if is_key_pressed(KeyCode::Key8) {
-        editor.brush = EditorBrush::WallSteel;
-    }
-    if is_key_pressed(KeyCode::Key9) {
-        editor.brush = EditorBrush::WallNeon;
-    }
-    if is_key_pressed(KeyCode::Key0) {
-        editor.brush = EditorBrush::Crate;
-    }
-    if !space_down && is_key_pressed(KeyCode::Q) {
-        editor.brush = EditorBrush::Pipe;
-    }
-    if !space_down && is_key_pressed(KeyCode::W) {
-        editor.brush = EditorBrush::Lamp;
-    }
-    if is_key_pressed(KeyCode::E) {
-        editor.brush = EditorBrush::Banner;
-    }
-    if is_key_pressed(KeyCode::T) {
-        editor.brush = EditorBrush::Plant;
-    }
-    if is_key_pressed(KeyCode::Y) {
-        editor.brush = EditorBrush::Bench;
-    }
-    if is_key_pressed(KeyCode::U) {
-        editor.brush = EditorBrush::Crystal;
-    }
-    if is_key_pressed(KeyCode::X) {
-        editor.brush = EditorBrush::EraseProp;
-    }
-    if is_key_pressed(KeyCode::B) {
-        editor.tool = EditorTool::Brush;
-    }
-    if is_key_pressed(KeyCode::R) {
-        editor.tool = EditorTool::Rect;
-    }
-    if is_key_pressed(KeyCode::G) {
-        editor.show_grid = !editor.show_grid;
+    if frame.ctrl_down && is_key_pressed(KeyCode::F) {
+        editor.ui.left_tab = EditorLeftTab::Placer;
+        editor.ui.search_focused = true;
+        editor.ui.save_as_focused = false;
     }
 
-    if ctrl_down && is_key_pressed(KeyCode::Z) {
+    let text_field_focus = editor.ui.search_focused || editor.ui.save_as_focused;
+    if !text_field_focus {
+        if is_key_pressed(KeyCode::Key1) {
+            editor.brush = EditorBrush::Floor;
+        }
+        if is_key_pressed(KeyCode::Key2) {
+            editor.brush = EditorBrush::FloorMetal;
+        }
+        if is_key_pressed(KeyCode::Key3) {
+            editor.brush = EditorBrush::FloorWood;
+        }
+        if is_key_pressed(KeyCode::Key4) {
+            editor.brush = EditorBrush::FloorMoss;
+        }
+        if is_key_pressed(KeyCode::Key5) {
+            editor.brush = EditorBrush::FloorSand;
+        }
+        if is_key_pressed(KeyCode::Key6) {
+            editor.brush = EditorBrush::Wall;
+        }
+        if is_key_pressed(KeyCode::Key7) {
+            editor.brush = EditorBrush::WallBrick;
+        }
+        if is_key_pressed(KeyCode::Key8) {
+            editor.brush = EditorBrush::WallSteel;
+        }
+        if is_key_pressed(KeyCode::Key9) {
+            editor.brush = EditorBrush::WallNeon;
+        }
+        if is_key_pressed(KeyCode::Key0) {
+            editor.brush = EditorBrush::Crate;
+        }
+        if !frame.space_down && is_key_pressed(KeyCode::Q) {
+            editor.brush = EditorBrush::Pipe;
+        }
+        if !frame.space_down && is_key_pressed(KeyCode::W) {
+            editor.brush = EditorBrush::Lamp;
+        }
+        if is_key_pressed(KeyCode::E) {
+            editor.brush = EditorBrush::Banner;
+        }
+        if is_key_pressed(KeyCode::T) {
+            editor.brush = EditorBrush::Plant;
+        }
+        if is_key_pressed(KeyCode::Y) {
+            editor.brush = EditorBrush::Bench;
+        }
+        if is_key_pressed(KeyCode::U) {
+            editor.brush = EditorBrush::Crystal;
+        }
+        if is_key_pressed(KeyCode::X) {
+            editor.brush = EditorBrush::EraseProp;
+        }
+
+        if is_key_pressed(KeyCode::S) && !frame.ctrl_down {
+            editor.tool = EditorTool::Select;
+        }
+        if is_key_pressed(KeyCode::B) {
+            editor.tool = EditorTool::Brush;
+        }
+        if is_key_pressed(KeyCode::R) {
+            editor.tool = EditorTool::Rect;
+        }
+        if is_key_pressed(KeyCode::L) {
+            editor.tool = EditorTool::Line;
+        }
+        if is_key_pressed(KeyCode::F) && !frame.ctrl_down {
+            editor.tool = EditorTool::Fill;
+        }
+
+        if is_key_pressed(KeyCode::G) {
+            editor.show_grid = !editor.show_grid;
+        }
+    }
+
+    if frame.ctrl_down && is_key_pressed(KeyCode::Z) {
         let _ = editor_undo(editor, map);
     }
-    if ctrl_down && is_key_pressed(KeyCode::Y) {
+    if frame.ctrl_down && is_key_pressed(KeyCode::Y) {
         let _ = editor_redo(editor, map);
     }
-    if ctrl_down && is_key_pressed(KeyCode::S) {
+    if frame.ctrl_down && is_key_pressed(KeyCode::S) {
         editor_save_current_map(editor, map);
     }
-    if ctrl_down && is_key_pressed(KeyCode::L) {
+    if frame.ctrl_down && is_key_pressed(KeyCode::L) {
         editor_load_current_map(editor, map);
+        refresh_editor_layouts(editor);
+    }
+    if frame.ctrl_down
+        && is_key_pressed(KeyCode::C)
+        && let Some(clip) = capture_selection_clipboard(editor, map)
+    {
+        editor.clipboard = Some(clip);
+        editor_set_status(editor, "Selection copiee");
+    }
+    if frame.ctrl_down && is_key_pressed(KeyCode::V) && editor.clipboard.is_some() {
+        editor.tool = EditorTool::Paste;
     }
 
     if is_key_pressed(KeyCode::P)
         && let Some(tile) = editor.hover_tile
     {
-        match editor_set_player_spawn(editor, map, tile) {
-            Ok(()) => {
-                editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1))
-            }
-            Err(reason) => editor_set_status(editor, format!("Point joueur invalide: {reason}")),
-        }
+        let _ = editor_set_player_spawn(editor, map, tile);
     }
     if is_key_pressed(KeyCode::N)
         && let Some(tile) = editor.hover_tile
     {
-        match editor_set_npc_spawn(editor, map, tile) {
-            Ok(()) => editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1)),
-            Err(reason) => editor_set_status(editor, format!("Point PNJ invalide: {reason}")),
-        }
+        let _ = editor_set_npc_spawn(editor, map, tile);
+    }
+
+    if frame.alt_down
+        && frame.left_pressed
+        && frame.mouse_over_map
+        && let Some(tile) = editor.hover_tile
+        && let Some(brush) = eyedropper_pick_brush(map, tile)
+    {
+        editor.brush = brush;
+        editor.tool = EditorTool::Brush;
+        editor_set_status(editor, format!("Pipette: {}", editor_brush_label(brush)));
     }
 
     let over_ui = editor_ui_columns_hit_test(
         mouse,
-        top_bar_rect,
-        left_panel_rect,
-        right_panel_rect,
-        panel_top,
-        sh,
-    );
-    let can_edit_map = mouse_over_map && !over_ui;
+        layout.top_bar,
+        layout.left_panel,
+        layout.right_panel,
+        layout.left_panel.y,
+        screen_height(),
+    ) || point_in_rect(mouse, layout.bottom_bar)
+        || point_in_rect(mouse, layout.split_left_bar)
+        || point_in_rect(mouse, layout.split_right_bar);
+    if frame.right_pressed
+        && frame.mouse_over_map
+        && !over_ui
+        && !editor.ui.show_unsaved_modal
+        && let Some(tile) = editor.hover_tile
+    {
+        editor.selected_tile = Some(tile);
+        editor.selection_rect = None;
+        editor.selected_prop = prop_index_at_tile(&map.props, tile);
+        editor.ui.context_menu = Some(EditorContextMenu {
+            anchor_screen: mouse,
+            tile,
+        });
+    }
 
-    if editor.tool == EditorTool::Brush {
-        if left_pressed && can_edit_map && editor.hover_tile.is_some() {
-            editor_push_undo(editor, map);
-            editor.stroke_active = true;
-            editor.stroke_changed = false;
-        }
-        if editor.stroke_active
-            && left_down
-            && let Some(tile) = editor.hover_tile
-            && editor_apply_brush(map, editor.brush, tile)
-        {
-            editor.stroke_changed = true;
-            editor.redo_stack.clear();
-        }
-        if left_released {
-            if editor.stroke_active {
-                if !editor.stroke_changed {
-                    let _ = editor.undo_stack.pop();
-                } else {
-                    sanitize_map_asset(map);
-                }
-            }
-            editor.stroke_active = false;
-            editor.stroke_changed = false;
-        }
-    } else {
-        if left_pressed && can_edit_map {
-            editor.drag_start = editor.hover_tile;
-        }
-        if left_released {
-            if let Some(start) = editor.drag_start {
-                let end = editor.hover_tile.unwrap_or(start);
-                let before = editor.undo_stack.len();
-                editor_push_undo(editor, map);
-                let changed = editor_apply_brush_rect(map, editor.brush, start, end);
-                if changed {
-                    editor.redo_stack.clear();
-                    sanitize_map_asset(map);
-                } else {
-                    editor.undo_stack.truncate(before);
-                }
-            }
-            editor.drag_start = None;
-        }
+    let can_edit_map = frame.mouse_over_map
+        && !over_ui
+        && !editor.ui.show_unsaved_modal
+        && editor.ui.context_menu.is_none();
+    let editing_zones = editor.ui.left_tab == EditorLeftTab::Zones;
+    let map_changed = apply_editor_tool(
+        editor,
+        map,
+        EditorToolInput {
+            can_edit_map,
+            left_pressed: frame.left_pressed,
+            left_down: frame.left_down,
+            left_released: frame.left_released,
+            right_pressed: frame.right_pressed && editor.ui.context_menu.is_none(),
+            shift_down: frame.shift_down,
+            hover_tile: editor.hover_tile,
+            editing_zones,
+        },
+    );
+    if map_changed {
+        sanitize_map_asset(map);
+        editor.ui.dirty = true;
+        editor.validation_refresh_timer = 0.0;
     }
 
     clear_background(palette.bg_bottom);
     draw_background(palette, time);
-
     draw_rectangle(
-        map_slot_rect.x,
-        map_slot_rect.y,
-        map_slot_rect.w,
-        map_slot_rect.h,
+        map_view_rect.x,
+        map_view_rect.y,
+        map_view_rect.w,
+        map_view_rect.h,
         Color::from_rgba(8, 12, 18, 150),
     );
 
     set_camera(&world_camera);
-
     draw_floor_layer_region(&map.world, palette, visible_bounds);
     draw_exterior_ground_ambiance_region(&map.world, palette, time, visible_bounds);
     draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
@@ -2445,10 +2505,30 @@ pub(crate) fn run_editor_frame(
     draw_props_region(&map.props, palette, time, visible_bounds);
     draw_lighting_region(&map.props, palette, time, visible_bounds);
 
+    for zone in &map.zones {
+        let color = match zone.kind {
+            ZoneKind::Logistique => Color::from_rgba(84, 154, 220, 62),
+            ZoneKind::Propre => Color::from_rgba(104, 206, 146, 62),
+            ZoneKind::Froide => Color::from_rgba(96, 214, 240, 62),
+            ZoneKind::Production => Color::from_rgba(220, 146, 94, 62),
+            ZoneKind::Stockage => Color::from_rgba(206, 180, 88, 62),
+        };
+        for &(x, y) in &zone.tiles {
+            if x < visible_bounds.0
+                || x > visible_bounds.1
+                || y < visible_bounds.2
+                || y > visible_bounds.3
+            {
+                continue;
+            }
+            let r = World::tile_rect(x, y);
+            draw_rectangle(r.x + 2.0, r.y + 2.0, r.w - 4.0, r.h - 4.0, color);
+        }
+    }
+
     if editor.show_grid {
         draw_editor_grid_region(visible_bounds);
     }
-
     if let Some(tile) = editor.hover_tile {
         let rect = World::tile_rect(tile.0, tile.1);
         draw_rectangle_lines(
@@ -2460,15 +2540,19 @@ pub(crate) fn run_editor_frame(
             Color::from_rgba(255, 212, 120, 240),
         );
     }
-
-    if editor.tool == EditorTool::Rect
-        && let Some(start) = editor.drag_start
-    {
-        let end = editor.hover_tile.unwrap_or(start);
-        let min_x = start.0.min(end.0);
-        let max_x = start.0.max(end.0);
-        let min_y = start.1.min(end.1);
-        let max_y = start.1.max(end.1);
+    if let Some(tile) = editor.selected_tile {
+        let rect = World::tile_rect(tile.0, tile.1);
+        draw_rectangle_lines(
+            rect.x + 2.5,
+            rect.y + 2.5,
+            rect.w - 5.0,
+            rect.h - 5.0,
+            2.6,
+            Color::from_rgba(126, 226, 166, 240),
+        );
+    }
+    if let Some((a, b)) = editor.selection_rect {
+        let ((min_x, min_y), (max_x, max_y)) = rect_bounds(a, b);
         let rect = Rect::new(
             min_x as f32 * TILE_SIZE + 1.5,
             min_y as f32 * TILE_SIZE + 1.5,
@@ -2480,8 +2564,65 @@ pub(crate) fn run_editor_frame(
             rect.y,
             rect.w,
             rect.h,
-            2.4,
-            Color::from_rgba(90, 240, 210, 235),
+            2.1,
+            Color::from_rgba(136, 230, 184, 210),
+        );
+    }
+
+    if matches!(
+        editor.tool,
+        EditorTool::Rect | EditorTool::Line | EditorTool::Select
+    ) && let Some(start) = editor.drag_start
+    {
+        let end = editor.hover_tile.unwrap_or(start);
+        if editor.tool == EditorTool::Line {
+            for tile in line_tiles(start, end) {
+                let r = World::tile_rect(tile.0, tile.1);
+                draw_rectangle_lines(
+                    r.x + 3.0,
+                    r.y + 3.0,
+                    r.w - 6.0,
+                    r.h - 6.0,
+                    1.7,
+                    Color::from_rgba(90, 240, 210, 228),
+                );
+            }
+        } else {
+            let ((min_x, min_y), (max_x, max_y)) = rect_bounds(start, end);
+            let rect = Rect::new(
+                min_x as f32 * TILE_SIZE + 1.5,
+                min_y as f32 * TILE_SIZE + 1.5,
+                (max_x - min_x + 1) as f32 * TILE_SIZE - 3.0,
+                (max_y - min_y + 1) as f32 * TILE_SIZE - 3.0,
+            );
+            draw_rectangle_lines(
+                rect.x,
+                rect.y,
+                rect.w,
+                rect.h,
+                2.4,
+                Color::from_rgba(90, 240, 210, 235),
+            );
+        }
+    }
+
+    if editor.tool == EditorTool::Paste
+        && let Some(clip) = &editor.clipboard
+        && let Some(anchor) = editor.hover_tile
+    {
+        let rect = Rect::new(
+            anchor.0 as f32 * TILE_SIZE + 1.0,
+            anchor.1 as f32 * TILE_SIZE + 1.0,
+            clip.width as f32 * TILE_SIZE - 2.0,
+            clip.height as f32 * TILE_SIZE - 2.0,
+        );
+        draw_rectangle_lines(
+            rect.x,
+            rect.y,
+            rect.w.max(1.0),
+            rect.h.max(1.0),
+            2.0,
+            Color::from_rgba(226, 180, 106, 230),
         );
     }
 
@@ -2525,15 +2666,6 @@ pub(crate) fn run_editor_frame(
     );
 
     begin_ui_pass();
-
-    draw_rectangle_lines(
-        map_slot_rect.x + 0.5,
-        map_slot_rect.y + 0.5,
-        map_slot_rect.w - 1.0,
-        map_slot_rect.h - 1.0,
-        1.8,
-        Color::from_rgba(90, 126, 149, 170),
-    );
     draw_rectangle_lines(
         map_view_rect.x + 0.5,
         map_view_rect.y + 0.5,
@@ -2542,427 +2674,55 @@ pub(crate) fn run_editor_frame(
         2.2,
         Color::from_rgba(170, 213, 237, 220),
     );
+    draw_rectangle(
+        layout.split_left_bar.x,
+        layout.split_left_bar.y,
+        layout.split_left_bar.w,
+        layout.split_left_bar.h,
+        Color::from_rgba(18, 30, 42, 186),
+    );
+    draw_rectangle(
+        layout.split_right_bar.x,
+        layout.split_right_bar.y,
+        layout.split_right_bar.w,
+        layout.split_right_bar.h,
+        Color::from_rgba(18, 30, 42, 186),
+    );
 
     draw_ambient_dust(palette, time);
     draw_vignette(palette);
-    let top_bar_bg = Color::from_rgba(10, 18, 26, 228);
-    let panel_bg = Color::from_rgba(9, 15, 22, 222);
-
-    draw_rectangle(
-        top_bar_rect.x,
-        top_bar_rect.y,
-        top_bar_rect.w,
-        top_bar_rect.h,
-        top_bar_bg,
+    let dirty_before_ui = editor.ui.dirty;
+    let ui_result = ui_editor::draw_editor_ui(
+        editor,
+        map,
+        &layout,
+        palette,
+        mouse,
+        frame.left_pressed,
+        frame.wheel,
     );
-    draw_rectangle_lines(
-        top_bar_rect.x + 0.5,
-        top_bar_rect.y + 0.5,
-        top_bar_rect.w - 1.0,
-        top_bar_rect.h - 1.0,
-        1.8,
-        Color::from_rgba(92, 133, 162, 238),
-    );
-    draw_ui_text_tinted_on(
-        top_bar_bg,
-        Color::from_rgba(230, 242, 250, 255),
-        "EDITEUR USINE",
-        top_bar_rect.x + 16.0,
-        top_bar_rect.y + 26.0,
-        30.0,
-    );
-    draw_ui_text_tinted_on(
-        top_bar_bg,
-        Color::from_rgba(176, 206, 223, 255),
-        &format!(
-            "{} | {}x{} | objets {}",
-            map.label,
-            map.world.w,
-            map.world.h,
-            map.props.len()
-        ),
-        top_bar_rect.x + 16.0,
-        top_bar_rect.y + 48.0,
-        18.0,
-    );
-
-    let top_button_h = 34.0;
-    let top_button_w = 102.0;
-    let top_button_gap = 8.0;
-    let top_button_y = top_bar_rect.y + (top_bar_rect.h - top_button_h) * 0.5;
-    let mut right_cursor = top_bar_rect.x + top_bar_rect.w - 12.0;
-    right_cursor -= top_button_w;
-    let load_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
-    right_cursor -= top_button_gap + top_button_w;
-    let save_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
-    right_cursor -= top_button_gap + top_button_w;
-    let menu_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
-    right_cursor -= top_button_gap + top_button_w;
-    let play_rect = Rect::new(right_cursor, top_button_y, top_button_w, top_button_h);
-
-    let mut action = EditorAction::None;
-    if draw_ui_button(play_rect, "Jouer F5", mouse, left_pressed, false)
-        || is_key_pressed(KeyCode::F5)
-    {
+    if ui_result.map_changed {
         sanitize_map_asset(map);
-        action = EditorAction::StartPlay;
+        editor.ui.dirty = true;
+        editor.validation_refresh_timer = 0.0;
     }
-    if draw_ui_button(menu_rect, "Menu Esc", mouse, left_pressed, false)
-        || is_key_pressed(KeyCode::Escape)
-    {
-        action = EditorAction::BackToMenu;
+    if let Some(tile) = ui_result.center_camera_on {
+        editor.camera_center = tile_center(tile);
     }
-    if draw_ui_button(save_rect, "Sauver", mouse, left_pressed, false) {
-        editor_save_current_map(editor, map);
+    if ui_result.action == EditorAction::StartPlay {
+        sanitize_map_asset(map);
+        editor.ui.dirty = false;
     }
-    if draw_ui_button(load_rect, "Charger", mouse, left_pressed, false) {
-        editor_load_current_map(editor, map);
-    }
-
-    draw_rectangle(
-        left_panel_rect.x,
-        left_panel_rect.y,
-        left_panel_rect.w,
-        left_panel_rect.h,
-        panel_bg,
-    );
-    draw_rectangle_lines(
-        left_panel_rect.x + 0.5,
-        left_panel_rect.y + 0.5,
-        left_panel_rect.w - 1.0,
-        left_panel_rect.h - 1.0,
-        1.8,
-        Color::from_rgba(88, 124, 146, 232),
-    );
-
-    draw_rectangle(
-        right_panel_rect.x,
-        right_panel_rect.y,
-        right_panel_rect.w,
-        right_panel_rect.h,
-        panel_bg,
-    );
-    draw_rectangle_lines(
-        right_panel_rect.x + 0.5,
-        right_panel_rect.y + 0.5,
-        right_panel_rect.w - 1.0,
-        right_panel_rect.h - 1.0,
-        1.8,
-        Color::from_rgba(88, 124, 146, 232),
-    );
-
-    draw_ui_text_tinted_on(
-        panel_bg,
-        Color::from_rgba(214, 232, 244, 255),
-        "BOITE A OUTILS",
-        left_panel_rect.x + 14.0,
-        left_panel_rect.y + 24.0,
-        24.0,
-    );
-
-    let left_pad = 14.0;
-    let left_content_w = left_panel_rect.w - left_pad * 2.0;
-    let undo_w = ((left_content_w - 8.0) * 0.5).max(80.0);
-    let undo_rect = Rect::new(
-        left_panel_rect.x + left_pad,
-        left_panel_rect.y + 34.0,
-        undo_w,
-        30.0,
-    );
-    let redo_rect = Rect::new(
-        undo_rect.x + undo_rect.w + 8.0,
-        left_panel_rect.y + 34.0,
-        undo_w,
-        30.0,
-    );
-    if draw_ui_button_sized(undo_rect, "Annuler", mouse, left_pressed, false, 14.0) {
-        let _ = editor_undo(editor, map);
-    }
-    if draw_ui_button_sized(redo_rect, "Retablir", mouse, left_pressed, false, 14.0) {
-        let _ = editor_redo(editor, map);
-    }
-
-    let tool_label_y = left_panel_rect.y + 86.0;
-    draw_ui_text_tinted_on(
-        panel_bg,
-        Color::from_rgba(190, 216, 231, 255),
-        "Outil",
-        left_panel_rect.x + 14.0,
-        tool_label_y,
-        20.0,
-    );
-    let tool_brush_rect = Rect::new(
-        left_panel_rect.x + left_pad,
-        tool_label_y + 8.0,
-        left_content_w,
-        30.0,
-    );
-    let tool_rect_rect = Rect::new(
-        left_panel_rect.x + left_pad,
-        tool_label_y + 44.0,
-        left_content_w,
-        30.0,
-    );
-    if draw_ui_button_sized(
-        tool_brush_rect,
-        "Pinceau (B)",
-        mouse,
-        left_pressed,
-        editor.tool == EditorTool::Brush,
-        14.0,
-    ) {
-        editor.tool = EditorTool::Brush;
-    }
-    if draw_ui_button_sized(
-        tool_rect_rect,
-        "Rectangle (R)",
-        mouse,
-        left_pressed,
-        editor.tool == EditorTool::Rect,
-        14.0,
-    ) {
-        editor.tool = EditorTool::Rect;
-    }
-
-    let brushes = [
-        (EditorBrush::Floor, "1 Sol"),
-        (EditorBrush::FloorMetal, "2 Sol metal"),
-        (EditorBrush::FloorWood, "3 Sol bois"),
-        (EditorBrush::FloorMoss, "4 Sol mousse"),
-        (EditorBrush::FloorSand, "5 Sol sable"),
-        (EditorBrush::Wall, "6 Mur"),
-        (EditorBrush::WallBrick, "7 Mur brique"),
-        (EditorBrush::WallSteel, "8 Mur acier"),
-        (EditorBrush::WallNeon, "9 Mur neon"),
-        (EditorBrush::Crate, "0 Caisse"),
-        (EditorBrush::Pipe, "Q Tuyau"),
-        (EditorBrush::Lamp, "W Lampe"),
-        (EditorBrush::Banner, "E Banniere"),
-        (EditorBrush::Plant, "T Pot de fleur"),
-        (EditorBrush::Bench, "Y Banc"),
-        (EditorBrush::Crystal, "U Cristal"),
-        (EditorBrush::BoxCartonVide, "Box carton vide"),
-        (EditorBrush::BoxSacBleu, "Box sac bleu"),
-        (EditorBrush::BoxSacRouge, "Box sac rouge"),
-        (EditorBrush::BoxSacVert, "Box sac vert"),
-        (EditorBrush::PaletteLogistique, "Palette logistique"),
-        (EditorBrush::BureauPcOn, "Bureau PC ON"),
-        (EditorBrush::BureauPcOff, "Bureau PC OFF"),
-        (EditorBrush::CaisseAilBrut, "Caisse d'ail brut"),
-        (EditorBrush::CaisseAilCasse, "Caisse d'ail cassé"),
-        (EditorBrush::Lavabo, "Lavabo"),
-        (EditorBrush::EraseProp, "X Effacer"),
-    ];
-
-    let brush_title_y = tool_label_y + 90.0;
-    draw_ui_text_tinted_on(
-        panel_bg,
-        Color::from_rgba(190, 216, 231, 255),
-        "Pinceaux",
-        left_panel_rect.x + 14.0,
-        brush_title_y,
-        20.0,
-    );
-    let brush_columns = if left_panel_rect.w > 250.0 { 2 } else { 1 };
-    let brush_gap = 8.0;
-    let brush_button_w = ((left_content_w - brush_gap * (brush_columns as f32 - 1.0))
-        / brush_columns as f32)
-        .max(78.0);
-    let brush_button_h = 22.0;
-    let brush_step_y = 25.0;
-    for (i, (brush, label)) in brushes.iter().enumerate() {
-        let row = i / brush_columns;
-        let col = i % brush_columns;
-        let rect = Rect::new(
-            left_panel_rect.x + left_pad + col as f32 * (brush_button_w + brush_gap),
-            brush_title_y + 8.0 + row as f32 * brush_step_y,
-            brush_button_w,
-            brush_button_h,
-        );
-        if draw_ui_button_sized(
-            rect,
-            label,
-            mouse,
-            left_pressed,
-            editor.brush == *brush,
-            12.0,
-        ) {
-            editor.brush = *brush;
-        }
-    }
-    let brush_rows = brushes.len().div_ceil(brush_columns);
-    let left_help_y = brush_title_y + 8.0 + brush_rows as f32 * brush_step_y + 10.0;
-
-    let toggle_grid_rect = Rect::new(
-        left_panel_rect.x + left_pad,
-        left_help_y,
-        left_content_w,
-        28.0,
-    );
-    if draw_ui_button_sized(
-        toggle_grid_rect,
-        if editor.show_grid {
-            "Grille: activee (G)"
+    if ui_result.action != EditorAction::None && dirty_before_ui {
+        if let Err(err) = editor_autosave_map(editor, map, EDITOR_AUTOSAVE_PATH) {
+            editor_set_status(editor, format!("Autosave sortie echoue: {err}"));
         } else {
-            "Grille: desactivee (G)"
-        },
-        mouse,
-        left_pressed,
-        editor.show_grid,
-        13.0,
-    ) {
-        editor.show_grid = !editor.show_grid;
-    }
-
-    draw_ui_text_tinted_on(
-        panel_bg,
-        Color::from_rgba(214, 232, 244, 255),
-        "INSPECTEUR",
-        right_panel_rect.x + 14.0,
-        right_panel_rect.y + 24.0,
-        24.0,
-    );
-    let inspector_text = format!(
-        "Actif: {} / {}\nCamera: x={:.0} y={:.0} zoom={:.2}\nViewport tuiles: x[{}..{}] y[{}..{}]\nSpawn joueur: ({}, {})\nSpawn PNJ: ({}, {})",
-        editor_tool_label(editor.tool),
-        editor_brush_label(editor.brush),
-        editor.camera_center.x,
-        editor.camera_center.y,
-        editor.camera_zoom,
-        visible_bounds.0,
-        visible_bounds.1,
-        visible_bounds.2,
-        visible_bounds.3,
-        map.player_spawn.0,
-        map.player_spawn.1,
-        map.npc_spawn.0,
-        map.npc_spawn.1,
-    );
-    draw_ui_text_tinted_on(
-        panel_bg,
-        Color::from_rgba(186, 209, 224, 255),
-        &inspector_text,
-        right_panel_rect.x + 14.0,
-        right_panel_rect.y + 50.0,
-        17.0,
-    );
-
-    if let Some(tile) = editor.hover_tile {
-        let tile_kind = map.world.get(tile.0, tile.1);
-        let prop_at =
-            prop_index_at_tile(&map.props, tile).map(|idx| prop_kind_label(map.props[idx].kind));
-        draw_ui_text_tinted_on(
-            panel_bg,
-            Color::from_rgba(214, 232, 244, 255),
-            &format!(
-                "Case survolee: ({}, {})\nTuile: {}\nObjet: {}",
-                tile.0,
-                tile.1,
-                tile_label(tile_kind),
-                prop_at.unwrap_or("aucun")
-            ),
-            right_panel_rect.x + 14.0,
-            right_panel_rect.y + 160.0,
-            18.0,
-        );
-    } else {
-        draw_ui_text_tinted_on(
-            panel_bg,
-            Color::from_rgba(166, 188, 204, 255),
-            "Case survolee: aucune",
-            right_panel_rect.x + 14.0,
-            right_panel_rect.y + 160.0,
-            18.0,
-        );
-    }
-
-    let center_cam_rect = Rect::new(
-        right_panel_rect.x + 14.0,
-        right_panel_rect.y + 232.0,
-        right_panel_rect.w - 28.0,
-        30.0,
-    );
-    if draw_ui_button_sized(
-        center_cam_rect,
-        "Centrer camera (Origine)",
-        mouse,
-        left_pressed,
-        false,
-        13.0,
-    ) {
-        editor.camera_center = tile_center(map.player_spawn);
-    }
-
-    let set_player_rect = Rect::new(
-        right_panel_rect.x + 14.0,
-        right_panel_rect.y + 270.0,
-        right_panel_rect.w - 28.0,
-        30.0,
-    );
-    if draw_ui_button_sized(
-        set_player_rect,
-        "Definir spawn joueur (P)",
-        mouse,
-        left_pressed,
-        false,
-        13.0,
-    ) && let Some(tile) = editor.hover_tile
-    {
-        match editor_set_player_spawn(editor, map, tile) {
-            Ok(()) => {
-                editor_set_status(editor, format!("Point joueur -> ({}, {})", tile.0, tile.1))
-            }
-            Err(reason) => editor_set_status(editor, format!("Point joueur invalide: {reason}")),
+            editor.autosave_timer = 0.0;
         }
     }
 
-    let set_npc_rect = Rect::new(
-        right_panel_rect.x + 14.0,
-        right_panel_rect.y + 308.0,
-        right_panel_rect.w - 28.0,
-        30.0,
-    );
-    if draw_ui_button_sized(
-        set_npc_rect,
-        "Definir spawn PNJ (N)",
-        mouse,
-        left_pressed,
-        false,
-        13.0,
-    ) && let Some(tile) = editor.hover_tile
-    {
-        match editor_set_npc_spawn(editor, map, tile) {
-            Ok(()) => editor_set_status(editor, format!("Point PNJ -> ({}, {})", tile.0, tile.1)),
-            Err(reason) => editor_set_status(editor, format!("Point PNJ invalide: {reason}")),
-        }
-    }
-
-    draw_ui_text_tinted_on(
-        panel_bg,
-        Color::from_rgba(160, 186, 202, 255),
-        "Raccourcis:\nCtrl+S/L sauver/charger\nCtrl+Z/Y annuler/retablir\nF11 plein ecran\nPan: fleches ou Espace+ZQSD\nZoom: molette / PagePrec/PageSuiv\nGlisser camera: molette maintenue",
-        right_panel_rect.x + 14.0,
-        right_panel_rect.y + right_panel_rect.h - 126.0,
-        15.0,
-    );
-
-    let status_text = if editor.status_timer > 0.0 {
-        editor.status_text.as_str()
-    } else {
-        "Pret"
-    };
-    draw_ui_text_tinted_on(
-        top_bar_bg,
-        Color::from_rgba(252, 232, 188, 255),
-        status_text,
-        top_bar_rect.x + 16.0,
-        top_bar_rect.y + top_bar_rect.h - 6.0,
-        16.0,
-    );
-
-    action
+    ui_result.action
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

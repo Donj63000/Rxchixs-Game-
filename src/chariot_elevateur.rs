@@ -446,6 +446,7 @@ pub(crate) fn actionner_fourches_chariot(
             tile_y: target.1,
             kind,
             phase: prop_phase_for_tile(target),
+            rotation_quarter: 0,
         });
         chariot.caisse_chargee = None;
         return Ok(ActionCaisseChariot::Deposee { kind, to: target });
@@ -715,6 +716,7 @@ mod tests {
             tile_y: 6,
             kind: PropKind::BoxCartonVide,
             phase: 0.0,
+            rotation_quarter: 0,
         }];
 
         let action_charge = actionner_fourches_chariot(&mut chariot, &world, &mut props, &mut sim)

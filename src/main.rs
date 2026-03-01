@@ -2,6 +2,7 @@ mod character;
 mod chariot_elevateur;
 mod deplacement;
 mod edition;
+mod editor_tools;
 mod four_texture;
 mod historique;
 mod interactions;
@@ -13,7 +14,9 @@ mod sauvegarde;
 mod sim;
 mod social;
 mod telephone;
+mod ui_editor;
 mod ui_hud;
+mod ui_kit;
 mod ui_pawns;
 mod utilitaires;
 
@@ -24,6 +27,7 @@ use character::{
 use chariot_elevateur::*;
 use deplacement::*;
 use edition::*;
+use editor_tools::*;
 use macroquad::prelude::*;
 use modes::*;
 use render_safety::*;
@@ -38,6 +42,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+use ui_editor::*;
 use ui_hud::*;
 use ui_pawns::*;
 use utilitaires::*;
@@ -57,8 +62,14 @@ const NPC_WANDER_SPEED: f32 = 92.0;
 const NPC_IDLE_MIN: f32 = 0.7;
 const NPC_IDLE_MAX: f32 = 2.0;
 const MAP_FILE_PATH: &str = "maps/main_map.ron";
+const EDITOR_LAYOUTS_DIR_PATH: &str = "maps/layouts";
+const EDITOR_BLUEPRINTS_DIR_PATH: &str = "maps/blueprints";
+const EDITOR_AUTOSAVE_PATH: &str = "maps/layouts/autosave_editor.ron";
+const EDITOR_AUTOSAVE_INTERVAL_S: f32 = 20.0;
+const EDITOR_UI_SETTINGS_PATH: &str = "data/editor_ui.ron";
 const SAVE_DIR_PATH: &str = "saves";
 const SAVE_SCHEMA_VERSION: u32 = 1;
+const MAP_SCHEMA_VERSION: u32 = 2;
 const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
 const PAPA_PLAN_PATH: &str = "data/papa/plan_ligne.ron";
 const FLOOR_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol1.png", "Textures/sol1.png"];
@@ -312,6 +323,8 @@ struct Prop {
     tile_y: i32,
     kind: PropKind,
     phase: f32,
+    #[serde(default)]
+    rotation_quarter: i8,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -634,12 +647,43 @@ fn refresh_main_menu_saves(menu: &mut MainMenuState) {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct MapAsset {
+    #[serde(default = "default_map_schema_version")]
+    schema_version: u32,
     version: u32,
     label: String,
     world: World,
     props: Vec<Prop>,
+    #[serde(default)]
+    zones: Vec<ZoneRegion>,
     player_spawn: (i32, i32),
     npc_spawn: (i32, i32),
+}
+
+fn default_map_schema_version() -> u32 {
+    1
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
+enum ZoneKind {
+    #[default]
+    Logistique,
+    Propre,
+    Froide,
+    Production,
+    Stockage,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ZoneRegion {
+    id: u16,
+    label: String,
+    kind: ZoneKind,
+    #[serde(default)]
+    acces_restreint: bool,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    tiles: Vec<(i32, i32)>,
 }
 
 impl MapAsset {
@@ -655,17 +699,19 @@ impl MapAsset {
             nearest_walkable_tile(&world, (fx1 + 10, ship_y + 2)).unwrap_or((MAP_W - 4, MAP_H / 2));
 
         Self {
+            schema_version: MAP_SCHEMA_VERSION,
             version: MAP_FILE_VERSION,
             label: "Usine de depart".to_string(),
             world,
             props,
+            zones: Vec::new(),
             player_spawn,
             npc_spawn,
         }
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum EditorBrush {
     Floor,
     FloorMetal,
@@ -696,16 +742,21 @@ enum EditorBrush {
     EraseProp,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum EditorTool {
+    Select,
     Brush,
     Rect,
+    Line,
+    Fill,
+    Paste,
 }
 
 #[derive(Clone)]
 struct EditorSnapshot {
     world: World,
     props: Vec<Prop>,
+    zones: Vec<ZoneRegion>,
     player_spawn: (i32, i32),
     npc_spawn: (i32, i32),
 }
@@ -714,6 +765,10 @@ struct EditorState {
     brush: EditorBrush,
     tool: EditorTool,
     hover_tile: Option<(i32, i32)>,
+    selected_tile: Option<(i32, i32)>,
+    selected_prop: Option<usize>,
+    selection_rect: Option<((i32, i32), (i32, i32))>,
+    clipboard: Option<EditorClipboard>,
     drag_start: Option<(i32, i32)>,
     show_grid: bool,
     camera_center: Vec2,
@@ -725,6 +780,14 @@ struct EditorState {
     redo_stack: Vec<EditorSnapshot>,
     stroke_active: bool,
     stroke_changed: bool,
+    brush_size: u8,
+    prop_rotation: i8,
+    zone_kind: ZoneKind,
+    validation_issues: Vec<ValidationIssue>,
+    validation_scroll: usize,
+    validation_refresh_timer: f32,
+    autosave_timer: f32,
+    ui: EditorUiState,
 }
 
 impl EditorState {
@@ -733,6 +796,10 @@ impl EditorState {
             brush: EditorBrush::Wall,
             tool: EditorTool::Brush,
             hover_tile: None,
+            selected_tile: None,
+            selected_prop: None,
+            selection_rect: None,
+            clipboard: None,
             drag_start: None,
             show_grid: true,
             camera_center: Vec2::ZERO,
@@ -744,6 +811,14 @@ impl EditorState {
             redo_stack: Vec::new(),
             stroke_active: false,
             stroke_changed: false,
+            brush_size: 1,
+            prop_rotation: 0,
+            zone_kind: ZoneKind::Logistique,
+            validation_issues: Vec::new(),
+            validation_scroll: 0,
+            validation_refresh_timer: 0.0,
+            autosave_timer: 0.0,
+            ui: load_editor_ui_state(EDITOR_UI_SETTINGS_PATH),
         }
     }
 }
@@ -753,6 +828,23 @@ enum EditorAction {
     None,
     StartPlay,
     BackToMenu,
+}
+
+struct EditorRuntimeFrame {
+    mouse: Vec2,
+    left_pressed: bool,
+    left_down: bool,
+    left_released: bool,
+    right_pressed: bool,
+    middle_down: bool,
+    ctrl_down: bool,
+    shift_down: bool,
+    alt_down: bool,
+    space_down: bool,
+    wheel: f32,
+    layout: EditorUiLayout,
+    map_view_rect: Rect,
+    mouse_over_map: bool,
 }
 
 #[macroquad::main(window_conf)]
@@ -1320,6 +1412,7 @@ mod tests {
             tile_y: 0,
             kind: PropKind::Crate,
             phase: 0.0,
+            rotation_quarter: 0,
         });
 
         sanitize_map_asset(&mut map);
@@ -1334,10 +1427,12 @@ mod tests {
     #[test]
     fn sanitize_upgrades_legacy_small_map_to_starter_factory_layout() {
         let mut map = MapAsset {
+            schema_version: 1,
             version: 1,
             label: "Legacy".to_string(),
             world: World::new_room(25, 15),
             props: Vec::new(),
+            zones: Vec::new(),
             player_spawn: (2, 2),
             npc_spawn: (20, 10),
         };
