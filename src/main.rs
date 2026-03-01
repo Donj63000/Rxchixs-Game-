@@ -758,6 +758,7 @@ enum EditorAction {
 #[macroquad::main(window_conf)]
 async fn main() {
     let palette = Palette::new();
+    prewarm_default_font_cache_ui();
     let floor_texture = load_floor_tile_texture().await;
     let floor_metal_texture = load_floor_metal_tile_texture().await;
     let pot_de_fleur_texture = load_pot_de_fleur_texture().await;

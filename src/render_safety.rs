@@ -22,6 +22,13 @@ fn ui_pass_resets_material() -> bool {
 /// Call this right before drawing any screen-space UI / text.
 #[inline]
 pub(crate) fn begin_ui_pass() {
+    // Macroquad documents `flush` as drawing pending batches and resetting internal state cache.
+    // This unsafe call is required by the engine API to recover from leaked/corrupted render state
+    // before text/UI rendering.
+    unsafe {
+        get_internal_gl().flush();
+    }
+
     // UI is screen-space.
     if ui_pass_resets_camera() {
         set_default_camera();
@@ -30,6 +37,19 @@ pub(crate) fn begin_ui_pass() {
     // Absolutely critical: reset any custom shader/material that might still be active.
     if ui_pass_resets_material() {
         gl_use_default_material();
+    }
+}
+
+/// Pre-populate common UI glyph sizes in the default font cache to reduce runtime atlas churn.
+#[inline]
+#[allow(dead_code)]
+pub(crate) fn prewarm_default_font_cache_ui() {
+    // The default macroquad font handle is not publicly exposed.
+    // Measuring a representative ASCII string forces glyph caching on the default font.
+    let ascii: String = Font::ascii_character_list().into_iter().collect();
+
+    for size in [14u16, 16, 18, 20, 22, 24, 28, 32] {
+        let _ = measure_text(&ascii, None, size, 1.0);
     }
 }
 
