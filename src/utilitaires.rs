@@ -758,6 +758,7 @@ pub(crate) fn draw_text_shadowed(
     shadow_color: Color,
     shadow_offset: f32,
 ) {
+    crate::render_safety::ensure_default_material();
     // Very light one-pass drop shadow to avoid any "black highlight" effect.
     let off = shadow_offset.max(0.75);
     let shadow = with_alpha(shadow_color, (shadow_color.a * 0.65).clamp(0.0, 0.12));

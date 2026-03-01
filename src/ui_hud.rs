@@ -731,6 +731,7 @@ fn ui_text_and_shadow_for_bg(bg: Color) -> (Color, Color) {
 }
 
 fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: Color, off: Vec2) {
+    crate::render_safety::ensure_default_material();
     let ox = off.x.max(0.75);
     let oy = off.y.max(0.75);
     let soft_shadow = with_alpha(shadow, (shadow.a * 0.65).clamp(0.0, 0.12));
