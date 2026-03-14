@@ -599,29 +599,73 @@ pub(crate) fn draw_ui_button_sized(
         && mouse_pos.y >= rect.y
         && mouse_pos.y <= rect.y + rect.h;
 
-    let base = if active {
-        Color::from_rgba(210, 150, 82, 255)
-    } else if hovered {
-        Color::from_rgba(98, 140, 170, 255)
-    } else {
-        Color::from_rgba(70, 102, 128, 255)
-    };
-    let border = if active {
-        Color::from_rgba(250, 216, 164, 255)
-    } else if hovered {
-        Color::from_rgba(168, 210, 235, 255)
-    } else {
-        Color::from_rgba(138, 184, 210, 255)
-    };
+    let visual = crate::rendu::theme::ui_button_visual(
+        hovered,
+        active,
+        if active {
+            crate::rendu::theme::UiButtonKind::Warning
+        } else if hovered {
+            crate::rendu::theme::UiButtonKind::Primary
+        } else {
+            crate::rendu::theme::UiButtonKind::Neutral
+        },
+    );
 
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+    draw_rectangle(
+        rect.x + 2.0,
+        rect.y + 3.0,
+        rect.w,
+        rect.h,
+        with_alpha(Color::from_rgba(0, 0, 0, 255), visual.shadow_alpha),
+    );
+    let slices = 10usize;
+    let slice_h = rect.h / slices as f32;
+    for i in 0..slices {
+        let t = i as f32 / (slices.saturating_sub(1)).max(1) as f32;
+        let y = rect.y + i as f32 * slice_h;
+        let h = if i + 1 == slices {
+            (rect.y + rect.h - y).max(0.0)
+        } else {
+            (slice_h + 0.5).max(0.0)
+        };
+        draw_rectangle(
+            rect.x,
+            y,
+            rect.w,
+            h,
+            color_lerp(visual.top, visual.bottom, t),
+        );
+    }
+    draw_rectangle(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.w - 2.0).max(0.0),
+        rect.h * 0.42,
+        with_alpha(
+            WHITE,
+            if active {
+                0.22
+            } else if hovered {
+                0.12
+            } else {
+                0.08
+            },
+        ),
+    );
+    draw_rectangle(
+        rect.x,
+        rect.y + rect.h * 0.7,
+        rect.w,
+        rect.h * 0.3,
+        with_alpha(Color::from_rgba(0, 0, 0, 255), 0.14),
+    );
     draw_rectangle_lines(
         rect.x + 0.5,
         rect.y + 0.5,
         rect.w - 1.0,
         rect.h - 1.0,
         1.6,
-        border,
+        visual.border,
     );
     draw_rectangle_lines(
         rect.x + 1.5,
@@ -629,7 +673,7 @@ pub(crate) fn draw_ui_button_sized(
         rect.w - 3.0,
         rect.h - 3.0,
         0.9,
-        with_alpha(border, 0.35),
+        with_alpha(visual.border, 0.35),
     );
 
     let dims = measure_text(label, None, font_size as u16, 1.0);
@@ -637,16 +681,16 @@ pub(crate) fn draw_ui_button_sized(
     let text_y = rect.y + rect.h * 0.5 + dims.height * 0.32;
 
     // Robust text readability: color is auto-fixed to guarantee contrast.
-    let (mut text_fill, _) = ui_text_and_shadow_for_bg(base);
+    let (mut text_fill, _) = ui_text_and_shadow_for_bg(visual.top);
 
     // Keep a slight warm bias when active (visual feedback), but still enforce contrast.
     if active {
-        let warm = Color::from_rgba(255, 248, 232, 255);
+        let warm = Color::from_rgba(252, 244, 228, 255);
         text_fill = color_lerp(text_fill, warm, 0.35);
     }
 
     // Enforce minimum contrast ratio (WCAG-ish).
-    text_fill = ui_ensure_text_contrast(base, text_fill, 4.5);
+    text_fill = ui_ensure_text_contrast(visual.top, color_lerp(text_fill, visual.text, 0.7), 4.5);
     let mut shadow = ui_shadow_color_for_text(text_fill);
 
     if active {

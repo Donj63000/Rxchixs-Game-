@@ -1099,6 +1099,7 @@ pub fn draw_pawn_ui(state: &GameState, layout: &PawnUiLayout, mouse: Vec2, time:
                 CharacterRenderParams {
                     center: portrait_center,
                     scale: 0.70,
+                    presentation: crate::character::CharacterPresentation::Portrait,
                     facing: CharacterFacing::Front,
                     facing_left: false,
                     is_walking: false,
@@ -1222,6 +1223,7 @@ fn draw_pawn_sheet(
             CharacterRenderParams {
                 center: portrait_center,
                 scale: 1.05,
+                presentation: crate::character::CharacterPresentation::Portrait,
                 facing: CharacterFacing::Front,
                 facing_left: false,
                 is_walking: false,

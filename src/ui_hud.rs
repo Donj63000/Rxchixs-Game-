@@ -1,4 +1,5 @@
 use super::*;
+use crate::rendu::theme::{feedback_theme, ui_panel_fill, ui_panel_header_fill, ui_theme};
 use crate::sim::{BlockKind, BuildFloorKind, ZoneKind};
 use std::cell::RefCell;
 
@@ -641,39 +642,39 @@ fn draw_bar_background(bar: Rect, _time: f32) {
 }
 
 fn ui_col_border() -> Color {
-    rgba(82, 182, 232, 220)
+    ui_theme().border
 }
 
 fn ui_col_border_hi() -> Color {
-    rgba(196, 244, 255, 250)
+    ui_theme().border_hi
 }
 
 fn ui_col_accent() -> Color {
-    rgba(255, 196, 106, 248)
+    ui_theme().accent_amber
 }
 
 fn ui_col_surface() -> Color {
-    rgba(14, 28, 48, 236)
+    ui_theme().panel_mid
 }
 
 fn ui_col_surface_hi() -> Color {
-    rgba(26, 46, 72, 240)
+    crate::rendu::theme::mix_color(ui_theme().panel_top, ui_theme().panel_mid, 0.34)
 }
 
 fn ui_col_text_primary() -> Color {
-    rgba(242, 250, 255, 248)
+    ui_theme().text_primary
 }
 
 fn ui_col_text_secondary() -> Color {
-    rgba(196, 220, 244, 244)
+    ui_theme().text_secondary
 }
 
 fn ui_col_glow_cyan() -> Color {
-    rgba(84, 218, 255, 255)
+    ui_theme().accent_cyan
 }
 
 fn ui_col_glow_teal() -> Color {
-    rgba(112, 248, 206, 255)
+    ui_theme().accent_teal
 }
 
 fn mix_color(a: Color, b: Color, t: f32) -> Color {
@@ -743,16 +744,7 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
     let hovered = point_in_rect(mouse, rect);
     draw_panel_drop_shadow(rect, if hovered { 0.32 } else { 0.24 });
 
-    let base_top = if hovered {
-        ui_col_surface_hi()
-    } else {
-        mix_color(ui_col_surface_hi(), ui_col_surface(), 0.55)
-    };
-    let base_bottom = if hovered {
-        mix_color(ui_col_surface(), rgba(6, 12, 24, 255), 0.40)
-    } else {
-        mix_color(ui_col_surface(), rgba(4, 8, 18, 255), 0.44)
-    };
+    let (base_top, base_bottom) = ui_panel_fill(hovered);
     draw_vertical_gradient(rect, base_top, base_bottom, 18);
     draw_rectangle(
         rect.x + 1.0,
@@ -784,16 +776,7 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         (rect.w - 2.0).max(1.0),
         header_h - 1.0,
     );
-    let header_top = if hovered {
-        rgba(84, 118, 154, 248)
-    } else {
-        rgba(74, 106, 142, 246)
-    };
-    let header_bottom = if hovered {
-        rgba(42, 64, 88, 248)
-    } else {
-        rgba(36, 58, 82, 246)
-    };
+    let (header_top, header_bottom) = ui_panel_header_fill(hovered);
     draw_vertical_gradient(header, header_top, header_bottom, 10);
     draw_rectangle(
         header.x,
@@ -825,8 +808,7 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
 }
 
 fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
-    let top = rgba(18, 44, 76, 252);
-    let bottom = rgba(10, 24, 42, 252);
+    let (top, bottom) = ui_panel_header_fill(true);
     draw_vertical_gradient(rect, top, bottom, 14);
     draw_rectangle(
         rect.x,
@@ -926,10 +908,11 @@ fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
         false,
     ) + 10.0;
 
+    let feedback = feedback_theme();
     let profit_col = if profit >= 0.0 {
-        rgba(110, 210, 130, 235)
+        with_alpha(feedback.positive, 0.92)
     } else {
-        rgba(210, 110, 110, 235)
+        with_alpha(feedback.danger, 0.92)
     };
     draw_stat_pill(
         Rect::new(x, pill_y, 190.0, pill_h),
@@ -1467,6 +1450,7 @@ fn draw_pawn_slot(state: &GameState, slot: &PawnSlot, mouse: Vec2, time: f32) {
             CharacterRenderParams {
                 center: portrait_center,
                 scale: 0.72,
+                presentation: crate::character::CharacterPresentation::Portrait,
                 facing: CharacterFacing::Front,
                 facing_left: false,
                 is_walking: false,

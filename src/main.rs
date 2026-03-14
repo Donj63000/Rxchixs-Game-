@@ -243,59 +243,6 @@ impl Aabb {
     }
 }
 
-#[derive(Copy, Clone)]
-struct Palette {
-    bg_top: Color,
-    bg_bottom: Color,
-    floor_a: Color,
-    floor_b: Color,
-    floor_c: Color,
-    floor_edge: Color,
-    floor_grime: Color,
-    wall_top: Color,
-    wall_mid: Color,
-    wall_dark: Color,
-    wall_outline: Color,
-    shadow_soft: Color,
-    shadow_hard: Color,
-    vignette: Color,
-    lamp_warm: Color,
-    lamp_hot: Color,
-    prop_crate_light: Color,
-    prop_crate_dark: Color,
-    prop_pipe: Color,
-    prop_pipe_highlight: Color,
-    dust: Color,
-}
-
-impl Palette {
-    fn new() -> Self {
-        Self {
-            bg_top: rgba(12, 15, 22, 255),
-            bg_bottom: rgba(25, 30, 39, 255),
-            floor_a: rgba(56, 67, 76, 255),
-            floor_b: rgba(62, 72, 83, 255),
-            floor_c: rgba(49, 60, 69, 255),
-            floor_edge: rgba(28, 34, 42, 180),
-            floor_grime: rgba(8, 10, 14, 255),
-            wall_top: rgba(126, 142, 154, 255),
-            wall_mid: rgba(88, 102, 116, 255),
-            wall_dark: rgba(56, 67, 80, 255),
-            wall_outline: rgba(20, 25, 31, 210),
-            shadow_soft: rgba(10, 12, 18, 120),
-            shadow_hard: rgba(5, 7, 10, 190),
-            vignette: rgba(3, 4, 8, 255),
-            lamp_warm: rgba(243, 185, 95, 255),
-            lamp_hot: rgba(255, 225, 165, 255),
-            prop_crate_light: rgba(148, 116, 86, 255),
-            prop_crate_dark: rgba(104, 78, 58, 255),
-            prop_pipe: rgba(99, 113, 126, 255),
-            prop_pipe_highlight: rgba(153, 170, 188, 255),
-            dust: rgba(184, 204, 216, 255),
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum PropKind {
     Crate,
@@ -980,7 +927,13 @@ async fn main() {
         let previous_mode = mode;
         mode = match mode {
             AppMode::MainMenu => {
-                match run_main_menu_frame(&map, &palette, time, frame_dt, &mut main_menu_state) {
+                match menu_principal::run_main_menu_frame(
+                    &map,
+                    &palette,
+                    time,
+                    frame_dt,
+                    &mut main_menu_state,
+                ) {
                     MainMenuAction::None => AppMode::MainMenu,
                     MainMenuAction::StartNewGame => {
                         map = MapAsset::new_default();

@@ -936,7 +936,7 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
     let visible_bounds = tile_bounds_from_camera(&state.world, &world_camera, map_view_rect, 2);
 
     clear_background(state.palette.bg_bottom);
-    draw_background(&state.palette, time);
+    effets::draw_background(&state.palette, time);
     set_camera(&world_camera);
     draw_floor_layer_region(&state.world, &state.palette, visible_bounds);
     draw_exterior_ground_ambiance_region(&state.world, &state.palette, time, visible_bounds);
@@ -965,6 +965,7 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
             CharacterRenderParams {
                 center: state.player.pos,
                 scale: 1.0,
+                presentation: crate::character::CharacterPresentation::World,
                 facing: state.player.facing,
                 facing_left: state.player.facing_left,
                 is_walking: state.player.is_walking,
@@ -980,6 +981,7 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
         CharacterRenderParams {
             center: state.npc.pos,
             scale: 0.96,
+            presentation: crate::character::CharacterPresentation::World,
             facing: state.npc.facing,
             facing_left: state.npc.facing_left,
             is_walking: state.npc.is_walking,
@@ -994,6 +996,7 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
         CharacterRenderParams {
             center: worker_pos,
             scale: 0.94,
+            presentation: crate::character::CharacterPresentation::World,
             facing: CharacterFacing::Front,
             facing_left: false,
             is_walking: false,
@@ -1022,8 +1025,8 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
         2.0,
         Color::from_rgba(170, 213, 237, 135),
     );
-    draw_ambient_dust(&state.palette, time);
-    draw_vignette(&state.palette);
+    effets::draw_ambient_dust(&state.palette, time);
+    effets::draw_vignette(&state.palette);
     if state.show_character_inspector && state.pawn_ui.sheet_open.is_none() {
         draw_character_inspector_panel(state, time);
     }
@@ -1717,7 +1720,7 @@ pub(crate) fn run_play_frame(
     let visible_bounds = tile_bounds_from_camera(&state.world, &world_camera, map_view_rect, 2);
 
     clear_background(state.palette.bg_bottom);
-    draw_background(&state.palette, time);
+    effets::draw_background(&state.palette, time);
     set_camera(&world_camera);
     draw_floor_layer_region(&state.world, &state.palette, visible_bounds);
     draw_exterior_ground_ambiance_region(&state.world, &state.palette, time, visible_bounds);
@@ -1808,6 +1811,7 @@ pub(crate) fn run_play_frame(
                         CharacterRenderParams {
                             center: state.player.pos,
                             scale: 1.0,
+                            presentation: crate::character::CharacterPresentation::World,
                             facing,
                             facing_left,
                             is_walking,
@@ -1853,6 +1857,7 @@ pub(crate) fn run_play_frame(
                     CharacterRenderParams {
                         center: state.npc.pos,
                         scale: 0.96,
+                        presentation: crate::character::CharacterPresentation::World,
                         facing,
                         facing_left,
                         is_walking,
@@ -1893,6 +1898,7 @@ pub(crate) fn run_play_frame(
                     CharacterRenderParams {
                         center: worker_pos,
                         scale: 0.94,
+                        presentation: crate::character::CharacterPresentation::World,
                         facing,
                         facing_left,
                         is_walking: false,
@@ -1915,6 +1921,7 @@ pub(crate) fn run_play_frame(
                         CharacterRenderParams {
                             center: papa.pos,
                             scale: 0.96,
+                            presentation: crate::character::CharacterPresentation::World,
                             facing: papa.facing,
                             facing_left: papa.facing_left,
                             is_walking: !papa.termine && papa.blocage.is_none(),
@@ -2003,8 +2010,8 @@ pub(crate) fn run_play_frame(
         Color::from_rgba(170, 213, 237, 135),
     );
 
-    draw_ambient_dust(&state.palette, time);
-    draw_vignette(&state.palette);
+    effets::draw_ambient_dust(&state.palette, time);
+    effets::draw_vignette(&state.palette);
 
     // Old inspector panel can coexist, but we hide it when the new sheet is open to avoid overlap.
     if state.show_character_inspector && state.pawn_ui.sheet_open.is_none() {
@@ -2486,7 +2493,7 @@ pub(crate) fn run_editor_frame(
     }
 
     clear_background(palette.bg_bottom);
-    draw_background(palette, time);
+    effets::draw_background(palette, time);
     draw_rectangle(
         map_view_rect.x,
         map_view_rect.y,
@@ -2689,8 +2696,8 @@ pub(crate) fn run_editor_frame(
         Color::from_rgba(18, 30, 42, 186),
     );
 
-    draw_ambient_dust(palette, time);
-    draw_vignette(palette);
+    effets::draw_ambient_dust(palette, time);
+    effets::draw_vignette(palette);
     let dirty_before_ui = editor.ui.dirty;
     let ui_result = ui_editor::draw_editor_ui(
         editor,

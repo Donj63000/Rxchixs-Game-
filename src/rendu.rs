@@ -1,5 +1,18 @@
+#[path = "rendu/effets.rs"]
+pub(crate) mod effets;
+#[path = "rendu/menu_principal.rs"]
+pub(crate) mod menu_principal;
+#[path = "rendu/monde.rs"]
+pub(crate) mod monde;
+#[path = "rendu/production.rs"]
+pub(crate) mod production;
+#[path = "rendu/theme.rs"]
+pub(crate) mod theme;
+
 use super::*;
 use std::cell::RefCell;
+
+pub(crate) use theme::Palette;
 
 #[derive(Clone)]
 struct FloorTileTextures {
@@ -167,6 +180,7 @@ pub(crate) fn draw_chariot_elevateur(
     let visual_scale = CHARIOT_VISUAL_SCALE;
     let forward = forward_unit * visual_scale;
     let side = side_unit * visual_scale;
+    let world = palette.world;
     let moving = chariot.velocity.length_squared() > 4.0;
     let speed_ratio = (chariot.vitesse_longitudinale.abs() / 128.0).clamp(0.0, 1.0);
     let braquage_rad = chariot.angle_braquage * 0.72;
@@ -174,18 +188,18 @@ pub(crate) fn draw_chariot_elevateur(
     let fourche_lift_px = chariot.fourche_hauteur * 7.8 * visual_scale;
     let fourche_offset = vec2(0.0, -fourche_lift_px);
 
-    let yellow_main = rgba(238, 190, 42, 255);
-    let yellow_dark = rgba(188, 138, 32, 255);
-    let steel = rgba(108, 120, 136, 255);
-    let steel_dark = rgba(74, 84, 98, 255);
-    let steel_high = rgba(186, 198, 216, 255);
-    let mast_black = rgba(24, 28, 34, 255);
-    let mast_black_soft = rgba(38, 44, 54, 255);
-    let fork_black = rgba(14, 18, 24, 255);
-    let fork_edge = rgba(92, 106, 124, 210);
-    let cabin_tint = rgba(38, 52, 66, 230);
-    let tire = rgba(22, 26, 34, 255);
-    let rim = rgba(146, 156, 170, 255);
+    let yellow_main = theme::mix_color(world.safety_amber, world.lamp_hot, 0.22);
+    let yellow_dark = theme::mix_color(world.safety_amber, world.prop_crate_dark, 0.46);
+    let steel = theme::mix_color(world.steel_cool, world.wall_mid, 0.26);
+    let steel_dark = theme::mix_color(world.steel_deep, world.wall_dark, 0.24);
+    let steel_high = theme::mix_color(world.prop_pipe_highlight, world.lamp_hot, 0.16);
+    let mast_black = theme::mix_color(world.wall_outline, world.shadow_hard, 0.34);
+    let mast_black_soft = theme::mix_color(world.wall_dark, world.shadow_hard, 0.28);
+    let fork_black = theme::mix_color(world.shadow_hard, world.wall_outline, 0.18);
+    let fork_edge = with_alpha(world.steel_cool, 0.82);
+    let cabin_tint = with_alpha(theme::mix_color(world.steel_deep, world.bg_mid, 0.34), 0.92);
+    let tire = theme::mix_color(world.shadow_hard, world.wall_outline, 0.12);
+    let rim = theme::mix_color(world.steel_cool, world.prop_pipe_highlight, 0.32);
 
     // Ground shadow and suspension wobble.
     let wobble = (time * 5.4 + chariot.phase_anim).sin() * (0.16 + speed_ratio * 0.24);
@@ -340,6 +354,20 @@ pub(crate) fn draw_chariot_elevateur(
         7.6,
         steel_dark,
     );
+    let left_tail = chariot_point(center + vec2(0.0, wobble), forward, side, -12.7, -5.3);
+    let right_tail = chariot_point(center + vec2(0.0, wobble), forward, side, -12.7, 5.3);
+    draw_circle(
+        left_tail.x,
+        left_tail.y,
+        0.72 * visual_scale,
+        with_alpha(world.safety_red, 0.82),
+    );
+    draw_circle(
+        right_tail.x,
+        right_tail.y,
+        0.72 * visual_scale,
+        with_alpha(world.safety_red, 0.82),
+    );
 
     // Cabin floor and overhead guard.
     draw_chariot_quad(
@@ -384,6 +412,28 @@ pub(crate) fn draw_chariot_elevateur(
         1.0,
         steel_high,
     );
+    let beacon = chariot_point(center + vec2(0.0, wobble - 0.5), forward, side, 0.2, 0.0);
+    let beacon_pulse = 0.45 + 0.55 * ((time * 4.6 + chariot.phase_anim).sin() * 0.5 + 0.5);
+    draw_circle(
+        beacon.x,
+        beacon.y,
+        2.1 * visual_scale,
+        with_alpha(world.lamp_hot, 0.08 * beacon_pulse),
+    );
+    draw_circle(
+        beacon.x,
+        beacon.y,
+        0.72 * visual_scale,
+        with_alpha(world.safety_amber, 0.94),
+    );
+    if chariot.est_en_charge {
+        draw_circle(
+            beacon.x,
+            beacon.y,
+            1.05 * visual_scale,
+            with_alpha(theme::ui_theme().accent_green, 0.88),
+        );
+    }
 
     // Mast rails and cross-beam.
     draw_chariot_quad(
@@ -1057,6 +1107,7 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
             CharacterRenderParams {
                 center: vec2(px, py),
                 scale: 0.9,
+                presentation: crate::character::CharacterPresentation::Portrait,
                 facing: CharacterFacing::Front,
                 facing_left: false,
                 is_walking: i == state.player_lineage_index,
@@ -1090,18 +1141,6 @@ pub(crate) fn draw_character_inspector_panel(state: &GameState, time: f32) {
                 Color::from_rgba(190, 210, 220, 255),
             );
         }
-    }
-}
-
-pub(crate) fn draw_background(palette: &Palette, _time: f32) {
-    let sw = screen_width();
-    let sh = screen_height();
-    let lines = sh.max(1.0) as i32;
-
-    for y in 0..lines {
-        let t = y as f32 / (lines - 1).max(1) as f32;
-        let c = color_lerp(palette.bg_top, palette.bg_bottom, t);
-        draw_line(0.0, y as f32, sw, y as f32, 1.0, c);
     }
 }
 
@@ -1291,35 +1330,16 @@ pub(crate) fn draw_floor_tile(
     let rect = World::tile_rect(x, y);
     let h = tile_hash(x, y);
 
-    let (base_a, base_b) = match tile {
-        Tile::Floor if exterior_hint => (
-            color_lerp(rgba(86, 130, 76, 255), rgba(104, 146, 86, 255), 0.35),
-            color_lerp(rgba(74, 116, 66, 255), rgba(94, 136, 82, 255), 0.35),
-        ),
-        Tile::Floor => (palette.floor_a, palette.floor_b),
-        Tile::FloorMetal => (
-            color_lerp(palette.floor_b, palette.wall_mid, 0.35),
-            color_lerp(palette.floor_c, palette.wall_dark, 0.45),
-        ),
-        Tile::FloorWood => (
-            color_lerp(palette.prop_crate_light, palette.prop_crate_dark, 0.18),
-            color_lerp(palette.prop_crate_dark, palette.wall_dark, 0.28),
-        ),
-        Tile::FloorMoss => (
-            color_lerp(rgba(66, 112, 82, 255), rgba(92, 146, 96, 255), 0.42),
-            color_lerp(rgba(52, 88, 64, 255), rgba(76, 120, 80, 255), 0.44),
-        ),
-        Tile::FloorSand => (
-            color_lerp(rgba(132, 120, 88, 255), rgba(98, 130, 80, 255), 0.42),
-            color_lerp(rgba(118, 104, 78, 255), rgba(84, 116, 70, 255), 0.38),
-        ),
-        _ => (palette.floor_a, palette.floor_b),
-    };
+    let variant = monde::floor_material_variant(x, y);
+    let tone = monde::floor_tones(tile, exterior_hint, palette);
+    let base_a = tone.base_a;
+    let base_b = tone.base_b;
 
-    let base = match h % 3 {
+    let base = match variant % 4 {
         0 => base_a,
         1 => base_b,
-        _ => color_lerp(base_a, base_b, 0.55),
+        2 => color_lerp(base_a, base_b, 0.55),
+        _ => color_lerp(base_a, tone.accent, 0.12),
     };
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
 
@@ -1338,8 +1358,8 @@ pub(crate) fn draw_floor_tile(
     );
 
     // Variation douce et homogène, sans symboles ni traits marqués.
-    let soft_a = with_alpha(color_lerp(base_a, base_b, 0.66), 0.12);
-    let soft_b = with_alpha(color_lerp(base_b, base_a, 0.42), 0.10);
+    let soft_a = with_alpha(color_lerp(tone.accent, base_b, 0.72), 0.10);
+    let soft_b = with_alpha(color_lerp(base_b, tone.accent, 0.34), 0.08);
     draw_circle(
         rect.x + 8.0 + (h & 3) as f32,
         rect.y + 10.0 + ((h >> 2) & 3) as f32,
@@ -1399,6 +1419,20 @@ pub(crate) fn draw_floor_tile(
             );
         }
         _ => {}
+    }
+
+    if matches!(tile, Tile::FloorMetal) && variant <= 1 {
+        for stripe in 0..3 {
+            let sx = rect.x - 6.0 + stripe as f32 * 12.0 + (variant as f32 * 1.4);
+            draw_line(
+                sx,
+                rect.y + rect.h,
+                sx + 10.0,
+                rect.y + 2.0,
+                1.4,
+                with_alpha(palette.world.safety_amber, 0.16),
+            );
+        }
     }
 
     let grime_strength = 0.03 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 320.0);
@@ -1561,38 +1595,11 @@ pub(crate) fn draw_wall_tile(world: &World, x: i32, y: i32, tile: Tile, palette:
     let rect = World::tile_rect(x, y);
     let mask = wall_mask_4(world, x, y);
     let h = tile_hash(x, y);
-    let (wall_top, wall_mid, wall_dark, wall_outline) = match tile {
-        Tile::Wall => (
-            palette.wall_top,
-            palette.wall_mid,
-            palette.wall_dark,
-            palette.wall_outline,
-        ),
-        Tile::WallBrick => (
-            color_lerp(palette.prop_crate_light, palette.wall_top, 0.34),
-            color_lerp(palette.prop_crate_dark, palette.wall_mid, 0.42),
-            color_lerp(palette.prop_crate_dark, palette.wall_dark, 0.58),
-            color_lerp(palette.wall_outline, palette.prop_crate_dark, 0.32),
-        ),
-        Tile::WallSteel => (
-            color_lerp(palette.wall_top, palette.prop_pipe_highlight, 0.45),
-            color_lerp(palette.wall_mid, palette.prop_pipe, 0.36),
-            color_lerp(palette.wall_dark, palette.prop_pipe, 0.26),
-            color_lerp(palette.wall_outline, palette.prop_pipe_highlight, 0.15),
-        ),
-        Tile::WallNeon => (
-            color_lerp(rgba(120, 112, 168, 255), palette.wall_top, 0.25),
-            color_lerp(rgba(92, 84, 142, 255), palette.wall_mid, 0.25),
-            color_lerp(rgba(66, 58, 112, 255), palette.wall_dark, 0.22),
-            color_lerp(rgba(170, 228, 255, 255), palette.wall_outline, 0.35),
-        ),
-        _ => (
-            palette.wall_top,
-            palette.wall_mid,
-            palette.wall_dark,
-            palette.wall_outline,
-        ),
-    };
+    let tone = monde::wall_tones(tile, palette);
+    let wall_top = tone.top;
+    let wall_mid = tone.mid;
+    let wall_dark = tone.dark;
+    let wall_outline = tone.outline;
 
     for band in 0..4 {
         let t0 = band as f32 / 4.0;
@@ -1691,29 +1698,44 @@ pub(crate) fn draw_wall_tile(world: &World, x: i32, y: i32, tile: Tile, palette:
             rect.y + 6.0,
             rect.w - 10.0,
             3.0,
-            with_alpha(palette.prop_pipe_highlight, 0.22),
+            with_alpha(tone.glow, 0.24),
         );
         draw_rectangle(
             rect.x + 5.0,
             rect.y + 20.0,
             rect.w - 10.0,
             2.5,
-            with_alpha(palette.prop_pipe_highlight, 0.18),
+            with_alpha(tone.glow, 0.18),
         );
+        if h.is_multiple_of(3) {
+            draw_circle(rect.x + 8.0, rect.y + 8.0, 1.1, with_alpha(tone.glow, 0.34));
+            draw_circle(
+                rect.x + rect.w - 8.0,
+                rect.y + rect.h - 8.0,
+                1.1,
+                with_alpha(tone.glow, 0.26),
+            );
+        }
     } else if matches!(tile, Tile::WallNeon) {
         draw_rectangle(
             rect.x + 2.0,
             rect.y + 2.0,
             rect.w - 4.0,
             2.0,
-            with_alpha(rgba(136, 255, 236, 255), 0.48),
+            with_alpha(tone.glow, 0.52),
         );
         draw_rectangle(
             rect.x + 2.0,
             rect.y + rect.h - 4.0,
             rect.w - 4.0,
             2.0,
-            with_alpha(rgba(136, 255, 236, 255), 0.42),
+            with_alpha(tone.glow, 0.46),
+        );
+        draw_circle(
+            rect.x + rect.w * 0.5,
+            rect.y + rect.h * 0.5,
+            2.2,
+            with_alpha(tone.glow, 0.18),
         );
     }
 
@@ -2185,48 +2207,6 @@ pub(crate) fn draw_lighting_region(
     }
 }
 
-pub(crate) fn draw_ambient_dust(palette: &Palette, time: f32) {
-    let sw = screen_width();
-    let sh = screen_height();
-
-    for i in 0..18 {
-        let seed = i as f32;
-        let speed = 6.0 + seed * 0.23;
-        let x = ((seed * 74.0) + time * speed).rem_euclid(sw + 40.0) - 20.0;
-        let y = ((seed * 31.0) + (time * 0.6 + seed).sin() * 22.0 + sh * 0.45).rem_euclid(sh);
-        let alpha = 0.03 + ((time * 0.9 + seed).sin() * 0.5 + 0.5) * 0.03;
-        draw_circle(
-            x,
-            y,
-            1.0 + (i % 3) as f32 * 0.25,
-            with_alpha(palette.dust, alpha),
-        );
-    }
-}
-
-pub(crate) fn draw_vignette(palette: &Palette) {
-    let sw = screen_width();
-    let sh = screen_height();
-    let steps = 14;
-
-    for i in 0..steps {
-        let t = i as f32 / (steps - 1) as f32;
-        let inset = t * 42.0;
-        let w = sw - inset * 2.0;
-        let h = sh - inset * 2.0;
-        if w <= 0.0 || h <= 0.0 {
-            continue;
-        }
-
-        let alpha = 0.02 + t * t * 0.10;
-        let c = with_alpha(palette.vignette, alpha);
-        draw_rectangle(inset, inset, w, 2.0, c);
-        draw_rectangle(inset, inset + h - 2.0, w, 2.0, c);
-        draw_rectangle(inset, inset, 2.0, h, c);
-        draw_rectangle(inset + w - 2.0, inset, 2.0, h, c);
-    }
-}
-
 pub(crate) fn draw_auto_move_overlay(player: &Player) {
     if player.auto.path_world.is_empty() {
         return;
@@ -2297,561 +2277,6 @@ pub(crate) fn draw_editor_grid_region(bounds: (i32, i32, i32, i32)) {
             1.0,
             Color::from_rgba(110, 140, 165, 70),
         );
-    }
-}
-
-fn draw_menu_text_line(text: &str, x: f32, y: f32, size: f32, color: Color) {
-    draw_text_shadowed(
-        text,
-        x,
-        y,
-        size,
-        color,
-        ui_shadow_color_for_text(color),
-        ui_shadow_offset(size),
-    );
-}
-
-pub(crate) fn run_main_menu_frame(
-    map: &MapAsset,
-    palette: &Palette,
-    time: f32,
-    frame_dt: f32,
-    menu_state: &mut MainMenuState,
-) -> MainMenuAction {
-    tick_main_menu_status(menu_state, frame_dt);
-    clear_background(palette.bg_bottom);
-    begin_ui_pass();
-    if let Some(texture) = main_menu_background_texture().as_ref() {
-        draw_texture_ex(
-            texture,
-            0.0,
-            0.0,
-            WHITE,
-            DrawTextureParams {
-                dest_size: Some(vec2(screen_width(), screen_height())),
-                ..Default::default()
-            },
-        );
-        draw_rectangle(
-            0.0,
-            0.0,
-            screen_width(),
-            screen_height(),
-            Color::from_rgba(8, 14, 22, 52),
-        );
-    } else {
-        let bg_time = if menu_state.ambiance_motion {
-            time * 0.58
-        } else {
-            0.0
-        };
-        draw_background(palette, bg_time);
-        let (menu_camera, menu_view_rect) = fit_world_camera_to_screen(&map.world, 34.0);
-        let visible_bounds = tile_bounds_from_camera(&map.world, &menu_camera, menu_view_rect, 2);
-        set_camera(&menu_camera);
-        draw_floor_layer_region(&map.world, palette, visible_bounds);
-        draw_exterior_ground_ambiance_region(&map.world, palette, time, visible_bounds);
-        draw_wall_cast_shadows_region(&map.world, palette, visible_bounds);
-        draw_wall_layer_region(&map.world, palette, visible_bounds);
-        draw_exterior_trees_region(&map.world, palette, time, visible_bounds);
-        draw_prop_shadows_region(&map.props, palette, time, visible_bounds);
-        draw_props_region(&map.props, palette, time, visible_bounds);
-        draw_lighting_region(&map.props, palette, time, visible_bounds);
-        begin_ui_pass();
-        draw_rectangle(
-            0.0,
-            0.0,
-            screen_width(),
-            screen_height(),
-            Color::from_rgba(8, 14, 22, 44),
-        );
-    }
-
-    let sw = screen_width();
-    let sh = screen_height();
-    let mouse = vec2(mouse_position().0, mouse_position().1);
-    let left_click = is_mouse_button_pressed(MouseButton::Left);
-    let wheel_y = mouse_wheel().1;
-    let has_save = !menu_state.saves.is_empty();
-
-    draw_rectangle(
-        0.0,
-        sh * 0.84,
-        sw,
-        sh * 0.16,
-        Color::from_rgba(8, 14, 22, 40),
-    );
-
-    let button_w = (sw * 0.28).clamp(300.0, 420.0);
-    let button_h = (sh * 0.07).clamp(48.0, 62.0);
-    let button_gap = (button_h * 0.22).clamp(10.0, 14.0);
-    let button_count = 6.0;
-    let stack_h = button_h * button_count + button_gap * (button_count - 1.0);
-    let start_y = (sh * 0.52 - stack_h * 0.5).max(sh * 0.24);
-    let bx = sw * 0.5 - button_w * 0.5;
-    let new_game_rect = Rect::new(bx, start_y, button_w, button_h);
-    let continue_rect = Rect::new(
-        bx,
-        new_game_rect.y + button_h + button_gap,
-        button_w,
-        button_h,
-    );
-    let load_rect = Rect::new(
-        bx,
-        continue_rect.y + button_h + button_gap,
-        button_w,
-        button_h,
-    );
-    let editor_rect = Rect::new(bx, load_rect.y + button_h + button_gap, button_w, button_h);
-    let options_rect = Rect::new(
-        bx,
-        editor_rect.y + button_h + button_gap,
-        button_w,
-        button_h,
-    );
-    let quit_rect = Rect::new(
-        bx,
-        options_rect.y + button_h + button_gap,
-        button_w,
-        button_h,
-    );
-
-    if draw_ui_button_sized(
-        new_game_rect,
-        "Nouvelle partie",
-        mouse,
-        left_click,
-        false,
-        21.0,
-    ) || is_key_pressed(KeyCode::N)
-    {
-        return MainMenuAction::StartNewGame;
-    }
-
-    let continue_clicked = draw_ui_button_sized(
-        continue_rect,
-        "Continuer partie",
-        mouse,
-        left_click,
-        false,
-        21.0,
-    );
-    if !has_save {
-        draw_rectangle(
-            continue_rect.x,
-            continue_rect.y,
-            continue_rect.w,
-            continue_rect.h,
-            Color::from_rgba(10, 12, 16, 186),
-        );
-        let no_save_text = "Aucune sauvegarde";
-        let no_save_dims = measure_text(no_save_text, None, 15, 1.0);
-        draw_menu_text_line(
-            no_save_text,
-            continue_rect.x + continue_rect.w * 0.5 - no_save_dims.width * 0.5,
-            continue_rect.y + continue_rect.h * 0.5 + 5.0,
-            15.0,
-            Color::from_rgba(164, 178, 192, 245),
-        );
-    }
-    if (continue_clicked || is_key_pressed(KeyCode::Enter))
-        && menu_state.view == MainMenuView::Principal
-    {
-        if !has_save {
-            refresh_main_menu_saves(menu_state);
-            if menu_state.saves.is_empty() {
-                set_main_menu_status(menu_state, "Aucune sauvegarde disponible.");
-            } else if let Some(slot) = menu_state.saves.first() {
-                return MainMenuAction::StartFromSave(slot.file_name.clone());
-            }
-        } else if let Some(slot) = menu_state.saves.first() {
-            return MainMenuAction::StartFromSave(slot.file_name.clone());
-        }
-    }
-
-    if draw_ui_button_sized(
-        load_rect,
-        "Charger",
-        mouse,
-        left_click,
-        menu_state.view == MainMenuView::Charger,
-        21.0,
-    ) {
-        menu_state.view = MainMenuView::Charger;
-        refresh_main_menu_saves(menu_state);
-    }
-    if draw_ui_button_sized(editor_rect, "Editeur", mouse, left_click, false, 21.0)
-        || is_key_pressed(KeyCode::E)
-    {
-        return MainMenuAction::OpenEditor;
-    }
-    if draw_ui_button_sized(
-        options_rect,
-        "Options",
-        mouse,
-        left_click,
-        menu_state.view == MainMenuView::Options,
-        21.0,
-    ) {
-        menu_state.view = MainMenuView::Options;
-    }
-    if draw_ui_button_sized(quit_rect, "Quitter", mouse, left_click, false, 21.0)
-        || is_key_pressed(KeyCode::Q)
-    {
-        return MainMenuAction::Quit;
-    }
-
-    match menu_state.view {
-        MainMenuView::Principal => {
-            let info_text = if let Some(slot) = menu_state.saves.first() {
-                format!(
-                    "Derniere sauvegarde: {} ({})",
-                    slot.save_name, slot.saved_at_label
-                )
-            } else {
-                "Aucune sauvegarde detectee.".to_string()
-            };
-            let info_dims = measure_text(&info_text, None, 21, 1.0);
-            draw_menu_text_line(
-                &info_text,
-                sw * 0.5 - info_dims.width * 0.5,
-                quit_rect.y + button_h + 36.0,
-                21.0,
-                Color::from_rgba(198, 222, 236, 255),
-            );
-        }
-        MainMenuView::Charger => {
-            let popup_w = (sw * 0.56).clamp(560.0, 860.0);
-            let popup_h = (sh * 0.36).clamp(260.0, 340.0);
-            let popup_rect = Rect::new(
-                sw * 0.5 - popup_w * 0.5,
-                quit_rect.y + button_h + 20.0,
-                popup_w,
-                popup_h,
-            );
-            draw_rectangle(
-                popup_rect.x,
-                popup_rect.y,
-                popup_rect.w,
-                popup_rect.h,
-                Color::from_rgba(8, 18, 28, 210),
-            );
-            draw_rectangle_lines(
-                popup_rect.x + 0.5,
-                popup_rect.y + 0.5,
-                popup_rect.w - 1.0,
-                popup_rect.h - 1.0,
-                1.4,
-                Color::from_rgba(96, 150, 180, 208),
-            );
-            draw_menu_text_line(
-                "Charger",
-                popup_rect.x + 14.0,
-                popup_rect.y + 24.0,
-                24.0,
-                Color::from_rgba(236, 248, 255, 255),
-            );
-
-            let action_y = popup_rect.y + 36.0;
-            let action_w = ((popup_rect.w - 54.0) / 3.0).max(140.0);
-            let play_rect = Rect::new(popup_rect.x + 14.0, action_y, action_w, 34.0);
-            let refresh_rect =
-                Rect::new(play_rect.x + play_rect.w + 10.0, action_y, action_w, 34.0);
-            let close_rect = Rect::new(
-                refresh_rect.x + refresh_rect.w + 10.0,
-                action_y,
-                action_w,
-                34.0,
-            );
-            if draw_ui_button_sized(
-                play_rect,
-                "Charger selection",
-                mouse,
-                left_click,
-                false,
-                15.0,
-            ) || is_key_pressed(KeyCode::Space)
-            {
-                if let Some(selected) = menu_state.selected_save
-                    && let Some(slot) = menu_state.saves.get(selected)
-                {
-                    return MainMenuAction::StartFromSave(slot.file_name.clone());
-                }
-                set_main_menu_status(menu_state, "Selectionne une sauvegarde.");
-            }
-            if draw_ui_button_sized(refresh_rect, "Rafraichir", mouse, left_click, false, 15.0) {
-                refresh_main_menu_saves(menu_state);
-            }
-            if draw_ui_button_sized(close_rect, "Fermer", mouse, left_click, false, 15.0) {
-                menu_state.view = MainMenuView::Principal;
-            }
-
-            let list_rect = Rect::new(
-                popup_rect.x + 14.0,
-                action_y + 48.0,
-                popup_rect.w - 28.0,
-                popup_rect.h - 58.0,
-            );
-            draw_rectangle(
-                list_rect.x,
-                list_rect.y,
-                list_rect.w,
-                list_rect.h,
-                Color::from_rgba(14, 26, 38, 222),
-            );
-            draw_rectangle_lines(
-                list_rect.x + 0.5,
-                list_rect.y + 0.5,
-                list_rect.w - 1.0,
-                list_rect.h - 1.0,
-                1.2,
-                Color::from_rgba(94, 138, 166, 210),
-            );
-
-            let row_h = 40.0;
-            let visible_rows = ((list_rect.h - 8.0) / row_h).floor().max(1.0) as usize;
-            let max_offset = menu_state.saves.len().saturating_sub(visible_rows);
-            menu_state.saves_offset = menu_state.saves_offset.min(max_offset);
-
-            if point_in_rect(mouse, list_rect) && wheel_y.abs() > f32::EPSILON {
-                if wheel_y > 0.0 {
-                    menu_state.saves_offset = menu_state.saves_offset.saturating_sub(1);
-                } else {
-                    menu_state.saves_offset = (menu_state.saves_offset + 1).min(max_offset);
-                }
-            }
-
-            if menu_state.saves.is_empty() {
-                draw_menu_text_line(
-                    "Aucune sauvegarde trouvee dans saves/",
-                    list_rect.x + 10.0,
-                    list_rect.y + 24.0,
-                    16.0,
-                    Color::from_rgba(178, 206, 224, 255),
-                );
-            } else {
-                let start = menu_state.saves_offset;
-                let end = (start + visible_rows).min(menu_state.saves.len());
-                let mut row_y = list_rect.y + 4.0;
-                for idx in start..end {
-                    let slot = &menu_state.saves[idx];
-                    let row_rect =
-                        Rect::new(list_rect.x + 4.0, row_y, list_rect.w - 8.0, row_h - 2.0);
-                    let hovered = point_in_rect(mouse, row_rect);
-                    let selected = menu_state.selected_save == Some(idx);
-                    let fill = if selected {
-                        Color::from_rgba(74, 120, 150, 230)
-                    } else if hovered {
-                        Color::from_rgba(52, 84, 108, 222)
-                    } else {
-                        Color::from_rgba(28, 46, 62, 214)
-                    };
-                    draw_rectangle(row_rect.x, row_rect.y, row_rect.w, row_rect.h, fill);
-                    draw_rectangle_lines(
-                        row_rect.x + 0.5,
-                        row_rect.y + 0.5,
-                        row_rect.w - 1.0,
-                        row_rect.h - 1.0,
-                        1.0,
-                        if selected {
-                            Color::from_rgba(220, 240, 252, 242)
-                        } else {
-                            Color::from_rgba(106, 154, 182, 196)
-                        },
-                    );
-                    draw_menu_text_line(
-                        &slot.save_name,
-                        row_rect.x + 8.0,
-                        row_rect.y + 18.0,
-                        15.0,
-                        Color::from_rgba(236, 246, 255, 255),
-                    );
-                    draw_menu_text_line(
-                        &slot.saved_at_label,
-                        row_rect.x + 8.0,
-                        row_rect.y + 33.0,
-                        12.0,
-                        Color::from_rgba(192, 220, 238, 245),
-                    );
-                    if hovered && left_click {
-                        menu_state.selected_save = Some(idx);
-                    }
-                    row_y += row_h;
-                }
-            }
-
-            if is_key_pressed(KeyCode::Up)
-                && let Some(selected) = menu_state.selected_save
-            {
-                menu_state.selected_save = Some(selected.saturating_sub(1));
-            }
-            if is_key_pressed(KeyCode::Down) {
-                if let Some(selected) = menu_state.selected_save {
-                    let max_index = menu_state.saves.len().saturating_sub(1);
-                    menu_state.selected_save = Some((selected + 1).min(max_index));
-                } else if !menu_state.saves.is_empty() {
-                    menu_state.selected_save = Some(0);
-                }
-            }
-            if is_key_pressed(KeyCode::Enter)
-                && let Some(selected) = menu_state.selected_save
-                && let Some(slot) = menu_state.saves.get(selected)
-            {
-                return MainMenuAction::StartFromSave(slot.file_name.clone());
-            }
-        }
-        MainMenuView::Options => {
-            let popup_w = (sw * 0.48).clamp(500.0, 700.0);
-            let popup_h = (sh * 0.24).clamp(190.0, 240.0);
-            let popup_rect = Rect::new(
-                sw * 0.5 - popup_w * 0.5,
-                quit_rect.y + button_h + 24.0,
-                popup_w,
-                popup_h,
-            );
-            draw_rectangle(
-                popup_rect.x,
-                popup_rect.y,
-                popup_rect.w,
-                popup_rect.h,
-                Color::from_rgba(8, 18, 28, 208),
-            );
-            draw_rectangle_lines(
-                popup_rect.x + 0.5,
-                popup_rect.y + 0.5,
-                popup_rect.w - 1.0,
-                popup_rect.h - 1.0,
-                1.4,
-                Color::from_rgba(96, 150, 180, 208),
-            );
-            draw_menu_text_line(
-                "Options",
-                popup_rect.x + 14.0,
-                popup_rect.y + 24.0,
-                24.0,
-                Color::from_rgba(236, 248, 255, 255),
-            );
-
-            let opt_line_h = 48.0;
-            let start_y = popup_rect.y + 38.0;
-            let opt1_rect = Rect::new(popup_rect.x + 14.0, start_y, popup_rect.w - 28.0, 38.0);
-            let opt2_rect = Rect::new(
-                popup_rect.x + 14.0,
-                start_y + opt_line_h,
-                popup_rect.w - 28.0,
-                38.0,
-            );
-            if draw_ui_button_sized(
-                opt1_rect,
-                &format!(
-                    "Afficher FPS menu: {}",
-                    if menu_state.show_fps { "ON" } else { "OFF" }
-                ),
-                mouse,
-                left_click,
-                menu_state.show_fps,
-                15.0,
-            ) {
-                menu_state.show_fps = !menu_state.show_fps;
-            }
-            if draw_ui_button_sized(
-                opt2_rect,
-                &format!(
-                    "Ambiance animee: {}",
-                    if menu_state.ambiance_motion {
-                        "ON"
-                    } else {
-                        "OFF"
-                    }
-                ),
-                mouse,
-                left_click,
-                menu_state.ambiance_motion,
-                15.0,
-            ) {
-                menu_state.ambiance_motion = !menu_state.ambiance_motion;
-            }
-            let close_rect = Rect::new(
-                popup_rect.x + popup_rect.w - 154.0,
-                popup_rect.y + popup_rect.h - 44.0,
-                140.0,
-                30.0,
-            );
-            if draw_ui_button_sized(close_rect, "Fermer", mouse, left_click, false, 14.0) {
-                menu_state.view = MainMenuView::Principal;
-            }
-        }
-    }
-
-    if is_key_pressed(KeyCode::Escape) && menu_state.view != MainMenuView::Principal {
-        menu_state.view = MainMenuView::Principal;
-    }
-
-    if let Some(warn) = menu_state.saves_warning.as_deref() {
-        draw_menu_text_line(
-            warn,
-            sw * 0.5 - (sw * 0.32),
-            sh - 18.0,
-            14.0,
-            Color::from_rgba(244, 214, 146, 255),
-        );
-    }
-    if let Some(status) = menu_state.status_text.as_deref()
-        && menu_state.status_timer > 0.0
-    {
-        let status_dims = measure_text(status, None, 16, 1.0);
-        draw_menu_text_line(
-            status,
-            sw * 0.5 - status_dims.width * 0.5,
-            sh - 38.0,
-            16.0,
-            Color::from_rgba(244, 214, 146, 255),
-        );
-    }
-
-    if menu_state.show_fps {
-        draw_menu_text_line(
-            &format!("FPS {}", get_fps()),
-            sw - 112.0,
-            24.0,
-            16.0,
-            Color::from_rgba(196, 228, 242, 255),
-        );
-    }
-
-    MainMenuAction::None
-}
-
-pub(crate) fn sim_zone_overlay_color(zone: sim::ZoneKind) -> Option<Color> {
-    match zone {
-        sim::ZoneKind::Neutral => None,
-        sim::ZoneKind::Receiving => Some(Color::from_rgba(70, 126, 236, 66)),
-        sim::ZoneKind::Processing => Some(Color::from_rgba(232, 122, 52, 68)),
-        sim::ZoneKind::Shipping => Some(Color::from_rgba(86, 188, 132, 66)),
-        sim::ZoneKind::Support => Some(Color::from_rgba(220, 146, 84, 62)),
-    }
-}
-
-pub(crate) fn sim_block_overlay_color(kind: sim::BlockKind) -> Color {
-    match kind {
-        sim::BlockKind::InputHopper => Color::from_rgba(170, 188, 204, 255),
-        sim::BlockKind::Conveyor => Color::from_rgba(58, 142, 238, 255),
-        sim::BlockKind::FluidityTank => Color::from_rgba(70, 154, 198, 255),
-        sim::BlockKind::Cutter => Color::from_rgba(164, 176, 196, 255),
-        sim::BlockKind::DistributorBelt => Color::from_rgba(64, 140, 232, 255),
-        sim::BlockKind::DryerOven => Color::from_rgba(204, 150, 120, 255),
-        sim::BlockKind::OvenExitConveyor => Color::from_rgba(80, 132, 204, 255),
-        sim::BlockKind::Flaker => Color::from_rgba(196, 170, 132, 255),
-        sim::BlockKind::SuctionPipe => Color::from_rgba(154, 170, 188, 255),
-        sim::BlockKind::Sortex => Color::from_rgba(114, 194, 148, 255),
-        sim::BlockKind::BlueBagChute => Color::from_rgba(98, 162, 236, 255),
-        sim::BlockKind::RedBagChute => Color::from_rgba(234, 124, 108, 255),
-        sim::BlockKind::Storage => Color::from_rgba(94, 160, 230, 255),
-        sim::BlockKind::MachineA => Color::from_rgba(190, 204, 220, 255),
-        sim::BlockKind::MachineB => Color::from_rgba(170, 188, 210, 255),
-        sim::BlockKind::Buffer => Color::from_rgba(142, 122, 208, 255),
-        sim::BlockKind::Seller => Color::from_rgba(94, 196, 124, 255),
     }
 }
 
@@ -4705,13 +4130,16 @@ fn draw_modern_block_visual(
             );
         }
         sim::BlockKind::Conveyor => {
+            let base = production::sim_block_overlay_color(sim::BlockKind::Conveyor);
+            let glow = theme::mix_color(base, theme::world_theme().prop_pipe_highlight, 0.42);
+            let shine = theme::mix_color(glow, theme::world_theme().lamp_hot, 0.18);
             draw_belt_motion(
                 rect,
                 block.orientation,
                 time * if line_active { 1.0 } else { 0.0 },
-                Color::from_rgba(26, 108, 220, 252),
-                Color::from_rgba(110, 198, 255, 238),
-                Color::from_rgba(176, 220, 250, 198),
+                base,
+                glow,
+                with_alpha(shine, 0.78),
             );
             draw_belt_payload(
                 rect_inset(rect, rect.w.min(rect.h) * 0.18),
@@ -4751,13 +4179,18 @@ fn draw_modern_block_visual(
             }
         }
         sim::BlockKind::OvenExitConveyor => {
+            let base = production::sim_block_overlay_color(sim::BlockKind::OvenExitConveyor);
+            let glow = theme::mix_color(base, theme::world_theme().prop_pipe_highlight, 0.36);
             draw_belt_motion(
                 rect,
                 block.orientation,
                 time * if four || floc || sortex { 1.0 } else { 0.0 },
-                Color::from_rgba(38, 120, 220, 232),
-                Color::from_rgba(122, 201, 255, 224),
-                Color::from_rgba(206, 232, 250, 192),
+                base,
+                glow,
+                with_alpha(
+                    theme::mix_color(glow, theme::world_theme().lamp_hot, 0.16),
+                    0.74,
+                ),
             );
             draw_belt_payload(
                 rect_inset(rect, rect.w.min(rect.h) * 0.18),
@@ -4811,12 +4244,14 @@ fn draw_modern_block_visual(
             time,
         ),
         sim::BlockKind::Storage => {
+            let base = production::sim_block_overlay_color(sim::BlockKind::Storage);
+            let world = theme::world_theme();
             draw_rectangle(
                 rect.x,
                 rect.y,
                 rect.w,
                 rect.h,
-                Color::from_rgba(60, 92, 128, 224),
+                with_alpha(theme::mix_color(world.steel_deep, base, 0.58), 0.88),
             );
             draw_rectangle_lines(
                 rect.x + 0.5,
@@ -4824,16 +4259,24 @@ fn draw_modern_block_visual(
                 rect.w - 1.0,
                 rect.h - 1.0,
                 1.2,
-                Color::from_rgba(184, 214, 236, 190),
+                with_alpha(
+                    theme::mix_color(base, world.prop_pipe_highlight, 0.42),
+                    0.78,
+                ),
             );
         }
         sim::BlockKind::MachineA => {
             let activity = (time * 1.2 + block.id as f32 * 0.11).sin() * 0.5 + 0.5;
+            let base = production::sim_block_overlay_color(sim::BlockKind::MachineA);
+            let world = theme::world_theme();
             draw_machine_cluster_visual(
                 rect,
-                Color::from_rgba(213, 227, 238, 228),
-                Color::from_rgba(238, 248, 253, 205),
-                Color::from_rgba(158, 182, 204, 214),
+                with_alpha(
+                    theme::mix_color(base, world.prop_pipe_highlight, 0.26),
+                    0.88,
+                ),
+                with_alpha(theme::mix_color(base, world.lamp_hot, 0.20), 0.72),
+                with_alpha(theme::mix_color(base, world.steel_cool, 0.36), 0.84),
                 activity,
                 2.4,
                 time,
@@ -4841,11 +4284,16 @@ fn draw_modern_block_visual(
         }
         sim::BlockKind::MachineB => {
             let activity = (time * 1.6 + block.id as f32 * 0.17).sin() * 0.5 + 0.5;
+            let base = production::sim_block_overlay_color(sim::BlockKind::MachineB);
+            let world = theme::world_theme();
             draw_machine_cluster_visual(
                 rect,
-                Color::from_rgba(198, 214, 228, 228),
-                Color::from_rgba(232, 242, 248, 198),
-                Color::from_rgba(148, 172, 198, 214),
+                with_alpha(
+                    theme::mix_color(base, world.prop_pipe_highlight, 0.18),
+                    0.86,
+                ),
+                with_alpha(theme::mix_color(base, world.steel_cool, 0.24), 0.70),
+                with_alpha(theme::mix_color(base, world.wall_top, 0.26), 0.82),
                 activity,
                 2.9,
                 time,
@@ -4866,7 +4314,7 @@ pub(crate) fn draw_sim_zone_overlay_region(sim: &sim::FactorySim, bounds: (i32, 
     }
     for y in bounds.2..=bounds.3 {
         for x in bounds.0..=bounds.1 {
-            if let Some(color) = sim_zone_overlay_color(sim.zone_kind_at_tile((x, y))) {
+            if let Some(color) = production::sim_zone_overlay_color(sim.zone_kind_at_tile((x, y))) {
                 let tile = World::tile_rect(x, y);
                 draw_rectangle(tile.x, tile.y, tile.w, tile.h, color);
             }
@@ -4894,7 +4342,7 @@ pub(crate) fn draw_sim_blocks_overlay(
             continue;
         }
         let rect = sim_block_rect(block.tile, block.footprint);
-        let color = sim_block_overlay_color(block.kind);
+        let color = production::sim_block_overlay_color(block.kind);
         draw_modern_block_visual(block, rect, sim, &blocks, time, modern_ready);
         draw_rectangle_lines(
             rect.x + 1.5,

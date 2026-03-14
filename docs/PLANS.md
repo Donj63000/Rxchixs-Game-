@@ -682,3 +682,53 @@ Portee: diagnostic et correction des artefacts d'affichage texte entre jeu + edi
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
   - `cargo run` smoke.
+
+# ExecPlan - Upgrade visuel procedural des personnages
+
+Date: 2026-03-11
+Portee: finaliser l'upgrade procedural/vectoriel des personnages avec modes monde/portrait explicites, sans toucher aux donnees ADN, aux saves ni au determinisme.
+
+## Objectifs observables
+- Renforcer nettement la lisibilite monde a petite taille via silhouettes, contraste, ombre et animation.
+- Garder des portraits UI plus propres et plus detailles que le rendu monde.
+- Extraire le rendu bas niveau dans `src/character/rendu_personnage.rs` tout en conservant `draw_character(...)` comme facade publique.
+- Mettre a jour tous les call sites pour passer explicitement le mode de presentation.
+
+## Invariants
+- `CharacterCatalog`, `CharacterRecord`, `CharacterVisual` et le catalogue RON restent inchanges.
+- Aucun impact sur la simulation, les saves ou le determinisme des seeds.
+- Aucun ajout d'allocation dans le draw path.
+- Le rendu monde privilegie toujours silhouette + contraste sur la richesse de detail.
+
+## Milestones
+1. Nettoyer `src/character.rs` pour ne garder que la facade publique et la logique catalog/determinisme.
+2. Garder `src/character/rendu_personnage.rs` comme source unique du rendu couche par couche (ombre, jambes, torse, bras, tete, cheveux, accessoires, finitions).
+3. Migrer tous les call sites monde/UI vers `CharacterPresentation::{World, Portrait}`.
+4. Verrouiller les helpers visuels via des tests purs sur contraste, silhouettes et amplitudes d'animation.
+5. Executer `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`, puis `cargo run` smoke.
+
+## Fichiers impactes
+- `docs/PLANS.md`
+- `src/character.rs`
+- `src/character/rendu_personnage.rs`
+- `src/modes.rs`
+- `src/rendu.rs`
+- `src/ui_hud.rs`
+- `src/ui_pawns.rs`
+
+## Risques
+- Oublier un call site et melanger monde/portrait.
+- Laisser du code de rendu duplique entre `character.rs` et `rendu_personnage.rs`.
+- Introduire un tuning visuel trop riche en monde au detriment de la lecture a 32 px.
+
+## Strategie de test
+- Tests unitaires purs dans `src/character/rendu_personnage.rs`:
+  - contraste monde > portrait;
+  - hierarchie des silhouettes par `BodyType`;
+  - accents tenues distincts par `OutfitStyle`;
+  - animation bornee et deterministe.
+- Validation outillage complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke.
