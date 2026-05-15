@@ -50,8 +50,9 @@ use utilitaires::*;
 const TILE_SIZE: f32 = 32.0;
 const MAP_W: i32 = 168;
 const MAP_H: i32 = 108;
-const WINDOW_W: i32 = 1600;
-const WINDOW_H: i32 = 900;
+const MAX_MAP_TILES: usize = 512 * 512;
+const WINDOW_W: i32 = 1536;
+const WINDOW_H: i32 = 864;
 const FIXED_DT: f32 = 1.0 / 60.0;
 const DIRECTION_HYSTERESIS: f32 = 0.18;
 const WALK_CYCLE_SPEED: f32 = 9.0;
@@ -72,8 +73,23 @@ const SAVE_SCHEMA_VERSION: u32 = 1;
 const MAP_SCHEMA_VERSION: u32 = 2;
 const SIM_CONFIG_PATH: &str = "data/starter_sim.ron";
 const PAPA_PLAN_PATH: &str = "data/papa/plan_ligne.ron";
-const FLOOR_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol1.png", "Textures/sol1.png"];
-const FLOOR_METAL_TEXTURE_CANDIDATES: [&str; 2] = ["textures/sol2.png", "Textures/sol2.png"];
+const FLOOR_TEXTURE_CANDIDATES: [&str; 5] = [
+    "textures/herbe_sol.png",
+    "textures/model/grass_tile_0.png",
+    "textures/model/grass_tile_1.png",
+    "textures/sol1.png",
+    "Textures/sol1.png",
+];
+const FLOOR_METAL_TEXTURE_CANDIDATES: [&str; 3] = [
+    "textures/model/concrete_grid_tile.png",
+    "textures/sol2.png",
+    "Textures/sol2.png",
+];
+const FLOOR_WOOD_TEXTURE_CANDIDATES: [&str; 1] = ["textures/model/wood_parquet_tile.png"];
+const WALL_STONE_TEXTURE_CANDIDATES: [&str; 1] = ["textures/model/stone_wall_tile.png"];
+const TREE_OAK_TEXTURE_CANDIDATES: [&str; 1] = ["textures/model/tree_oak.png"];
+const TREE_POPLAR_TEXTURE_CANDIDATES: [&str; 1] = ["textures/model/tree_poplar.png"];
+const TREE_PINE_TEXTURE_CANDIDATES: [&str; 1] = ["textures/model/tree_pine.png"];
 const POT_DE_FLEUR_TEXTURE_CANDIDATES: [&str; 2] =
     ["textures/pot-fleur.png", "Textures/pot-fleur.png"];
 const INITIAL_RAW_MATERIAL_TEXTURE_CANDIDATES: [&str; 2] =
@@ -134,6 +150,7 @@ fn window_conf() -> Conf {
         window_title: "Rxchixs - Prototype visuel".to_string(),
         window_width: WINDOW_W,
         window_height: WINDOW_H,
+        high_dpi: true,
         window_resizable: true,
         ..Default::default()
     }
@@ -320,6 +337,26 @@ async fn load_floor_tile_texture() -> Option<Texture2D> {
 
 async fn load_floor_metal_tile_texture() -> Option<Texture2D> {
     load_first_available_texture(&FLOOR_METAL_TEXTURE_CANDIDATES).await
+}
+
+async fn load_floor_wood_tile_texture() -> Option<Texture2D> {
+    load_first_available_texture(&FLOOR_WOOD_TEXTURE_CANDIDATES).await
+}
+
+async fn load_wall_stone_texture() -> Option<Texture2D> {
+    load_first_available_texture(&WALL_STONE_TEXTURE_CANDIDATES).await
+}
+
+async fn load_tree_oak_texture() -> Option<Texture2D> {
+    load_first_available_texture(&TREE_OAK_TEXTURE_CANDIDATES).await
+}
+
+async fn load_tree_poplar_texture() -> Option<Texture2D> {
+    load_first_available_texture(&TREE_POPLAR_TEXTURE_CANDIDATES).await
+}
+
+async fn load_tree_pine_texture() -> Option<Texture2D> {
+    load_first_available_texture(&TREE_PINE_TEXTURE_CANDIDATES).await
 }
 
 async fn load_pot_de_fleur_texture() -> Option<Texture2D> {
@@ -592,6 +629,17 @@ fn refresh_main_menu_saves(menu: &mut MainMenuState) {
     }
 }
 
+fn parse_bool_env_flag(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "oui" | "on"
+    )
+}
+
+fn should_autostart_play_from_env() -> bool {
+    std::env::var("RXCHIXS_AUTOSTART_PLAY").is_ok_and(|value| parse_bool_env_flag(&value))
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct MapAsset {
     #[serde(default = "default_map_schema_version")]
@@ -800,6 +848,11 @@ async fn main() {
     prewarm_default_font_cache_ui();
     let floor_texture = load_floor_tile_texture().await;
     let floor_metal_texture = load_floor_metal_tile_texture().await;
+    let floor_wood_texture = load_floor_wood_tile_texture().await;
+    let wall_stone_texture = load_wall_stone_texture().await;
+    let tree_oak_texture = load_tree_oak_texture().await;
+    let tree_poplar_texture = load_tree_poplar_texture().await;
+    let tree_pine_texture = load_tree_pine_texture().await;
     let pot_de_fleur_texture = load_pot_de_fleur_texture().await;
     let initial_raw_material_texture = load_initial_raw_material_texture().await;
     let broken_garlic_crate_texture = load_broken_garlic_crate_texture().await;
@@ -813,14 +866,24 @@ async fn main() {
     let lavabo_texture = load_lavabo_texture().await;
     let main_menu_background_texture = load_main_menu_background_texture().await;
     if floor_texture.is_some() {
-        eprintln!("Texture sol chargee: textures/sol1.png");
+        eprintln!("Texture sol exterieur chargee.");
     } else {
         eprintln!("Texture sol1 introuvable, procedurale active.");
     }
     if floor_metal_texture.is_some() {
-        eprintln!("Texture sol chargee: textures/sol2.png");
+        eprintln!("Texture sol interieur chargee.");
     } else {
-        eprintln!("Texture sol2 introuvable, procedurale active.");
+        eprintln!("Texture sol interieur introuvable, procedurale active.");
+    }
+    if floor_wood_texture.is_some()
+        && wall_stone_texture.is_some()
+        && tree_oak_texture.is_some()
+        && tree_poplar_texture.is_some()
+        && tree_pine_texture.is_some()
+    {
+        eprintln!("Pack visuel modele charge: textures/model/");
+    } else {
+        eprintln!("Pack visuel modele incomplet, fallbacks proceduraux actifs.");
     }
     if pot_de_fleur_texture.is_some() {
         eprintln!("Texture prop chargee: textures/pot-fleur.png");
@@ -865,6 +928,13 @@ async fn main() {
         eprintln!("Fond menu introuvable (fond1.png), fallback procedural actif.");
     }
     set_floor_tile_textures(floor_texture, floor_metal_texture);
+    set_model_world_textures(
+        floor_wood_texture,
+        wall_stone_texture,
+        tree_oak_texture,
+        tree_poplar_texture,
+        tree_pine_texture,
+    );
     set_pot_de_fleur_texture(pot_de_fleur_texture);
     set_storage_raw_texture(initial_raw_material_texture.clone());
     set_initial_raw_material_texture(initial_raw_material_texture);
@@ -879,8 +949,15 @@ async fn main() {
     set_lavabo_texture(lavabo_texture);
     set_main_menu_background_texture(main_menu_background_texture);
 
-    let mut map = match load_map_asset(MAP_FILE_PATH) {
-        Ok(loaded) => loaded,
+    let mut map = match load_map_asset_with_report(MAP_FILE_PATH) {
+        Ok((loaded, report)) => {
+            if report.changed
+                && let Err(err) = save_map_asset(MAP_FILE_PATH, &loaded)
+            {
+                eprintln!("Impossible de sauvegarder la carte migree ({MAP_FILE_PATH}): {err}");
+            }
+            loaded
+        }
         Err(_) => {
             let default_map = MapAsset::new_default();
             if let Err(err) = save_map_asset(MAP_FILE_PATH, &default_map) {
@@ -889,13 +966,7 @@ async fn main() {
             default_map
         }
     };
-    let loaded_version = map.version;
     sanitize_map_asset(&mut map);
-    if map.version != loaded_version
-        && let Err(err) = save_map_asset(MAP_FILE_PATH, &map)
-    {
-        eprintln!("Impossible de sauvegarder la carte migree ({MAP_FILE_PATH}): {err}");
-    }
 
     let character_catalog =
         CharacterCatalog::load_default().expect("default character catalog should be valid");
@@ -904,7 +975,11 @@ async fn main() {
     let mut editor_state = EditorState::new();
     let mut main_menu_state = MainMenuState::new();
     refresh_main_menu_saves(&mut main_menu_state);
-    let mut mode = AppMode::MainMenu;
+    let mut mode = if should_autostart_play_from_env() {
+        AppMode::Playing
+    } else {
+        AppMode::MainMenu
+    };
     let mut accumulator = 0.0;
     let mut is_fullscreen_mode = false;
 
@@ -1054,13 +1129,47 @@ mod tests {
     }
 
     #[test]
+    fn bool_env_flag_parser_accepts_only_explicit_truthy_values() {
+        assert!(parse_bool_env_flag("1"));
+        assert!(parse_bool_env_flag(" true "));
+        assert!(parse_bool_env_flag("OUI"));
+        assert!(parse_bool_env_flag("yes"));
+        assert!(parse_bool_env_flag("on"));
+        assert!(!parse_bool_env_flag(""));
+        assert!(!parse_bool_env_flag("0"));
+        assert!(!parse_bool_env_flag("false"));
+        assert!(!parse_bool_env_flag("non"));
+    }
+
+    #[test]
     fn floor_texture_candidates_are_stable_and_cover_expected_paths() {
-        assert_eq!(FLOOR_TEXTURE_CANDIDATES.len(), 2);
+        assert_eq!(FLOOR_TEXTURE_CANDIDATES.len(), 5);
+        assert!(FLOOR_TEXTURE_CANDIDATES.contains(&"textures/herbe_sol.png"));
+        assert!(FLOOR_TEXTURE_CANDIDATES.contains(&"textures/model/grass_tile_0.png"));
+        assert!(FLOOR_TEXTURE_CANDIDATES.contains(&"textures/model/grass_tile_1.png"));
         assert!(FLOOR_TEXTURE_CANDIDATES.contains(&"textures/sol1.png"));
         assert!(FLOOR_TEXTURE_CANDIDATES.contains(&"Textures/sol1.png"));
-        assert_eq!(FLOOR_METAL_TEXTURE_CANDIDATES.len(), 2);
+        assert_eq!(FLOOR_METAL_TEXTURE_CANDIDATES.len(), 3);
+        assert!(FLOOR_METAL_TEXTURE_CANDIDATES.contains(&"textures/model/concrete_grid_tile.png"));
         assert!(FLOOR_METAL_TEXTURE_CANDIDATES.contains(&"textures/sol2.png"));
         assert!(FLOOR_METAL_TEXTURE_CANDIDATES.contains(&"Textures/sol2.png"));
+        assert_eq!(
+            FLOOR_WOOD_TEXTURE_CANDIDATES,
+            ["textures/model/wood_parquet_tile.png"]
+        );
+        assert_eq!(
+            WALL_STONE_TEXTURE_CANDIDATES,
+            ["textures/model/stone_wall_tile.png"]
+        );
+        assert_eq!(TREE_OAK_TEXTURE_CANDIDATES, ["textures/model/tree_oak.png"]);
+        assert_eq!(
+            TREE_POPLAR_TEXTURE_CANDIDATES,
+            ["textures/model/tree_poplar.png"]
+        );
+        assert_eq!(
+            TREE_PINE_TEXTURE_CANDIDATES,
+            ["textures/model/tree_pine.png"]
+        );
         assert_eq!(POT_DE_FLEUR_TEXTURE_CANDIDATES.len(), 2);
         assert!(POT_DE_FLEUR_TEXTURE_CANDIDATES.contains(&"textures/pot-fleur.png"));
         assert!(POT_DE_FLEUR_TEXTURE_CANDIDATES.contains(&"Textures/pot-fleur.png"));

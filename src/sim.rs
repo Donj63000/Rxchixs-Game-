@@ -3,12 +3,14 @@ use ron::{
     ser::{PrettyConfig, to_string_pretty as ron_to_string_pretty},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 
 const FACTORY_LAYOUT_PATH: &str = "data/starter_factory.ron";
+const STARTER_SIM_CONFIG_SCHEMA_VERSION: u32 = 1;
 const FACTORY_LAYOUT_SCHEMA_VERSION: u32 = 1;
 const RESERVATION_TTL_SECONDS: f64 = 8.0;
 const RACK_NIVEAU_COUNT: usize = 6;
@@ -114,7 +116,7 @@ pub struct StarterSimConfig {
 impl Default for StarterSimConfig {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: STARTER_SIM_CONFIG_SCHEMA_VERSION,
             time_scale: 60.0,
             starting_cash: 500_000.0,
             worker_count: 3,
@@ -135,10 +137,14 @@ impl StarterSimConfig {
             .separate_tuple_members(true)
     }
 
+    #[allow(dead_code)]
     pub fn load(path: &str) -> Result<Self, String> {
         let raw =
             fs::read_to_string(path).map_err(|e| format!("echec lecture config simu: {e}"))?;
-        ron_from_str(&raw).map_err(|e| format!("echec lecture RON config simu: {e}"))
+        let cfg: Self =
+            ron_from_str(&raw).map_err(|e| format!("echec lecture RON config simu: {e}"))?;
+        cfg.validate()?;
+        Ok(cfg)
     }
 
     pub fn save(&self, path: &str) -> Result<(), String> {
@@ -155,15 +161,75 @@ impl StarterSimConfig {
         fs::write(path, payload).map_err(|e| format!("echec ecriture config simu: {e}"))
     }
 
+    #[allow(dead_code)]
     pub fn load_or_create(path: &str) -> Self {
-        match Self::load(path) {
-            Ok(cfg) => cfg,
-            Err(_) => {
+        Self::load_or_create_with_warning(path).0
+    }
+
+    fn load_or_create_with_warning(path: &str) -> (Self, Option<String>) {
+        let raw = match fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
                 let cfg = Self::default();
-                let _ = cfg.save(path);
-                cfg
+                let warning = cfg.save(path).err().map(|save_err| {
+                    format!("config simu par defaut active, ecriture impossible: {save_err}")
+                });
+                return (cfg, warning);
+            }
+            Err(err) => {
+                return (
+                    Self::default(),
+                    Some(format!("config simu illisible, defaut non persiste: {err}")),
+                );
+            }
+        };
+
+        match ron_from_str::<Self>(&raw) {
+            Ok(cfg) => match cfg.validate() {
+                Ok(()) => (cfg, None),
+                Err(err) => (
+                    Self::default(),
+                    Some(format!("config simu invalide, defaut non persiste: {err}")),
+                ),
+            },
+            Err(err) => (
+                Self::default(),
+                Some(format!(
+                    "config simu RON invalide, defaut non persiste: {err}"
+                )),
+            ),
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema_version != STARTER_SIM_CONFIG_SCHEMA_VERSION {
+            return Err(format!(
+                "schema config simu invalide: attendu={} recu={}",
+                STARTER_SIM_CONFIG_SCHEMA_VERSION, self.schema_version
+            ));
+        }
+        let finite_non_negative = [
+            ("time_scale", self.time_scale),
+            ("starting_cash", self.starting_cash),
+            ("wage_per_hour", self.wage_per_hour),
+            ("raw_delivery_per_hour", self.raw_delivery_per_hour),
+            ("sale_price", self.sale_price),
+        ];
+        for (label, value) in finite_non_negative {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("{label} doit etre fini et >= 0"));
             }
         }
+        let positive_cycles = [
+            ("machine_a_cycle_s", self.machine_a_cycle_s),
+            ("machine_b_cycle_s", self.machine_b_cycle_s),
+        ];
+        for (label, value) in positive_cycles {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(format!("{label} doit etre fini et > 0"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -847,6 +913,78 @@ impl Default for FactoryLayoutAsset {
     }
 }
 
+fn checked_layout_tile_count(w: i32, h: i32, label: &str) -> Result<usize, String> {
+    if w < 4 || h < 4 {
+        return Err(format!("{label}: dimensions trop petites ({w}x{h})"));
+    }
+    let count = i64::from(w)
+        .checked_mul(i64::from(h))
+        .ok_or_else(|| format!("{label}: dimensions en overflow ({w}x{h})"))?;
+    if count <= 0 || count as usize > crate::MAX_MAP_TILES {
+        return Err(format!("{label}: dimensions trop grandes ({w}x{h})"));
+    }
+    Ok(count as usize)
+}
+
+impl FactoryLayoutAsset {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema_version != FACTORY_LAYOUT_SCHEMA_VERSION {
+            return Err(format!(
+                "schema layout usine invalide: attendu={} recu={}",
+                FACTORY_LAYOUT_SCHEMA_VERSION, self.schema_version
+            ));
+        }
+        let expected_tiles = checked_layout_tile_count(self.map_w, self.map_h, "layout usine")?;
+        if self.zones.w != self.map_w || self.zones.h != self.map_h {
+            return Err(format!(
+                "dimensions zones incoherentes: zones={}x{} layout={}x{}",
+                self.zones.w, self.zones.h, self.map_w, self.map_h
+            ));
+        }
+        if self.zones.zones.len() != expected_tiles {
+            return Err(format!(
+                "nombre de zones incoherent: {} != {}",
+                self.zones.zones.len(),
+                expected_tiles
+            ));
+        }
+        if self.agent_tile.0 < 0
+            || self.agent_tile.1 < 0
+            || self.agent_tile.0 >= self.map_w
+            || self.agent_tile.1 >= self.map_h
+        {
+            return Err(format!(
+                "agent hors layout: ({}, {})",
+                self.agent_tile.0, self.agent_tile.1
+            ));
+        }
+
+        let mut seen_ids = HashSet::new();
+        for block in &self.blocks {
+            if block.id == 0 || !seen_ids.insert(block.id) {
+                return Err(format!("id bloc duplique ou invalide: {}", block.id));
+            }
+            let footprint = block.kind.footprint_for_orientation(block.orientation);
+            if footprint.0 <= 0 || footprint.1 <= 0 {
+                return Err(format!("empreinte bloc invalide: {}", block.kind.label()));
+            }
+            if block.origin_tile.0 < 0
+                || block.origin_tile.1 < 0
+                || block.origin_tile.0 + footprint.0 > self.map_w
+                || block.origin_tile.1 + footprint.1 > self.map_h
+            {
+                return Err(format!(
+                    "bloc {} hors layout a ({}, {})",
+                    block.kind.label(),
+                    block.origin_tile.0,
+                    block.origin_tile.1
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct FactorySim {
     pub clock: SimClock,
     pub economy: Economy,
@@ -886,21 +1024,35 @@ impl FactorySim {
     }
 
     pub fn load_or_default(path: &str, map_w: i32, map_h: i32) -> Self {
-        let cfg = StarterSimConfig::load_or_create(path);
-        let layout = Self::load_or_create_layout(map_w, map_h, &cfg);
-        Self::from_layout(cfg, layout)
+        let (cfg, cfg_warning) = StarterSimConfig::load_or_create_with_warning(path);
+        let (layout, layout_warning) =
+            Self::load_or_create_layout(FACTORY_LAYOUT_PATH, map_w, map_h, &cfg);
+        let mut sim = Self::from_layout(cfg, layout);
+        let warnings = [cfg_warning, layout_warning]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if !warnings.is_empty() {
+            sim.build_status = format!("Donnees de demarrage degradees: {}", warnings.join(" | "));
+        }
+        sim
     }
 
     fn from_layout(config: StarterSimConfig, mut layout: FactoryLayoutAsset) -> Self {
         layout.schema_version = FACTORY_LAYOUT_SCHEMA_VERSION;
         layout.map_w = layout.map_w.max(1);
         layout.map_h = layout.map_h.max(1);
+        if checked_layout_tile_count(layout.map_w, layout.map_h, "layout usine").is_err() {
+            layout = Self::default_layout(crate::MAP_W, crate::MAP_H, &config);
+        }
         if layout.blocks.is_empty() {
             layout = Self::default_layout(layout.map_w, layout.map_h, &config);
         }
         if layout.zones.w != layout.map_w
             || layout.zones.h != layout.map_h
-            || layout.zones.zones.len() != (layout.map_w * layout.map_h) as usize
+            || checked_layout_tile_count(layout.map_w, layout.map_h, "layout usine")
+                .map(|expected| layout.zones.zones.len() != expected)
+                .unwrap_or(true)
         {
             layout.zones = ZoneLayer::new(layout.map_w, layout.map_h, ZoneKind::Neutral);
         }
@@ -1855,6 +2007,7 @@ impl FactorySim {
         if right_click {
             if let Some(index) = self.block_index_at_tile(tile) {
                 let removed = self.blocks.remove(index);
+                self.purge_jobs_referencing_block(removed.id);
                 self.economy.earn(removed.kind.capex() * 0.6);
                 self.build_status =
                     format!("Vendu #{} {}", removed.id, removed.kind.buyable_label());
@@ -2043,17 +2196,6 @@ impl FactorySim {
             ),
             label: self.agent.decision_debug.clone(),
         }]
-    }
-
-    pub fn short_hud(&self) -> String {
-        format!(
-            "Simulation {} | Tresorerie {:.0} EUR | Ventes {} | Cadence {:.1}/h | Service {:.0}%",
-            self.clock.format_hhmm(),
-            self.economy.cash,
-            self.line.sold_total,
-            self.kpi.throughput_per_hour,
-            self.kpi.otif * 100.0
-        )
     }
 
     pub fn build_hint_line(&self) -> String {
@@ -2909,6 +3051,69 @@ impl FactorySim {
             .retain(|_, reservation| reservation.job_id != job_id);
     }
 
+    fn job_kind_references_block(kind: &JobKind, block_id: BlockId) -> bool {
+        match kind {
+            JobKind::Haul {
+                from_block,
+                to_block,
+                ..
+            } => *from_block == block_id || *to_block == block_id,
+            JobKind::OperateMachine {
+                block_id: job_block,
+            } => *job_block == block_id,
+        }
+    }
+
+    fn purge_jobs_by_ids(&mut self, removed_job_ids: &[JobId]) {
+        if removed_job_ids.is_empty() {
+            return;
+        }
+        if self
+            .agent
+            .current_job
+            .is_some_and(|job_id| removed_job_ids.contains(&job_id))
+        {
+            self.agent.current_job = None;
+            self.agent.job_progress_s = 0.0;
+            self.agent.decision_debug = "job annule: cible invalide".to_string();
+        }
+        self.jobs.retain(|job| !removed_job_ids.contains(&job.id));
+        self.reservations
+            .retain(|_, reservation| !removed_job_ids.contains(&reservation.job_id));
+    }
+
+    fn purge_jobs_referencing_block(&mut self, block_id: BlockId) {
+        let removed_job_ids = self
+            .jobs
+            .iter()
+            .filter(|job| Self::job_kind_references_block(&job.kind, block_id))
+            .map(|job| job.id)
+            .collect::<Vec<_>>();
+        self.purge_jobs_by_ids(&removed_job_ids);
+    }
+
+    fn purge_jobs_with_missing_blocks(&mut self) {
+        let block_ids = self
+            .blocks
+            .iter()
+            .map(|block| block.id)
+            .collect::<HashSet<_>>();
+        let removed_job_ids = self
+            .jobs
+            .iter()
+            .filter(|job| match &job.kind {
+                JobKind::Haul {
+                    from_block,
+                    to_block,
+                    ..
+                } => !block_ids.contains(from_block) || !block_ids.contains(to_block),
+                JobKind::OperateMachine { block_id } => !block_ids.contains(block_id),
+            })
+            .map(|job| job.id)
+            .collect::<Vec<_>>();
+        self.purge_jobs_by_ids(&removed_job_ids);
+    }
+
     fn tick_reservations(&mut self, dt_sim: f64) {
         self.reservations.retain(|_, reservation| {
             reservation.ttl_s -= dt_sim;
@@ -2917,6 +3122,7 @@ impl FactorySim {
     }
 
     fn refresh_jobs(&mut self) {
+        self.purge_jobs_with_missing_blocks();
         self.jobs.retain(|job| !matches!(job.state, JobState::Done));
 
         let storage_id = self
@@ -3231,31 +3437,64 @@ impl FactorySim {
     }
 
     fn load_or_create_layout(
+        path: &str,
         map_w: i32,
         map_h: i32,
         config: &StarterSimConfig,
-    ) -> FactoryLayoutAsset {
-        match Self::load_layout_asset() {
-            Ok(mut layout) => {
-                layout.map_w = map_w;
-                layout.map_h = map_h;
-                if layout.blocks.is_empty() {
-                    layout = Self::default_layout(map_w, map_h, config);
+    ) -> (FactoryLayoutAsset, Option<String>) {
+        match Self::load_layout_asset(path) {
+            Ok(layout) => {
+                if layout.map_w != map_w || layout.map_h != map_h {
+                    return (
+                        Self::default_layout(map_w, map_h, config),
+                        Some(format!(
+                            "layout usine ignore car dimensions {}x{} != carte {}x{}",
+                            layout.map_w, layout.map_h, map_w, map_h
+                        )),
+                    );
                 }
-                layout
+                if layout.blocks.is_empty() {
+                    return (
+                        Self::default_layout(map_w, map_h, config),
+                        Some("layout usine vide, defaut actif".to_string()),
+                    );
+                }
+                (layout, None)
             }
-            Err(_) => {
+            Err(err) if err.contains("echec lecture layout usine") => {
                 let layout = Self::default_layout(map_w, map_h, config);
-                let _ = Self::save_layout_static(&layout);
-                layout
+                let warning =
+                    Self::save_layout_static_to_path(path, &layout)
+                        .err()
+                        .map(|save_err| {
+                            format!(
+                                "layout usine par defaut actif, ecriture impossible: {save_err}"
+                            )
+                        });
+                (layout, warning)
+            }
+            Err(err) => {
+                let layout = Self::default_layout(map_w, map_h, config);
+                (
+                    layout,
+                    Some(format!("layout usine invalide, defaut non persiste: {err}")),
+                )
             }
         }
     }
 
-    fn load_layout_asset() -> Result<FactoryLayoutAsset, String> {
-        let raw = fs::read_to_string(FACTORY_LAYOUT_PATH)
-            .map_err(|e| format!("echec lecture layout usine: {e}"))?;
-        ron_from_str(&raw).map_err(|e| format!("echec lecture RON layout usine: {e}"))
+    fn load_layout_asset(path: &str) -> Result<FactoryLayoutAsset, String> {
+        let raw = fs::read_to_string(path).map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                format!("echec lecture layout usine: {e}")
+            } else {
+                format!("layout usine illisible: {e}")
+            }
+        })?;
+        let layout: FactoryLayoutAsset =
+            ron_from_str(&raw).map_err(|e| format!("echec lecture RON layout usine: {e}"))?;
+        layout.validate()?;
+        Ok(layout)
     }
 
     fn save_layout_asset(&self, layout: &FactoryLayoutAsset) -> Result<(), String> {
@@ -3263,16 +3502,20 @@ impl FactorySim {
     }
 
     fn save_layout_static(layout: &FactoryLayoutAsset) -> Result<(), String> {
+        Self::save_layout_static_to_path(FACTORY_LAYOUT_PATH, layout)
+    }
+
+    fn save_layout_static_to_path(path: &str, layout: &FactoryLayoutAsset) -> Result<(), String> {
+        layout.validate()?;
         let payload = ron_to_string_pretty(layout, PrettyConfig::new().depth_limit(4))
             .map_err(|e| format!("echec serialisation layout usine: {e}"))?;
-        if let Some(parent) = Path::new(FACTORY_LAYOUT_PATH).parent()
+        if let Some(parent) = Path::new(path).parent()
             && !parent.as_os_str().is_empty()
         {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("echec creation dossier layout usine: {e}"))?;
         }
-        fs::write(FACTORY_LAYOUT_PATH, payload)
-            .map_err(|e| format!("echec ecriture layout usine: {e}"))
+        fs::write(path, payload).map_err(|e| format!("echec ecriture layout usine: {e}"))
     }
 
     pub fn debug_hud(&self) -> String {
@@ -3370,6 +3613,19 @@ fn format_int_fr(v: i64) -> String {
 mod tests {
     use super::*;
 
+    fn temp_ron_path(name: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "rxchixs_sim_{}_{}_{}.ron",
+            name,
+            std::process::id(),
+            stamp
+        ))
+    }
+
     #[test]
     fn sim_clock_formats_hhmm() {
         let mut clock = SimClock::new();
@@ -3377,6 +3633,50 @@ mod tests {
         clock.advance(60.0 * 60.0 * 25.0);
         assert_eq!(clock.day_index(), 1);
         assert_eq!(clock.format_hhmm(), "01:00");
+    }
+
+    #[test]
+    fn invalid_sim_config_falls_back_without_overwriting_file() {
+        let path = temp_ron_path("bad_config");
+        let raw = "(schema_version: 99, time_scale: -1.0)";
+        fs::write(&path, raw).expect("config invalide ecrite");
+
+        let (cfg, warning) =
+            StarterSimConfig::load_or_create_with_warning(path.to_str().expect("path utf8"));
+
+        assert_eq!(cfg.schema_version, STARTER_SIM_CONFIG_SCHEMA_VERSION);
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|msg| msg.contains("defaut non persiste"))
+        );
+        assert_eq!(fs::read_to_string(&path).expect("lecture config"), raw);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_factory_layout_falls_back_without_overwriting_file() {
+        let path = temp_ron_path("bad_layout");
+        let raw = "(schema_version: 999, map_w: 25, map_h: 15)";
+        fs::write(&path, raw).expect("layout invalide ecrit");
+
+        let (layout, warning) = FactorySim::load_or_create_layout(
+            path.to_str().expect("path utf8"),
+            25,
+            15,
+            &StarterSimConfig::default(),
+        );
+
+        assert_eq!(layout.schema_version, FACTORY_LAYOUT_SCHEMA_VERSION);
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|msg| msg.contains("defaut non persiste"))
+        );
+        assert_eq!(fs::read_to_string(&path).expect("lecture layout"), raw);
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -3417,6 +3717,47 @@ mod tests {
 
         sim.apply_build_click(&mut world, tile, true);
         assert!(sim.block_at_tile(tile).is_none());
+    }
+
+    #[test]
+    fn selling_block_purges_related_jobs_and_reservations() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let mut world = crate::World::new_room(25, 15);
+        let machine = sim
+            .blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::MachineA)
+            .expect("machine A attendue");
+        let machine_id = machine.id;
+        let machine_tile = machine.origin_tile;
+        let job_id = 44;
+        sim.jobs.push(Job {
+            id: job_id,
+            kind: JobKind::OperateMachine {
+                block_id: machine_id,
+            },
+            state: JobState::InProgress,
+            priority: 60,
+            score_debug: "test".to_string(),
+            assigned_agent: Some(sim.agent.id),
+        });
+        sim.agent.current_job = Some(job_id);
+        sim.agent.job_progress_s = 2.0;
+        sim.reservations.insert(
+            ReservationKey::BlockInput(machine_id),
+            Reservation {
+                job_id,
+                ttl_s: RESERVATION_TTL_SECONDS,
+            },
+        );
+
+        sim.toggle_build_mode();
+        sim.apply_build_click(&mut world, machine_tile, true);
+
+        assert!(sim.block_index_by_id(machine_id).is_none());
+        assert!(sim.jobs.iter().all(|job| job.id != job_id));
+        assert_eq!(sim.agent.current_job, None);
+        assert!(sim.reservations.is_empty());
     }
 
     #[test]

@@ -20,11 +20,36 @@ struct FloorTileTextures {
     floor_metal: Option<Texture2D>,
 }
 
+#[derive(Clone)]
+struct ModelWorldTextures {
+    floor_wood: Option<Texture2D>,
+    wall_stone: Option<Texture2D>,
+    tree_oak: Option<Texture2D>,
+    tree_poplar: Option<Texture2D>,
+    tree_pine: Option<Texture2D>,
+}
+
+#[derive(Clone, Copy)]
+struct FloorTextureRefs<'a> {
+    exterior: Option<&'a Texture2D>,
+    interior: Option<&'a Texture2D>,
+    wood: Option<&'a Texture2D>,
+}
+
 thread_local! {
     static FLOOR_TILE_TEXTURES: RefCell<FloorTileTextures> = const {
         RefCell::new(FloorTileTextures {
             floor: None,
             floor_metal: None,
+        })
+    };
+    static MODEL_WORLD_TEXTURES: RefCell<ModelWorldTextures> = const {
+        RefCell::new(ModelWorldTextures {
+            floor_wood: None,
+            wall_stone: None,
+            tree_oak: None,
+            tree_poplar: None,
+            tree_pine: None,
         })
     };
     static POT_DE_FLEUR_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
@@ -43,6 +68,7 @@ thread_local! {
 
 const PROP_TEXTURE_VISUAL_SCALE: f32 = 1.15;
 const CHARIOT_VISUAL_SCALE: f32 = 2.44;
+const GRASS_TEXTURE_SOURCE_TILE_PX: f32 = 128.0;
 
 fn scaled_prop_texture_placement(
     base_x: f32,
@@ -79,6 +105,48 @@ fn draw_prop_texture_scaled(
             ..Default::default()
         },
     );
+}
+
+fn draw_texture_in_rect(texture: &Texture2D, rect: Rect, tint: Color) {
+    draw_texture_in_rect_source(texture, rect, tint, None);
+}
+
+fn draw_texture_in_rect_source(texture: &Texture2D, rect: Rect, tint: Color, source: Option<Rect>) {
+    draw_texture_ex(
+        texture,
+        rect.x,
+        rect.y,
+        tint,
+        DrawTextureParams {
+            dest_size: Some(vec2(rect.w, rect.h)),
+            source,
+            ..Default::default()
+        },
+    );
+}
+
+fn grass_texture_source_rect(texture_w: f32, texture_h: f32, x: i32, y: i32) -> Option<Rect> {
+    if texture_w <= TILE_SIZE || texture_h <= TILE_SIZE {
+        return None;
+    }
+
+    let sample_w = texture_w.clamp(1.0, GRASS_TEXTURE_SOURCE_TILE_PX);
+    let sample_h = texture_h.clamp(1.0, GRASS_TEXTURE_SOURCE_TILE_PX);
+    let max_x = (texture_w - sample_w).max(0.0).floor() as u32;
+    let max_y = (texture_h - sample_h).max(0.0).floor() as u32;
+    let h = hash_with_salt(x, y, 0x6EAF);
+    let sx = if max_x == 0 {
+        0.0
+    } else {
+        (h % (max_x + 1)) as f32
+    };
+    let sy = if max_y == 0 {
+        0.0
+    } else {
+        ((h >> 11) % (max_y + 1)) as f32
+    };
+
+    Some(Rect::new(sx, sy, sample_w, sample_h))
 }
 
 fn chariot_basis_vectors(heading_rad: f32) -> (Vec2, Vec2) {
@@ -836,7 +904,7 @@ pub(crate) fn set_floor_tile_textures(floor: Option<Texture2D>, floor_metal: Opt
     FLOOR_TILE_TEXTURES.with(|slot| {
         let prepared_floor = floor;
         if let Some(tex) = prepared_floor.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
 
         let prepared_floor_metal = floor_metal;
@@ -853,6 +921,41 @@ pub(crate) fn set_floor_tile_textures(floor: Option<Texture2D>, floor_metal: Opt
 
 fn floor_tile_textures() -> FloorTileTextures {
     FLOOR_TILE_TEXTURES.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn set_model_world_textures(
+    floor_wood: Option<Texture2D>,
+    wall_stone: Option<Texture2D>,
+    tree_oak: Option<Texture2D>,
+    tree_poplar: Option<Texture2D>,
+    tree_pine: Option<Texture2D>,
+) {
+    for texture in [floor_wood.as_ref(), wall_stone.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        texture.set_filter(FilterMode::Nearest);
+    }
+    for texture in [tree_oak.as_ref(), tree_poplar.as_ref(), tree_pine.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        texture.set_filter(FilterMode::Linear);
+    }
+
+    MODEL_WORLD_TEXTURES.with(|slot| {
+        *slot.borrow_mut() = ModelWorldTextures {
+            floor_wood,
+            wall_stone,
+            tree_oak,
+            tree_poplar,
+            tree_pine,
+        };
+    });
+}
+
+fn model_world_textures() -> ModelWorldTextures {
+    MODEL_WORLD_TEXTURES.with(|slot| slot.borrow().clone())
 }
 
 pub(crate) fn set_pot_de_fleur_texture(texture: Option<Texture2D>) {
@@ -1189,12 +1292,12 @@ fn exterior_tree_type_for_tile(
         return None;
     }
 
-    const TREE_CELL_SIZE: i32 = 5;
+    const TREE_CELL_SIZE: i32 = 6;
     let cell_x = x.div_euclid(TREE_CELL_SIZE);
     let cell_y = y.div_euclid(TREE_CELL_SIZE);
     let cell_hash = hash_with_salt(cell_x, cell_y, 0xD19C);
 
-    if cell_hash % 100 >= 84 {
+    if cell_hash % 100 >= 70 {
         return None;
     }
 
@@ -1213,7 +1316,14 @@ fn exterior_tree_type_for_tile(
     })
 }
 
-fn draw_exterior_tree(kind: TypeArbreExterieur, x: i32, y: i32, palette: &Palette, time: f32) {
+fn draw_exterior_tree(
+    kind: TypeArbreExterieur,
+    x: i32,
+    y: i32,
+    palette: &Palette,
+    time: f32,
+    textures: &ModelWorldTextures,
+) {
     let rect = World::tile_rect(x, y);
     let h = hash_with_salt(x, y, 0xB77A);
     let jitter_x = ((h & 0x7) as f32 - 3.5) * 0.45;
@@ -1223,6 +1333,26 @@ fn draw_exterior_tree(kind: TypeArbreExterieur, x: i32, y: i32, palette: &Palett
 
     let base_x = rect.x + rect.w * 0.5 + jitter_x;
     let base_y = rect.y + rect.h * 0.58 + jitter_y;
+
+    let model_texture = match kind {
+        TypeArbreExterieur::Chene => textures.tree_oak.as_ref(),
+        TypeArbreExterieur::Peuplier => textures.tree_poplar.as_ref(),
+        TypeArbreExterieur::Pin => textures.tree_pine.as_ref(),
+    };
+    if let Some(texture) = model_texture {
+        let dest = model_tree_texture_dest_size(kind, scale);
+        draw_texture_ex(
+            texture,
+            base_x - dest.x * 0.5 + sway * 0.12,
+            base_y - dest.y * 0.70,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(dest),
+                ..Default::default()
+            },
+        );
+        return;
+    }
 
     draw_circle(
         base_x + 2.8,
@@ -1318,13 +1448,20 @@ fn draw_exterior_tree(kind: TypeArbreExterieur, x: i32, y: i32, palette: &Palett
     }
 }
 
-pub(crate) fn draw_floor_tile(
+fn model_tree_texture_dest_size(kind: TypeArbreExterieur, scale: f32) -> Vec2 {
+    match kind {
+        TypeArbreExterieur::Chene => vec2(34.0 * scale, 42.0 * scale),
+        TypeArbreExterieur::Peuplier => vec2(27.0 * scale, 46.0 * scale),
+        TypeArbreExterieur::Pin => vec2(38.0 * scale, 56.0 * scale),
+    }
+}
+
+fn draw_floor_tile(
     x: i32,
     y: i32,
     tile: Tile,
     palette: &Palette,
-    _floor_texture: Option<&Texture2D>,
-    _floor_metal_texture: Option<&Texture2D>,
+    textures: FloorTextureRefs<'_>,
     exterior_hint: bool,
 ) {
     let rect = World::tile_rect(x, y);
@@ -1341,19 +1478,71 @@ pub(crate) fn draw_floor_tile(
         2 => color_lerp(base_a, base_b, 0.55),
         _ => color_lerp(base_a, tone.accent, 0.12),
     };
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+    let texture = if exterior_hint {
+        textures.exterior
+    } else {
+        match tile {
+            Tile::FloorWood | Tile::FloorMetal => textures.wood.or(textures.interior),
+            Tile::Floor | Tile::FloorMoss | Tile::FloorSand => textures.interior,
+            _ => None,
+        }
+    };
+    let uses_model_texture = texture.is_some();
+    if let Some(texture) = texture {
+        let tint = if exterior_hint {
+            color_lerp(WHITE, base, 0.16)
+        } else if matches!(tile, Tile::FloorWood | Tile::FloorMetal) {
+            WHITE
+        } else {
+            color_lerp(WHITE, base, 0.10)
+        };
+        let source = if exterior_hint {
+            grass_texture_source_rect(texture.width(), texture.height(), x, y)
+        } else {
+            None
+        };
+        draw_texture_in_rect_source(texture, rect, tint, source);
+    } else {
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+    }
+
+    if exterior_hint {
+        let patch = match h % 9 {
+            0 | 1 => rgba(98, 74, 45, 255),
+            2 | 3 => rgba(50, 104, 54, 255),
+            4 => rgba(116, 88, 54, 255),
+            _ => base,
+        };
+        if h % 9 <= 4 {
+            draw_rectangle(
+                rect.x + 1.0,
+                rect.y + 1.0,
+                rect.w - 2.0,
+                rect.h - 2.0,
+                with_alpha(patch, 0.12),
+            );
+        }
+        draw_rectangle(
+            rect.x,
+            rect.y + rect.h * 0.56,
+            rect.w,
+            rect.h * 0.44,
+            with_alpha(rgba(18, 54, 28, 255), 0.08),
+        );
+    }
 
     let tile_edge = if exterior_hint {
-        color_lerp(palette.floor_edge, rgba(44, 88, 54, 190), 0.64)
+        rgba(8, 32, 18, 210)
     } else {
         palette.floor_edge
     };
+    let edge_width = if exterior_hint { 1.25 } else { 1.0 };
     draw_rectangle_lines(
         rect.x + 0.5,
         rect.y + 0.5,
         rect.w - 1.0,
         rect.h - 1.0,
-        1.0,
+        edge_width,
         tile_edge,
     );
 
@@ -1408,7 +1597,8 @@ pub(crate) fn draw_floor_tile(
             }
         }
         Tile::FloorWood => {
-            let warm = with_alpha(rgba(184, 154, 110, 255), 0.11);
+            let warm = with_alpha(rgba(214, 154, 86, 255), 0.13);
+            let seam = with_alpha(rgba(24, 14, 8, 255), 0.42);
             draw_rectangle(rect.x + 2.0, rect.y + 6.0, rect.w - 4.0, 7.0, warm);
             draw_rectangle(
                 rect.x + 2.0,
@@ -1417,11 +1607,37 @@ pub(crate) fn draw_floor_tile(
                 7.0,
                 with_alpha(warm, 0.7),
             );
+            draw_line(
+                rect.x + 1.0,
+                rect.y + 10.5,
+                rect.x + rect.w - 1.0,
+                rect.y + 10.5,
+                1.0,
+                seam,
+            );
+            draw_line(
+                rect.x + 1.0,
+                rect.y + 22.5,
+                rect.x + rect.w - 1.0,
+                rect.y + 22.5,
+                1.0,
+                seam,
+            );
+            if h.is_multiple_of(2) {
+                draw_line(
+                    rect.x + rect.w * 0.50,
+                    rect.y + 1.0,
+                    rect.x + rect.w * 0.50,
+                    rect.y + rect.h - 1.0,
+                    1.0,
+                    with_alpha(seam, 0.74),
+                );
+            }
         }
         _ => {}
     }
 
-    if matches!(tile, Tile::FloorMetal) && variant <= 1 {
+    if matches!(tile, Tile::FloorMetal) && variant <= 1 && !uses_model_texture {
         for stripe in 0..3 {
             let sx = rect.x - 6.0 + stripe as f32 * 12.0 + (variant as f32 * 1.4);
             draw_line(
@@ -1451,6 +1667,7 @@ pub(crate) fn draw_floor_layer_region(
     bounds: (i32, i32, i32, i32),
 ) {
     let floor_textures = floor_tile_textures();
+    let model_textures = model_world_textures();
     for y in bounds.2..=bounds.3 {
         for x in bounds.0..=bounds.1 {
             let tile = world.get(x, y);
@@ -1461,8 +1678,11 @@ pub(crate) fn draw_floor_layer_region(
                     y,
                     tile,
                     palette,
-                    floor_textures.floor.as_ref(),
-                    floor_textures.floor_metal.as_ref(),
+                    FloorTextureRefs {
+                        exterior: floor_textures.floor.as_ref(),
+                        interior: floor_textures.floor_metal.as_ref(),
+                        wood: model_textures.floor_wood.as_ref(),
+                    },
                     exterior_hint,
                 );
             }
@@ -1485,10 +1705,10 @@ pub(crate) fn draw_exterior_ground_ambiance_region(
 
             let rect = World::tile_rect(x, y);
             let h = hash_with_salt(x, y, 0x8F51);
-            if h % 100 < 44 {
+            if h % 100 < 56 {
                 let sway = (time * 0.9 + h as f32 * 0.021).sin() * 0.9;
-                let blade_a = with_alpha(rgba(122, 184, 114, 255), 0.28);
-                let blade_b = with_alpha(rgba(96, 154, 94, 255), 0.26);
+                let blade_a = with_alpha(rgba(128, 184, 104, 255), 0.34);
+                let blade_b = with_alpha(rgba(82, 142, 78, 255), 0.32);
                 draw_line(
                     rect.x + 6.0 + (h & 3) as f32,
                     rect.y + 24.5,
@@ -1516,17 +1736,32 @@ pub(crate) fn draw_exterior_ground_ambiance_region(
                     );
                 }
             }
-            if h % 100 < 14 {
+            if h % 100 < 20 {
                 let flower = if h & 1 == 0 {
-                    rgba(236, 224, 148, 255)
+                    rgba(232, 190, 80, 255)
                 } else {
-                    rgba(196, 220, 248, 255)
+                    rgba(218, 202, 226, 255)
                 };
                 draw_circle(
                     rect.x + 11.0 + ((h >> 1) & 3) as f32,
                     rect.y + 14.0 + ((h >> 4) & 3) as f32,
                     0.9,
                     with_alpha(flower, 0.66),
+                );
+            }
+            if h % 100 >= 90 {
+                let clover = with_alpha(rgba(62, 132, 54, 255), 0.55);
+                draw_circle(
+                    rect.x + 9.0 + ((h >> 2) & 6) as f32,
+                    rect.y + 16.0 + ((h >> 5) & 5) as f32,
+                    2.0,
+                    clover,
+                );
+                draw_circle(
+                    rect.x + 11.2 + ((h >> 2) & 6) as f32,
+                    rect.y + 14.8 + ((h >> 5) & 5) as f32,
+                    1.2,
+                    with_alpha(rgba(116, 178, 76, 255), 0.46),
                 );
             }
         }
@@ -1539,11 +1774,12 @@ pub(crate) fn draw_exterior_trees_region(
     time: f32,
     bounds: (i32, i32, i32, i32),
 ) {
+    let textures = model_world_textures();
     for y in bounds.2..=bounds.3 {
         for x in bounds.0..=bounds.1 {
             let tile = world.get(x, y);
             if let Some(tree_type) = exterior_tree_type_for_tile(world, x, y, tile) {
-                draw_exterior_tree(tree_type, x, y, palette, time);
+                draw_exterior_tree(tree_type, x, y, palette, time, &textures);
             }
         }
     }
@@ -1591,7 +1827,14 @@ pub(crate) fn draw_wall_cast_shadows_region(
     }
 }
 
-pub(crate) fn draw_wall_tile(world: &World, x: i32, y: i32, tile: Tile, palette: &Palette) {
+pub(crate) fn draw_wall_tile(
+    world: &World,
+    x: i32,
+    y: i32,
+    tile: Tile,
+    palette: &Palette,
+    wall_texture: Option<&Texture2D>,
+) {
     let rect = World::tile_rect(x, y);
     let mask = wall_mask_4(world, x, y);
     let h = tile_hash(x, y);
@@ -1601,14 +1844,18 @@ pub(crate) fn draw_wall_tile(world: &World, x: i32, y: i32, tile: Tile, palette:
     let wall_dark = tone.dark;
     let wall_outline = tone.outline;
 
-    for band in 0..4 {
-        let t0 = band as f32 / 4.0;
-        let t1 = (band + 1) as f32 / 4.0;
-        let top = color_lerp(wall_top, wall_mid, t0);
-        let bottom = color_lerp(wall_top, wall_mid, t1);
-        let band_y = rect.y + rect.h * t0;
-        let band_h = rect.h * (t1 - t0) + 0.5;
-        draw_rectangle(rect.x, band_y, rect.w, band_h, color_lerp(top, bottom, 0.5));
+    if let Some(texture) = wall_texture {
+        draw_texture_in_rect(texture, rect, color_lerp(WHITE, wall_mid, 0.08));
+    } else {
+        for band in 0..4 {
+            let t0 = band as f32 / 4.0;
+            let t1 = (band + 1) as f32 / 4.0;
+            let top = color_lerp(wall_top, wall_mid, t0);
+            let bottom = color_lerp(wall_top, wall_mid, t1);
+            let band_y = rect.y + rect.h * t0;
+            let band_h = rect.h * (t1 - t0) + 0.5;
+            draw_rectangle(rect.x, band_y, rect.w, band_h, color_lerp(top, bottom, 0.5));
+        }
     }
 
     if mask & MASK_N == 0 {
@@ -1754,11 +2001,19 @@ pub(crate) fn draw_wall_layer_region(
     palette: &Palette,
     bounds: (i32, i32, i32, i32),
 ) {
+    let model_textures = model_world_textures();
     for y in bounds.2..=bounds.3 {
         for x in bounds.0..=bounds.1 {
             let tile = world.get(x, y);
             if tile_is_wall(tile) {
-                draw_wall_tile(world, x, y, tile, palette);
+                draw_wall_tile(
+                    world,
+                    x,
+                    y,
+                    tile,
+                    palette,
+                    model_textures.wall_stone.as_ref(),
+                );
             }
         }
     }
@@ -4575,6 +4830,57 @@ mod tests {
         assert_close(draw_size.y, base_h * PROP_TEXTURE_VISUAL_SCALE);
         assert_close(draw_x, base_x - (draw_size.x - base_w) * 0.5);
         assert_close(draw_y, base_y - (draw_size.y - base_h) * 0.5);
+    }
+
+    #[test]
+    fn grass_texture_source_rect_uses_full_small_tile_texture() {
+        assert!(grass_texture_source_rect(32.0, 32.0, 4, 9).is_none());
+    }
+
+    #[test]
+    fn grass_texture_source_rect_samples_large_texture_deterministically() {
+        let first = grass_texture_source_rect(1024.0, 1024.0, 12, 7)
+            .expect("large grass texture should be sampled");
+        let second = grass_texture_source_rect(1024.0, 1024.0, 12, 7)
+            .expect("large grass texture should be sampled");
+        let other = grass_texture_source_rect(1024.0, 1024.0, 13, 7)
+            .expect("large grass texture should be sampled");
+
+        assert_eq!(first, second);
+        assert_ne!(first, other);
+        assert_close(first.w, GRASS_TEXTURE_SOURCE_TILE_PX);
+        assert_close(first.h, GRASS_TEXTURE_SOURCE_TILE_PX);
+        assert!(first.x >= 0.0 && first.x + first.w <= 1024.0);
+        assert!(first.y >= 0.0 && first.y + first.h <= 1024.0);
+    }
+
+    #[test]
+    fn model_tree_texture_size_stays_inside_top_down_readability_budget() {
+        let max_scale = (0.88 + 3.0 * 0.11) * EXTERIOR_TREE_SCALE_MULTIPLIER;
+
+        for kind in [
+            TypeArbreExterieur::Chene,
+            TypeArbreExterieur::Peuplier,
+            TypeArbreExterieur::Pin,
+        ] {
+            let dest = model_tree_texture_dest_size(kind, max_scale);
+            assert!(dest.x <= 150.0, "largeur arbre trop grande: {}", dest.x);
+            assert!(dest.y <= 220.0, "hauteur arbre trop grande: {}", dest.y);
+            assert!(dest.x >= 90.0, "largeur arbre trop petite: {}", dest.x);
+        }
+    }
+
+    #[test]
+    fn model_tree_texture_size_keeps_reference_silhouettes_distinct() {
+        let scale = EXTERIOR_TREE_SCALE_MULTIPLIER;
+        let oak = model_tree_texture_dest_size(TypeArbreExterieur::Chene, scale);
+        let poplar = model_tree_texture_dest_size(TypeArbreExterieur::Peuplier, scale);
+        let pine = model_tree_texture_dest_size(TypeArbreExterieur::Pin, scale);
+
+        assert!(oak.x > poplar.x, "le chene doit rester plus rond et large");
+        assert!(poplar.y > oak.y, "le peuplier doit rester plus vertical");
+        assert!(pine.y > poplar.y, "le sapin doit rester le plus haut");
+        assert!(pine.x > oak.x, "le sapin doit garder sa base large");
     }
 
     #[test]

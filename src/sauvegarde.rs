@@ -186,6 +186,7 @@ fn read_save_doc(path: &Path) -> Result<SauvegardeDocument, String> {
     let mut document: SauvegardeDocument = ron_from_str(&raw)
         .map_err(|err| format!("format RON invalide ({:?}): {}", path.file_name(), err))?;
     validate_schema(document.schema_version)?;
+    validate_map_schema_version(document.map.schema_version)?;
     document.save_name = sanitize_save_name_for_label(&document.save_name);
     sanitize_map_asset(&mut document.map);
     Ok(document)
@@ -381,6 +382,31 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.contains("schema"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_rejects_future_map_schema_inside_save() {
+        let dir = test_save_dir("future_map_schema");
+        let mut map = MapAsset::new_default();
+        map.schema_version = MAP_SCHEMA_VERSION + 1;
+        let bad_doc = SauvegardeDocument {
+            schema_version: SAVE_SCHEMA_VERSION,
+            save_name: "future map".to_string(),
+            saved_at_unix_s: 1_700_000_200,
+            map,
+        };
+        let payload = ron_to_string_pretty(&bad_doc, PrettyConfig::new())
+            .expect("future map doc should serialize");
+        let path = dir.join("future_map_schema.ron");
+        fs::write(&path, payload).expect("future map schema file should be written");
+
+        let err = match charger_sauvegarde_depuis(&dir, "future_map_schema.ron") {
+            Ok(_) => panic!("future map schema should be rejected"),
+            Err(err) => err,
+        };
+        assert!(err.contains("schema carte futur"));
 
         let _ = fs::remove_dir_all(&dir);
     }

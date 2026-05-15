@@ -455,12 +455,7 @@ pub(crate) fn fit_world_camera_to_screen(world: &World, margin: f32) -> (Camera2
         Camera2D::from_display_rect(Rect::new(0.0, 0.0, world_size_px.x, world_size_px.y));
     // Keep world coordinates in the same orientation as the rest of the game (Y grows downward).
     cam.zoom.y = cam.zoom.y.abs();
-    cam.viewport = Some((
-        view_rect.x.round() as i32,
-        (sh - view_rect.y - view_rect.h).round().max(0.0) as i32,
-        view_rect.w.round().max(1.0) as i32,
-        view_rect.h.round().max(1.0) as i32,
-    ));
+    cam.viewport = Some(camera_viewport_from_view_rect(view_rect));
 
     (cam, view_rect)
 }
@@ -503,15 +498,45 @@ pub(crate) fn build_world_camera_for_viewport(
     );
     let mut camera = Camera2D::from_display_rect(display_rect);
     camera.zoom.y = camera.zoom.y.abs();
-    let sh = screen_height();
-    camera.viewport = Some((
-        view_rect.x.round() as i32,
-        (sh - view_rect.y - view_rect.h).round().max(0.0) as i32,
-        view_rect.w.round().max(1.0) as i32,
-        view_rect.h.round().max(1.0) as i32,
-    ));
+    camera.viewport = Some(camera_viewport_from_view_rect(view_rect));
 
     (camera, clamped_center, zoom)
+}
+
+fn camera_viewport_from_view_rect(view_rect: Rect) -> (i32, i32, i32, i32) {
+    let dpi = screen_dpi_scale().max(1.0);
+    let sh = screen_height();
+    (
+        (view_rect.x * dpi).round() as i32,
+        ((sh - view_rect.y - view_rect.h) * dpi).round().max(0.0) as i32,
+        (view_rect.w * dpi).round().max(1.0) as i32,
+        (view_rect.h * dpi).round().max(1.0) as i32,
+    )
+}
+
+pub(crate) fn camera_world_rect(camera: &Camera2D) -> Rect {
+    let camera_w = 2.0 / camera.zoom.x.abs().max(0.0001);
+    let camera_h = 2.0 / camera.zoom.y.abs().max(0.0001);
+    Rect::new(
+        camera.target.x - camera_w * 0.5,
+        camera.target.y - camera_h * 0.5,
+        camera_w,
+        camera_h,
+    )
+}
+
+pub(crate) fn camera_screen_to_world_in_view_rect(
+    camera: &Camera2D,
+    point: Vec2,
+    view_rect: Rect,
+) -> Vec2 {
+    let world_rect = camera_world_rect(camera);
+    let nx = ((point.x - view_rect.x) / view_rect.w.max(1.0)).clamp(0.0, 1.0);
+    let ny = ((point.y - view_rect.y) / view_rect.h.max(1.0)).clamp(0.0, 1.0);
+    vec2(
+        world_rect.x + nx * world_rect.w,
+        world_rect.y + ny * world_rect.h,
+    )
 }
 
 #[allow(dead_code)]
@@ -544,20 +569,18 @@ pub(crate) fn build_pannable_world_camera(
 pub(crate) fn tile_bounds_from_camera(
     world: &World,
     camera: &Camera2D,
-    view_rect: Rect,
+    _view_rect: Rect,
     padding_tiles: i32,
 ) -> (i32, i32, i32, i32) {
     if world.w <= 0 || world.h <= 0 {
         return (0, 0, 0, 0);
     }
 
-    let top_left = camera.screen_to_world(vec2(view_rect.x, view_rect.y));
-    let bottom_right =
-        camera.screen_to_world(vec2(view_rect.x + view_rect.w, view_rect.y + view_rect.h));
-    let min_world_x = top_left.x.min(bottom_right.x);
-    let max_world_x = top_left.x.max(bottom_right.x);
-    let min_world_y = top_left.y.min(bottom_right.y);
-    let max_world_y = top_left.y.max(bottom_right.y);
+    let world_rect = camera_world_rect(camera);
+    let min_world_x = world_rect.x;
+    let max_world_x = world_rect.x + world_rect.w;
+    let min_world_y = world_rect.y;
+    let max_world_y = world_rect.y + world_rect.h;
 
     let mut min_x = (min_world_x / TILE_SIZE).floor() as i32 - padding_tiles;
     let mut max_x = (max_world_x / TILE_SIZE).floor() as i32 + padding_tiles;
@@ -965,6 +988,52 @@ mod tests {
         }
         assert!(outside > 10_000);
         assert!(outside_open * 100 / outside >= 96);
+    }
+
+    #[test]
+    fn tile_bounds_from_camera_uses_camera_display_rect_not_viewport_pixels() {
+        let world = World {
+            w: 100,
+            h: 100,
+            tiles: vec![Tile::Floor; 10_000],
+        };
+        let camera = Camera2D {
+            target: vec2(50.0 * TILE_SIZE, 40.0 * TILE_SIZE),
+            zoom: vec2(2.0 / (20.0 * TILE_SIZE), 2.0 / (10.0 * TILE_SIZE)),
+            offset: Vec2::ZERO,
+            rotation: 0.0,
+            render_target: None,
+            viewport: Some((25, 75, 800, 420)),
+        };
+
+        let bounds = tile_bounds_from_camera(&world, &camera, Rect::new(0.0, 0.0, 1.0, 1.0), 2);
+
+        assert_eq!(bounds, (38, 62, 33, 47));
+    }
+
+    #[test]
+    fn camera_screen_to_world_in_view_rect_is_independent_from_physical_viewport() {
+        let camera = Camera2D {
+            target: vec2(50.0 * TILE_SIZE, 40.0 * TILE_SIZE),
+            zoom: vec2(2.0 / (20.0 * TILE_SIZE), 2.0 / (10.0 * TILE_SIZE)),
+            offset: Vec2::ZERO,
+            rotation: 0.0,
+            render_target: None,
+            viewport: Some((50, 150, 1600, 840)),
+        };
+        let view_rect = Rect::new(100.0, 200.0, 800.0, 400.0);
+
+        let top_left = camera_screen_to_world_in_view_rect(&camera, vec2(100.0, 200.0), view_rect);
+        let center = camera_screen_to_world_in_view_rect(&camera, vec2(500.0, 400.0), view_rect);
+        let bottom_right =
+            camera_screen_to_world_in_view_rect(&camera, vec2(900.0, 600.0), view_rect);
+
+        assert!((top_left.x - 40.0 * TILE_SIZE).abs() < 0.001);
+        assert!((top_left.y - 35.0 * TILE_SIZE).abs() < 0.001);
+        assert!((center.x - camera.target.x).abs() < 0.001);
+        assert!((center.y - camera.target.y).abs() < 0.001);
+        assert!((bottom_right.x - 60.0 * TILE_SIZE).abs() < 0.001);
+        assert!((bottom_right.y - 45.0 * TILE_SIZE).abs() < 0.001);
     }
 
     #[test]

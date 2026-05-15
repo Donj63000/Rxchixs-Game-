@@ -831,32 +831,92 @@ pub(crate) fn validate_map_asset(map: &MapAsset) -> Vec<ValidationIssue> {
     issues
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MapSanitizeReport {
+    pub changed: bool,
+    pub reasons: Vec<String>,
+}
+
+impl MapSanitizeReport {
+    fn mark(&mut self, reason: impl Into<String>) {
+        self.changed = true;
+        self.reasons.push(reason.into());
+    }
+}
+
+fn checked_map_tile_count(w: i32, h: i32) -> Option<usize> {
+    if w < 4 || h < 4 {
+        return None;
+    }
+    let count = i64::from(w).checked_mul(i64::from(h))?;
+    if count <= 0 || count as usize > MAX_MAP_TILES {
+        return None;
+    }
+    Some(count as usize)
+}
+
+pub(crate) fn validate_map_schema_version(schema_version: u32) -> Result<(), String> {
+    if schema_version > MAP_SCHEMA_VERSION {
+        return Err(format!(
+            "schema carte futur non supporte ({} > {})",
+            schema_version, MAP_SCHEMA_VERSION
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn sanitize_map_asset(map: &mut MapAsset) {
+    let _ = sanitize_map_asset_with_report(map);
+}
+
+pub(crate) fn sanitize_map_asset_with_report(map: &mut MapAsset) -> MapSanitizeReport {
+    let mut report = MapSanitizeReport::default();
     let needs_material_upgrade = map.version < MAP_FILE_VERSION;
     let needs_layout_upgrade =
         map.version < MAP_FILE_VERSION && (map.world.w < MAP_W || map.world.h < MAP_H);
     if needs_layout_upgrade {
         *map = MapAsset::new_default();
-        return;
+        report.mark("ancienne petite carte remplacee par l'usine de depart");
+        return report;
     }
-    if map.world.w < 4 || map.world.h < 4 {
+    if checked_map_tile_count(map.world.w, map.world.h).is_none() {
         map.world = generate_starter_factory_world(MAP_W, MAP_H);
+        map.props.clear();
+        map.zones.clear();
+        map.player_spawn = nearest_walkable_tile(&map.world, (2, 2)).unwrap_or((2, 2));
+        map.npc_spawn = nearest_walkable_tile(&map.world, (MAP_W - 4, MAP_H / 2))
+            .unwrap_or((MAP_W - 4, MAP_H / 2));
+        report.mark("dimensions carte invalides remplacees par l'usine de depart");
     }
 
-    let required = (map.world.w * map.world.h) as usize;
+    let required =
+        checked_map_tile_count(map.world.w, map.world.h).unwrap_or(MAP_W as usize * MAP_H as usize);
     if map.world.tiles.len() != required {
         map.world.tiles = vec![Tile::Floor; required];
+        report.mark("grille carte retaillee pour correspondre aux dimensions");
     }
 
     if needs_material_upgrade {
         apply_material_variation(&mut map.world);
+        report.mark("materiaux de sol migres vers la version courante");
+    }
+    if map.version != MAP_FILE_VERSION {
+        report.mark("version carte migree");
+    }
+    if map.schema_version != MAP_SCHEMA_VERSION {
+        report.mark("schema carte migre");
     }
     map.version = MAP_FILE_VERSION;
     map.schema_version = MAP_SCHEMA_VERSION;
 
+    let tiles_before_border = map.world.tiles.clone();
     enforce_world_border(&mut map.world);
+    if map.world.tiles != tiles_before_border {
+        report.mark("bordures carte forcees en murs");
+    }
 
     let mut occupied = HashSet::new();
+    let props_before = map.props.len();
     map.props.retain(|prop| {
         if !map.world.in_bounds(prop.tile_x, prop.tile_y) {
             return false;
@@ -866,15 +926,29 @@ pub(crate) fn sanitize_map_asset(map: &mut MapAsset) {
         }
         occupied.insert((prop.tile_x, prop.tile_y))
     });
+    if map.props.len() != props_before {
+        report.mark("objets invalides retires");
+    }
     for prop in &mut map.props {
+        let before = prop.rotation_quarter;
         prop.rotation_quarter = prop.rotation_quarter.rem_euclid(4);
+        if prop.rotation_quarter != before {
+            report.mark("rotation objet normalisee");
+        }
     }
 
     let mut seen_zone_tiles = HashSet::new();
+    let zones_before = map.zones.len();
+    let zone_tiles_before: usize = map.zones.iter().map(|zone| zone.tiles.len()).sum();
     for zone in &mut map.zones {
+        let id_before = zone.id;
+        let label_before = zone.label.clone();
         zone.id = zone_id_for_kind(zone.kind);
         if zone.label.trim().is_empty() {
             zone.label = zone_label_for_kind(zone.kind);
+        }
+        if zone.id != id_before || zone.label != label_before {
+            report.mark("metadata zone normalisee");
         }
         zone.tiles.retain(|tile| {
             map.world.in_bounds(tile.0, tile.1)
@@ -883,10 +957,20 @@ pub(crate) fn sanitize_map_asset(map: &mut MapAsset) {
         });
     }
     map.zones.retain(|zone| !zone.tiles.is_empty());
+    let zone_tiles_after: usize = map.zones.iter().map(|zone| zone.tiles.len()).sum();
+    if map.zones.len() != zones_before || zone_tiles_after != zone_tiles_before {
+        report.mark("zones invalides normalisees");
+    }
 
+    let player_before = map.player_spawn;
+    let npc_before = map.npc_spawn;
     map.player_spawn = nearest_walkable_tile(&map.world, map.player_spawn).unwrap_or((2, 2));
     map.npc_spawn = nearest_walkable_tile(&map.world, map.npc_spawn)
         .unwrap_or((map.world.w - 3, map.world.h / 2));
+    if map.player_spawn != player_before || map.npc_spawn != npc_before {
+        report.mark("spawns replaces sur des tuiles praticables");
+    }
+    report
 }
 
 pub(crate) fn serialize_map_asset(map: &MapAsset) -> Result<String, String> {
@@ -898,10 +982,18 @@ pub(crate) fn serialize_map_asset(map: &MapAsset) -> Result<String, String> {
 }
 
 pub(crate) fn deserialize_map_asset(raw: &str) -> Result<MapAsset, String> {
+    let (map, _) = deserialize_map_asset_with_report(raw)?;
+    Ok(map)
+}
+
+pub(crate) fn deserialize_map_asset_with_report(
+    raw: &str,
+) -> Result<(MapAsset, MapSanitizeReport), String> {
     let mut map: MapAsset =
         ron_from_str(raw).map_err(|err| format!("echec lecture carte: {err}"))?;
-    sanitize_map_asset(&mut map);
-    Ok(map)
+    validate_map_schema_version(map.schema_version)?;
+    let report = sanitize_map_asset_with_report(&mut map);
+    Ok((map, report))
 }
 
 pub(crate) fn save_map_asset(path: &str, map: &MapAsset) -> Result<(), String> {
@@ -918,6 +1010,14 @@ pub(crate) fn load_map_asset(path: &str) -> Result<MapAsset, String> {
     let raw =
         fs::read_to_string(path).map_err(|err| format!("echec lecture fichier carte: {err}"))?;
     deserialize_map_asset(&raw)
+}
+
+pub(crate) fn load_map_asset_with_report(
+    path: &str,
+) -> Result<(MapAsset, MapSanitizeReport), String> {
+    let raw =
+        fs::read_to_string(path).map_err(|err| format!("echec lecture fichier carte: {err}"))?;
+    deserialize_map_asset_with_report(&raw)
 }
 
 pub(crate) fn build_game_state_from_map(
@@ -978,6 +1078,7 @@ pub(crate) fn build_game_state_from_map(
         selected: Some(PawnKey::Player),
         ..PawnsUiState::default()
     };
+    let camera_center = initial_play_camera_center(&map_copy.world, map_copy.player_spawn);
 
     GameState {
         world: map_copy.world,
@@ -985,8 +1086,8 @@ pub(crate) fn build_game_state_from_map(
         chariot,
         chargeur_clark,
         npc,
-        camera_center: tile_center(map_copy.player_spawn),
-        camera_zoom: 1.15,
+        camera_center,
+        camera_zoom: 1.05,
         palette,
         sim,
         props: map_copy.props,
@@ -1018,6 +1119,18 @@ pub(crate) fn build_game_state_from_map(
     }
 }
 
+fn initial_play_camera_center(world: &World, fallback_spawn: (i32, i32)) -> Vec2 {
+    let (fx0, _fx1, fy0, fy1) = starter_factory_bounds(world.w, world.h);
+    let overview_x = (fx0 - 10).clamp(2, world.w.saturating_sub(3).max(2));
+    let overview_y = ((fy0 + fy1) / 2).clamp(2, world.h.saturating_sub(3).max(2));
+    let overview = (overview_x, overview_y);
+    if world.in_bounds(overview.0, overview.1) {
+        tile_center(overview)
+    } else {
+        tile_center(fallback_spawn)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,6 +1153,17 @@ mod tests {
             player_spawn: (1, 1),
             npc_spawn: (w - 2, h - 2),
         }
+    }
+
+    #[test]
+    fn initial_play_camera_opens_on_exterior_overview_left_of_factory() {
+        let map = MapAsset::new_default();
+        let (fx0, _fx1, _fy0, _fy1) = starter_factory_bounds(map.world.w, map.world.h);
+        let camera = initial_play_camera_center(&map.world, map.player_spawn);
+        let factory_left_world_x = fx0 as f32 * TILE_SIZE;
+
+        assert!(camera.x < factory_left_world_x);
+        assert!(camera.y > TILE_SIZE);
     }
 
     #[test]
@@ -1195,6 +1319,53 @@ mod tests {
         assert!(decoded.zones.is_empty());
         let idx = prop_index_at_tile(&decoded.props, (3, 3)).expect("prop legacy");
         assert_eq!(decoded.props[idx].rotation_quarter, 0);
+    }
+
+    #[test]
+    fn deserialize_rejects_future_map_schema() {
+        let map = test_map(8, 8);
+        let encoded = serialize_map_asset(&map).expect("serialisation attendue");
+        let future = encoded.replace("schema_version: 2,", "schema_version: 3,");
+
+        let err = match deserialize_map_asset(&future) {
+            Ok(_) => panic!("schema futur refuse"),
+            Err(err) => err,
+        };
+        assert!(err.contains("schema carte futur non supporte"));
+    }
+
+    #[test]
+    fn sanitize_map_rejects_excessive_dimensions_without_overflow() {
+        let mut map = test_map(8, 8);
+        map.world.w = 100_000;
+        map.world.h = 100_000;
+        map.world.tiles.clear();
+
+        let report = sanitize_map_asset_with_report(&mut map);
+
+        assert!(report.changed);
+        assert!(
+            report
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("dimensions carte invalides"))
+        );
+        assert_eq!(map.world.w, MAP_W);
+        assert_eq!(map.world.h, MAP_H);
+        assert_eq!(map.world.tiles.len(), MAP_W as usize * MAP_H as usize);
+    }
+
+    #[test]
+    fn sanitize_report_marks_legacy_migration() {
+        let mut map = test_map(8, 8);
+        map.schema_version = 1;
+        map.version = 1;
+
+        let report = sanitize_map_asset_with_report(&mut map);
+
+        assert!(report.changed);
+        assert_eq!(map.schema_version, MAP_SCHEMA_VERSION);
+        assert_eq!(map.version, MAP_FILE_VERSION);
     }
 
     #[test]

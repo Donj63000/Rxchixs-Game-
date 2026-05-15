@@ -1,0 +1,21 @@
+(
+    schema_version: 1,
+    label: "Ligne moderne Papa",
+    delai_etape_s: 0.35,
+    blocs: [
+        (kind: input_hopper, orientation: east, offset: (0, 0)),
+        (kind: conveyor, orientation: east, offset: (8, 2)),
+        (kind: fluidity_tank, orientation: east, offset: (9, 0)),
+        (kind: conveyor, orientation: east, offset: (14, 2)),
+        (kind: cutter, orientation: east, offset: (15, 1)),
+        (kind: distributor_belt, orientation: east, offset: (18, 2)),
+        (kind: dryer_oven, orientation: east, offset: (25, -3)),
+        (kind: oven_exit_conveyor, orientation: east, offset: (45, 2)),
+        (kind: flaker, orientation: east, offset: (52, 1)),
+        (kind: suction_pipe, orientation: east, offset: (55, 2)),
+        (kind: suction_pipe, orientation: east, offset: (56, 2)),
+        (kind: sortex, orientation: east, offset: (57, 0)),
+        (kind: blue_bag_chute, orientation: east, offset: (61, 0)),
+        (kind: red_bag_chute, orientation: east, offset: (61, 3)),
+    ],
+)

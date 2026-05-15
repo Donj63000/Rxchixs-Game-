@@ -258,8 +258,8 @@ pub enum HudInfoTab {
 impl HudInfoTab {
     fn label(self) -> &'static str {
         match self {
-            HudInfoTab::Fiche => "Caracteristiques",
-            HudInfoTab::Historique => "Historique",
+            HudInfoTab::Fiche => "CARACTÉRISTIQUES",
+            HudInfoTab::Historique => "HISTORIQUE",
         }
     }
 }
@@ -325,6 +325,7 @@ impl Default for HudUiState {
 pub struct HudLayout {
     pub bar_rect: Rect,
     pub top_strip_rect: Rect,
+    pub footer_strip_rect: Rect,
     pub pawn_panel: Rect,
     pub build_panel: Rect,
     pub info_panel: Rect,
@@ -344,31 +345,43 @@ pub fn build_hud_layout(_state: &GameState) -> HudLayout {
     let sh = screen_height();
     let scale = ((sw / 1600.0).min(sh / 900.0)).clamp(0.85, 1.2);
 
-    let bar_h = (220.0 * scale).clamp(180.0, 270.0);
+    let top_strip_h = (78.0 * scale).clamp(68.0, 94.0);
+    let top_strip_rect = Rect::new(0.0, 0.0, sw, top_strip_h);
+
+    let bar_h = (300.0 * scale).clamp(250.0, 360.0);
     let bar_rect = Rect::new(0.0, (sh - bar_h).max(0.0), sw, bar_h);
 
-    let top_strip_h = (40.0 * scale).clamp(32.0, 48.0);
-    let top_strip_rect = Rect::new(bar_rect.x, bar_rect.y, bar_rect.w, top_strip_h);
-
-    let content_y = top_strip_rect.y + top_strip_rect.h;
-    let content_h = (bar_rect.h - top_strip_rect.h).max(1.0);
-
-    let (pawn_w, build_w, info_w, phone_w, minimap_w) = compute_bottom_panel_widths(sw);
-
-    let pawn_panel = Rect::new(bar_rect.x, content_y, pawn_w, content_h);
-    let build_panel = Rect::new(pawn_panel.x + pawn_panel.w, content_y, build_w, content_h);
-    let info_panel = Rect::new(build_panel.x + build_panel.w, content_y, info_w, content_h);
-    let telephone_panel = Rect::new(info_panel.x + info_panel.w, content_y, phone_w, content_h);
-    let minimap_panel = Rect::new(
-        telephone_panel.x + telephone_panel.w,
-        content_y,
-        minimap_w,
-        content_h,
+    let outer_gap = (8.0 * scale).clamp(6.0, 10.0);
+    let panel_gap = (8.0 * scale).clamp(6.0, 10.0);
+    let footer_h = (50.0 * scale).clamp(42.0, 58.0);
+    let footer_strip_rect = Rect::new(
+        bar_rect.x + outer_gap,
+        bar_rect.y + bar_rect.h - footer_h - outer_gap,
+        (bar_rect.w - outer_gap * 2.0).max(1.0),
+        footer_h,
     );
+
+    let content_y = bar_rect.y + outer_gap;
+    let content_h = (footer_strip_rect.y - content_y - outer_gap).max(1.0);
+
+    let panels_w = (sw - outer_gap * 2.0 - panel_gap * 4.0).max(1.0);
+    let (pawn_w, build_w, info_w, phone_w, minimap_w) = compute_bottom_panel_widths(panels_w);
+
+    let mut x = bar_rect.x + outer_gap;
+    let pawn_panel = Rect::new(x, content_y, pawn_w, content_h);
+    x += pawn_panel.w + panel_gap;
+    let build_panel = Rect::new(x, content_y, build_w, content_h);
+    x += build_panel.w + panel_gap;
+    let info_panel = Rect::new(x, content_y, info_w, content_h);
+    x += info_panel.w + panel_gap;
+    let telephone_panel = Rect::new(x, content_y, phone_w, content_h);
+    x += telephone_panel.w + panel_gap;
+    let minimap_panel = Rect::new(x, content_y, minimap_w, content_h);
 
     HudLayout {
         bar_rect,
         top_strip_rect,
+        footer_strip_rect,
         pawn_panel,
         build_panel,
         info_panel,
@@ -379,11 +392,11 @@ pub fn build_hud_layout(_state: &GameState) -> HudLayout {
 
 fn compute_bottom_panel_widths(sw: f32) -> (f32, f32, f32, f32, f32) {
     let sw = sw.max(1.0);
-    let mut pawn_w = (sw * 0.26).clamp(52.0, 420.0);
-    let mut phone_w = (sw * 0.08).clamp(28.0, 118.0);
-    let mut minimap_w = (sw * 0.19).clamp(56.0, 340.0);
-    let mut info_w = (sw * 0.26).clamp(70.0, 470.0);
-    let min_build_w = (sw * 0.14).clamp(20.0, 260.0);
+    let mut pawn_w = (sw * 0.22).clamp(72.0, 420.0);
+    let mut phone_w = (sw * 0.11).clamp(54.0, 220.0);
+    let mut minimap_w = (sw * 0.24).clamp(92.0, 430.0);
+    let mut info_w = (sw * 0.24).clamp(92.0, 470.0);
+    let min_build_w = (sw * 0.16).clamp(70.0, 340.0);
 
     let fixed_sum = pawn_w + info_w + phone_w + minimap_w;
     if fixed_sum + min_build_w > sw {
@@ -490,9 +503,11 @@ pub fn process_hud_input(
         }
     }
 
+    let over_top = point_in_rect(mouse, layout.top_strip_rect);
     let over_bar = point_in_rect(mouse, layout.bar_rect);
     let over_phone =
         telephone::telephone_panel_contains_mouse(state, layout.telephone_panel, mouse);
+    out.mouse_over_ui = out.mouse_over_ui || over_top;
     out.mouse_over_ui = out.mouse_over_ui || over_bar;
     out.mouse_over_ui = out.mouse_over_ui || over_phone;
 
@@ -506,9 +521,13 @@ pub fn process_hud_input(
     }
 
     if left_click {
-        if point_in_rect(mouse, layout.top_strip_rect)
-            && process_top_strip_input(state, layout.top_strip_rect, mouse)
+        if point_in_rect(mouse, layout.footer_strip_rect)
+            && process_footer_strip_input(state, layout.footer_strip_rect, mouse)
         {
+            out.consumed_click = true;
+            return out;
+        }
+        if point_in_rect(mouse, layout.top_strip_rect) {
             out.consumed_click = true;
             return out;
         }
@@ -554,6 +573,7 @@ pub fn process_hud_input(
             || point_in_rect(mouse, layout.info_panel)
             || telephone::telephone_panel_contains_mouse(state, layout.telephone_panel, mouse)
             || point_in_rect(mouse, layout.top_strip_rect)
+            || point_in_rect(mouse, layout.footer_strip_rect)
         {
             out.consumed_click = true;
             return out;
@@ -572,15 +592,15 @@ pub fn draw_hud(
     time: f32,
 ) {
     begin_ui_pass();
-    draw_bar_background(layout.bar_rect, time);
-
     draw_top_strip(state, layout.top_strip_rect, mouse);
+    draw_bar_background(layout.bar_rect, time);
 
     draw_pawn_panel(state, layout.pawn_panel, mouse, time);
     draw_build_panel(state, layout.build_panel, mouse);
     draw_info_panel(state, layout.info_panel, mouse);
     telephone::draw_telephone_panel(state, layout.telephone_panel, mouse, time);
     draw_minimap_panel(state, layout.minimap_panel, mouse, map_view, world_camera);
+    draw_footer_strip(state, layout.footer_strip_rect, mouse);
     draw_info_window(state, mouse);
     draw_build_menu(state, mouse);
 
@@ -651,14 +671,6 @@ fn ui_col_border_hi() -> Color {
 
 fn ui_col_accent() -> Color {
     ui_theme().accent_amber
-}
-
-fn ui_col_surface() -> Color {
-    ui_theme().panel_mid
-}
-
-fn ui_col_surface_hi() -> Color {
-    crate::rendu::theme::mix_color(ui_theme().panel_top, ui_theme().panel_mid, 0.34)
 }
 
 fn ui_col_text_primary() -> Color {
@@ -732,7 +744,7 @@ fn ui_text_and_shadow_for_bg(bg: Color) -> (Color, Color) {
 }
 
 fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: Color, off: Vec2) {
-    crate::render_safety::ensure_default_material();
+    crate::render_safety::begin_ui_pass();
     let ox = off.x.max(0.75);
     let oy = off.y.max(0.75);
     let soft_shadow = with_alpha(shadow, (shadow.a * 0.65).clamp(0.0, 0.12));
@@ -796,9 +808,18 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
 
     let fs = 16.0;
     let (fill, shadow) = ui_text_and_shadow_for_bg(header_bottom);
+    draw_panel_title_icon(
+        title,
+        vec2(rect.x + 15.0, rect.y + 13.0),
+        if hovered {
+            ui_col_border_hi()
+        } else {
+            ui_col_glow_cyan()
+        },
+    );
     draw_text_shadowed(
         title,
-        rect.x + 12.0,
+        rect.x + 36.0,
         rect.y + 17.5,
         fs,
         if hovered { ui_col_text_primary() } else { fill },
@@ -807,278 +828,864 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
     );
 }
 
+fn draw_panel_title_icon(title: &str, center: Vec2, color: Color) {
+    let c = with_alpha(color, 0.92);
+    let dark = rgba(3, 8, 16, 170);
+    match title {
+        "ÉQUIPE" | "Equipe" => {
+            draw_circle(center.x - 3.5, center.y - 2.5, 2.2, dark);
+            draw_circle(center.x - 3.5, center.y - 2.5, 2.0, c);
+            draw_line(
+                center.x - 7.0,
+                center.y + 4.0,
+                center.x,
+                center.y + 4.0,
+                2.0,
+                c,
+            );
+            draw_circle(center.x + 4.0, center.y + 1.0, 2.0, with_alpha(c, 0.75));
+            draw_line(
+                center.x + 1.0,
+                center.y + 6.0,
+                center.x + 8.0,
+                center.y + 6.0,
+                1.7,
+                c,
+            );
+        }
+        "CONSTRUCTION" | "Construction" => {
+            draw_rectangle_lines(center.x - 7.0, center.y - 7.0, 6.0, 6.0, 1.5, c);
+            draw_rectangle_lines(center.x + 1.0, center.y - 1.0, 6.0, 6.0, 1.5, c);
+            draw_line(
+                center.x - 1.0,
+                center.y - 4.0,
+                center.x + 3.0,
+                center.y - 4.0,
+                1.4,
+                c,
+            );
+            draw_line(
+                center.x + 3.0,
+                center.y - 4.0,
+                center.x + 3.0,
+                center.y - 1.0,
+                1.4,
+                c,
+            );
+            draw_line(
+                center.x - 5.0,
+                center.y - 1.0,
+                center.x - 5.0,
+                center.y + 7.0,
+                1.2,
+                c,
+            );
+        }
+        "PERSONNAGE" | "Personnage" => {
+            draw_rectangle_lines(center.x - 6.0, center.y - 6.0, 12.0, 12.0, 1.3, c);
+            draw_circle(center.x, center.y - 2.0, 2.2, c);
+            draw_line(
+                center.x - 4.0,
+                center.y + 4.5,
+                center.x + 4.0,
+                center.y + 4.5,
+                2.0,
+                c,
+            );
+        }
+        "MINI-CARTE" | "Mini-carte" => {
+            draw_rectangle_lines(center.x - 7.0, center.y - 5.0, 14.0, 10.0, 1.3, c);
+            draw_line(
+                center.x - 2.5,
+                center.y - 5.0,
+                center.x - 2.5,
+                center.y + 5.0,
+                1.0,
+                c,
+            );
+            draw_line(
+                center.x + 3.0,
+                center.y - 5.0,
+                center.x + 3.0,
+                center.y + 5.0,
+                1.0,
+                c,
+            );
+            draw_circle(center.x + 4.5, center.y + 1.0, 1.8, with_alpha(c, 0.8));
+        }
+        _ => {
+            draw_circle_lines(center.x, center.y, 6.2, 1.5, c);
+            draw_circle(center.x, center.y, 2.0, c);
+        }
+    }
+}
+
 fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
-    let (top, bottom) = ui_panel_header_fill(true);
-    draw_vertical_gradient(rect, top, bottom, 14);
+    let scale = (rect.h / 78.0).clamp(0.78, 1.2);
+    let top = rgba(4, 18, 36, 252);
+    let bottom = rgba(2, 10, 24, 255);
+    draw_vertical_gradient(rect, top, bottom, 18);
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h * 0.48, rgba(16, 56, 92, 82));
     draw_rectangle(
-        rect.x,
-        rect.y + rect.h * 0.04,
-        rect.w,
-        rect.h * 0.28,
-        with_alpha(ui_col_glow_cyan(), 0.12),
-    );
-    draw_rectangle(
-        rect.x,
-        rect.y + rect.h * 0.68,
-        rect.w,
-        rect.h * 0.32,
-        with_alpha(rgba(0, 0, 0, 255), 0.24),
-    );
-    draw_rectangle_lines(
         rect.x,
         rect.y,
         rect.w,
-        rect.h,
         2.0,
-        with_alpha(ui_col_border(), 0.88),
+        with_alpha(ui_col_border_hi(), 0.22),
     );
     draw_rectangle(
-        rect.x + 1.0,
-        rect.y + 1.0,
-        rect.w - 2.0,
+        rect.x,
+        rect.y + rect.h - 2.0,
+        rect.w,
         2.0,
-        with_alpha(ui_col_border_hi(), 0.44),
-    );
-
-    let pad = 10.0;
-    let y = rect.y + rect.h * 0.72;
-    let fs = (rect.h * 0.46).clamp(14.0, 20.0);
-    let (fill, shadow) = ui_text_and_shadow_for_bg(bottom);
-
-    let time_label = format!(
-        "Heure {}  J{}",
-        state.sim.clock.format_hhmm(),
-        state.sim.clock.day_index() + 1
-    );
-    draw_text_shadowed(
-        &time_label,
-        rect.x + pad,
-        y,
-        fs,
-        fill,
-        shadow,
-        ui_shadow_offset(fs),
+        with_alpha(ui_col_border(), 0.86),
     );
 
     let cash = state.sim.cash();
-    let _revenue = state.sim.revenue_total();
-    let _cost = state.sim.cost_total();
     let sold = state.sim.sold_total();
     let cadence = state.sim.throughput_per_hour();
     let otif = state.sim.otif();
-    let profit = state.sim.profit_total();
 
-    let mut x = rect.x + rect.w * 0.34;
-    let pill_h = (rect.h * 0.78).clamp(26.0, 38.0);
-    let pill_y = rect.y + rect.h * 0.12;
+    let metrics = [
+        (
+            "TRÉSORERIE",
+            format_money(cash),
+            HeaderIcon::Euro,
+            ui_col_accent(),
+        ),
+        (
+            "VENTES",
+            sold.to_string(),
+            HeaderIcon::Cart,
+            rgba(84, 188, 242, 242),
+        ),
+        (
+            "CADENCE",
+            format!("{cadence:.1} / h"),
+            HeaderIcon::Pulse,
+            rgba(86, 188, 232, 242),
+        ),
+        (
+            "FIABILITÉ",
+            format!("{:.0}%", (otif * 100.0).clamp(0.0, 999.0)),
+            HeaderIcon::Shield,
+            rgba(84, 218, 112, 242),
+        ),
+        (
+            "SERVICE",
+            format!("{:.0}%", (otif * 100.0).clamp(0.0, 999.0)),
+            HeaderIcon::Check,
+            rgba(118, 218, 112, 242),
+        ),
+    ];
 
-    x = draw_stat_pill(
-        Rect::new(x, pill_y, 210.0, pill_h),
-        "Tresorerie",
-        &format_money(cash),
-        ui_col_accent(),
-        mouse,
-        true,
-    ) + 10.0;
+    let layout = compute_top_strip_layout(rect, scale, metrics.len());
+    draw_brand_header(layout.brand, scale);
+    draw_header_nav_group(layout.nav, scale);
+    draw_simulation_card(state, layout.simulation, mouse, scale);
 
-    x = draw_stat_pill(
-        Rect::new(x, pill_y, 170.0, pill_h),
-        "Ventes",
-        &format!("{}", sold),
-        rgba(84, 188, 242, 242),
-        mouse,
-        false,
-    ) + 10.0;
+    for ((label, value, icon, accent), card) in metrics.iter().zip(layout.metrics.iter()) {
+        draw_metric_card(*card, label, value, *icon, *accent, mouse, scale);
+    }
+}
 
-    x = draw_stat_pill(
-        Rect::new(x, pill_y, 170.0, pill_h),
-        "Cadence",
-        &format!("{:.1}/h", cadence),
-        rgba(96, 228, 178, 236),
-        mouse,
-        false,
-    ) + 10.0;
+#[derive(Clone, Debug)]
+struct TopStripLayout {
+    brand: Rect,
+    nav: Rect,
+    simulation: Rect,
+    metrics: Vec<Rect>,
+}
 
-    x = draw_stat_pill(
-        Rect::new(x, pill_y, 160.0, pill_h),
-        "Fiabilite",
-        &format!("{:.0}%", (otif * 100.0).clamp(0.0, 999.0)),
-        rgba(208, 230, 110, 236),
-        mouse,
-        false,
-    ) + 10.0;
+fn shrink_dimension(value: &mut f32, minimum: f32, overflow: &mut f32) {
+    if *overflow <= 0.0 {
+        return;
+    }
+    let shrink = (*value - minimum).max(0.0).min(*overflow);
+    *value -= shrink;
+    *overflow -= shrink;
+}
 
-    let feedback = feedback_theme();
-    let profit_col = if profit >= 0.0 {
-        with_alpha(feedback.positive, 0.92)
-    } else {
-        with_alpha(feedback.danger, 0.92)
-    };
-    draw_stat_pill(
-        Rect::new(x, pill_y, 190.0, pill_h),
-        "Resultat",
-        &format_money(profit),
-        profit_col,
-        mouse,
-        true,
+fn compute_top_strip_layout(rect: Rect, scale: f32, metric_count: usize) -> TopStripLayout {
+    let metric_count = metric_count.max(1);
+    let pad = (12.0 * scale).clamp(9.0, 14.0);
+    let gap = (14.0 * scale).clamp(9.0, 16.0);
+    let metric_gap = (8.0 * scale).clamp(6.0, 10.0);
+    let card_h = (rect.h - pad * 2.0).max(44.0);
+    let card_y = rect.y + (rect.h - card_h) * 0.5;
+    let content_w = (rect.w - pad * 2.0).max(1.0);
+
+    let mut brand_w = (rect.w * 0.108).clamp(140.0, 220.0);
+    let mut nav_w = (rect.w * 0.235).clamp(240.0, 440.0);
+    let mut sim_w = (rect.w * 0.145).clamp(178.0, 280.0);
+    let mut metric_w = (rect.w * 0.092).clamp(82.0, 176.0);
+
+    let min_brand_w = (112.0 * scale).clamp(96.0, 132.0);
+    let min_nav_w = (185.0 * scale).clamp(140.0, 230.0);
+    let min_sim_w = (150.0 * scale).clamp(116.0, 186.0);
+    let min_metric_w = (68.0 * scale).clamp(46.0, 82.0);
+    let metric_gaps_w = metric_gap * (metric_count.saturating_sub(1) as f32);
+    let section_gaps_w = gap * 3.0;
+
+    let preferred_total =
+        brand_w + nav_w + sim_w + metric_w * metric_count as f32 + metric_gaps_w + section_gaps_w;
+    let mut overflow = (preferred_total - content_w).max(0.0);
+    shrink_dimension(&mut nav_w, min_nav_w, &mut overflow);
+    shrink_dimension(&mut sim_w, min_sim_w, &mut overflow);
+    shrink_dimension(&mut brand_w, min_brand_w, &mut overflow);
+    shrink_dimension(&mut metric_w, min_metric_w, &mut overflow);
+
+    let fixed_w = brand_w + nav_w + sim_w + metric_gaps_w + section_gaps_w;
+    let available_metric_w = (content_w - fixed_w).max(metric_count as f32);
+    metric_w = (available_metric_w / metric_count as f32)
+        .min(metric_w)
+        .max(1.0);
+
+    let left = rect.x + pad;
+    let right = rect.x + rect.w - pad;
+    let metrics_total = metric_w * metric_count as f32 + metric_gaps_w;
+    let metrics_x = (right - metrics_total).max(left);
+    let simulation_x = (metrics_x - gap - sim_w).max(left);
+    let nav_x = (simulation_x - gap - nav_w).max(left);
+
+    let brand = Rect::new(left, card_y, (nav_x - left - gap).max(1.0), card_h);
+    let nav = Rect::new(nav_x, card_y, nav_w.max(1.0), card_h);
+    let simulation = Rect::new(simulation_x, card_y, sim_w.max(1.0), card_h);
+    let metrics = (0..metric_count)
+        .map(|idx| {
+            Rect::new(
+                metrics_x + idx as f32 * (metric_w + metric_gap),
+                card_y,
+                metric_w,
+                card_h,
+            )
+        })
+        .collect();
+
+    TopStripLayout {
+        brand,
+        nav,
+        simulation,
+        metrics,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HeaderIcon {
+    Euro,
+    Cart,
+    Pulse,
+    Shield,
+    Check,
+    Clock,
+    Calendar,
+    Result,
+}
+
+fn draw_brand_header(rect: Rect, scale: f32) {
+    let title_size = (27.0 * scale).clamp(22.0, 30.0);
+    let sub_size = (14.0 * scale).clamp(12.0, 16.0);
+    let shadow = rgba(0, 0, 0, 180);
+    draw_text_shadowed(
+        "RXCHIXS",
+        rect.x + 8.0,
+        rect.y + rect.h * 0.42,
+        title_size,
+        rgba(206, 232, 250, 255),
+        shadow,
+        ui_shadow_offset(title_size),
+    );
+    draw_text_shadowed(
+        "PROTOTYPE VISUEL",
+        rect.x + 8.0,
+        rect.y + rect.h * 0.78,
+        sub_size,
+        rgba(82, 166, 232, 250),
+        shadow,
+        ui_shadow_offset(sub_size),
+    );
+    draw_circle(
+        rect.x + rect.w - 14.0,
+        rect.y + rect.h * 0.76,
+        2.2,
+        rgba(92, 210, 246, 230),
+    );
+}
+
+fn draw_header_nav_group(rect: Rect, scale: f32) {
+    draw_top_card_frame(rect, false);
+    let cells = [
+        ("MODE JEU", "ÉCHAP : PAUSE"),
+        ("ÉDITEUR", "F10"),
+        ("PLEIN ÉCRAN", "F11"),
+    ];
+    let cell_w = rect.w / cells.len() as f32;
+    for (idx, (label, hint)) in cells.iter().enumerate() {
+        let x = rect.x + idx as f32 * cell_w;
+        if idx > 0 {
+            draw_line(
+                x,
+                rect.y + 8.0,
+                x,
+                rect.y + rect.h - 8.0,
+                1.0,
+                rgba(74, 132, 184, 118),
+            );
+        }
+        let fs = (14.0 * scale).clamp(11.0, 15.0);
+        let hint_fs = (13.0 * scale).clamp(10.0, 14.0);
+        let label_w = measure_text(label, None, fs as u16, 1.0).width;
+        let hint_w = measure_text(hint, None, hint_fs as u16, 1.0).width;
+        draw_text_shadowed(
+            label,
+            x + cell_w * 0.5 - label_w * 0.5,
+            rect.y + rect.h * 0.38,
+            fs,
+            ui_col_text_primary(),
+            rgba(0, 0, 0, 170),
+            ui_shadow_offset(fs),
+        );
+        draw_text_shadowed(
+            hint,
+            x + cell_w * 0.5 - hint_w * 0.5,
+            rect.y + rect.h * 0.72,
+            hint_fs,
+            ui_col_text_secondary(),
+            rgba(0, 0, 0, 150),
+            ui_shadow_offset(hint_fs),
+        );
+    }
+}
+
+fn draw_simulation_card(state: &GameState, rect: Rect, mouse: Vec2, scale: f32) {
+    draw_top_card_frame(rect, point_in_rect(mouse, rect));
+    let accent = ui_col_glow_cyan();
+    let icon_rect = Rect::new(
+        rect.x + 16.0 * scale,
+        rect.y + rect.h * 0.25,
+        rect.h * 0.44,
+        rect.h * 0.50,
+    );
+    draw_rectangle(
+        icon_rect.x,
+        icon_rect.y,
+        icon_rect.w,
+        icon_rect.h,
+        rgba(10, 44, 76, 210),
+    );
+    draw_rectangle_lines(
+        icon_rect.x,
+        icon_rect.y,
+        icon_rect.w,
+        icon_rect.h,
+        1.2,
+        rgba(94, 190, 246, 170),
+    );
+    draw_triangle(
+        vec2(
+            icon_rect.x + icon_rect.w * 0.38,
+            icon_rect.y + icon_rect.h * 0.24,
+        ),
+        vec2(
+            icon_rect.x + icon_rect.w * 0.38,
+            icon_rect.y + icon_rect.h * 0.76,
+        ),
+        vec2(
+            icon_rect.x + icon_rect.w * 0.76,
+            icon_rect.y + icon_rect.h * 0.50,
+        ),
+        accent,
     );
 
-    let btn_w = (36.0_f32).max(rect.h * 0.82);
-    let btn_h = (rect.h * 0.78).clamp(26.0, 38.0);
-    let mut bx = rect.x + rect.w - pad - btn_w * 4.0 - 6.0 * 3.0;
-    let by = rect.y + rect.h * 0.12;
-
-    for speed in [SimSpeed::Pause, SimSpeed::X1, SimSpeed::X2, SimSpeed::X4] {
-        let brect = Rect::new(bx, by, btn_w, btn_h);
-        let hovered = point_in_rect(mouse, brect);
-        let active = state.hud_ui.sim_speed == speed;
-        draw_small_button(brect, speed.label(), hovered, active);
-        bx += btn_w + 6.0;
-    }
+    let label_fs = (13.0 * scale).clamp(10.0, 14.0);
+    let value_fs = (28.0 * scale).clamp(22.0, 31.0);
+    let tx = icon_rect.x + icon_rect.w + 12.0 * scale;
+    draw_text_shadowed(
+        "SIMULATION",
+        tx,
+        rect.y + rect.h * 0.33,
+        label_fs,
+        ui_col_text_secondary(),
+        rgba(0, 0, 0, 160),
+        ui_shadow_offset(label_fs),
+    );
+    draw_text_shadowed(
+        &format_clock_hhmmss(state.sim.clock.seconds()),
+        tx,
+        rect.y + rect.h * 0.74,
+        value_fs,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 190),
+        ui_shadow_offset(value_fs),
+    );
+    draw_circuit_ticks(rect, accent);
 }
 
-fn process_top_strip_input(state: &mut GameState, rect: Rect, mouse: Vec2) -> bool {
-    let pad = 10.0;
-    let btn_w = (36.0_f32).max(rect.h * 0.82);
-    let btn_h = (rect.h * 0.78).clamp(26.0, 38.0);
-    let mut bx = rect.x + rect.w - pad - btn_w * 4.0 - 6.0 * 3.0;
-    let by = rect.y + rect.h * 0.12;
-
-    for speed in [SimSpeed::Pause, SimSpeed::X1, SimSpeed::X2, SimSpeed::X4] {
-        let brect = Rect::new(bx, by, btn_w, btn_h);
-        if point_in_rect(mouse, brect) {
-            state.hud_ui.sim_speed = speed;
-            return true;
-        }
-        bx += btn_w + 6.0;
-    }
-    false
-}
-
-fn draw_stat_pill(
+fn draw_metric_card(
     rect: Rect,
     label: &str,
     value: &str,
+    icon: HeaderIcon,
     accent: Color,
     mouse: Vec2,
-    euro: bool,
-) -> f32 {
+    scale: f32,
+) {
     let hovered = point_in_rect(mouse, rect);
-    let pad = 10.0;
-    draw_panel_drop_shadow(rect, if hovered { 0.28 } else { 0.20 });
+    draw_top_card_frame(rect, hovered);
+    let icon_center = vec2(rect.x + 26.0 * scale, rect.y + rect.h * 0.58);
+    draw_header_icon(icon, icon_center, rect.h * 0.30, accent);
 
-    let tint = with_alpha(accent, if hovered { 0.42 } else { 0.30 });
+    let label_fs = (11.0 * scale).clamp(9.0, 12.0);
+    let value_fs = (22.0 * scale).clamp(16.0, 24.0);
+    let text_x = rect.x + (50.0 * scale).clamp(38.0, 56.0);
+    draw_text_shadowed(
+        label,
+        text_x,
+        rect.y + rect.h * 0.36,
+        label_fs,
+        ui_col_text_secondary(),
+        rgba(0, 0, 0, 160),
+        ui_shadow_offset(label_fs),
+    );
+    draw_text_shadowed(
+        value,
+        text_x,
+        rect.y + rect.h * 0.76,
+        value_fs,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 190),
+        ui_shadow_offset(value_fs),
+    );
+}
+
+fn draw_top_card_frame(rect: Rect, hovered: bool) {
+    draw_panel_drop_shadow(rect, if hovered { 0.26 } else { 0.18 });
     let top = if hovered {
-        mix_color(ui_col_surface_hi(), tint, 0.54)
+        rgba(13, 47, 78, 244)
     } else {
-        mix_color(ui_col_surface(), tint, 0.44)
+        rgba(7, 29, 54, 240)
     };
-    let bottom = mix_color(top, rgba(4, 8, 20, 255), if hovered { 0.46 } else { 0.52 });
-    draw_vertical_gradient(rect, top, bottom, 12);
+    let bottom = rgba(2, 11, 26, 246);
+    draw_vertical_gradient(rect, top, bottom, 14);
     draw_rectangle(
         rect.x + 1.0,
-        rect.y + rect.h * 0.52,
+        rect.y + 1.0,
         (rect.w - 2.0).max(0.0),
-        (rect.h * 0.48).max(0.0),
-        with_alpha(rgba(0, 0, 0, 255), 0.24),
+        rect.h * 0.43,
+        rgba(40, 112, 166, if hovered { 70 } else { 48 }),
     );
     draw_rectangle_lines(
         rect.x,
         rect.y,
         rect.w,
         rect.h,
-        1.8,
+        1.7,
         if hovered {
-            ui_col_border_hi()
+            rgba(162, 226, 255, 222)
         } else {
-            with_alpha(ui_col_border(), 0.92)
+            rgba(72, 144, 204, 176)
         },
     );
     draw_rectangle_lines(
         rect.x + 1.0,
         rect.y + 1.0,
-        rect.w - 2.0,
-        rect.h - 2.0,
+        (rect.w - 2.0).max(0.0),
+        (rect.h - 2.0).max(0.0),
         1.0,
-        rgba(9, 18, 30, 208),
+        rgba(3, 10, 22, 210),
     );
-
-    let accent_bar_w = if hovered { 8.0 } else { 7.0 };
-    draw_rectangle(
-        rect.x,
-        rect.y,
-        accent_bar_w,
-        rect.h,
-        with_alpha(accent, 0.95),
-    );
-    draw_rectangle(
-        rect.x + accent_bar_w,
-        rect.y,
-        (rect.w - accent_bar_w).max(0.0),
-        2.0,
-        with_alpha(ui_col_border_hi(), if hovered { 0.46 } else { 0.32 }),
-    );
-    draw_circle(
-        rect.x + rect.w - 9.5,
-        rect.y + 8.0,
-        2.4,
-        with_alpha(accent, if hovered { 0.92 } else { 0.72 }),
-    );
-
-    let fs = (rect.h * 0.44).clamp(12.0, 18.0);
-    let value_fs = (rect.h * 0.54).clamp(13.0, 19.0);
-    let (_fill, shadow) = ui_text_and_shadow_for_bg(bottom);
-
-    draw_text_shadowed(
-        label,
-        rect.x + 10.0,
-        rect.y + rect.h * 0.58,
-        fs,
-        ui_col_text_secondary(),
-        shadow,
-        ui_shadow_offset(fs),
-    );
-
-    let val_w = measure_text(value, None, value_fs as u16, 1.0).width;
-    let val_x = rect.x + rect.w - pad - val_w;
-    let val_y = rect.y + rect.h * 0.72;
-    if euro {
-        let icon_h = (value_fs * 0.92).clamp(10.0, rect.h * 0.92);
-        let icon_w = icon_h * 0.65;
-        let gap = 6.0;
-        let icon_x = (val_x - gap - icon_w).max(rect.x + pad + 60.0);
-        draw_euro_icon_shadowed(
-            icon_x,
-            val_y,
-            icon_h,
-            with_alpha(accent, 0.92),
-            shadow,
-            ui_shadow_offset(value_fs),
-        );
-    }
-    draw_text_shadowed(
-        value,
-        val_x,
-        val_y,
-        value_fs,
-        ui_col_text_primary(),
-        shadow,
-        ui_shadow_offset(value_fs),
-    );
-
-    rect.x + rect.w
 }
 
-fn draw_euro_icon_shadowed(
-    x: f32,
-    baseline_y: f32,
-    h: f32,
-    color: Color,
-    shadow: Color,
-    shadow_off: Vec2,
+fn draw_circuit_ticks(rect: Rect, color: Color) {
+    let c = with_alpha(color, 0.32);
+    let y = rect.y + rect.h - 14.0;
+    let x0 = rect.x + rect.w - 54.0;
+    draw_line(x0, y, x0 + 12.0, y, 1.0, c);
+    draw_line(x0 + 20.0, y + 3.0, x0 + 35.0, y + 3.0, 1.0, c);
+    draw_circle(x0 + 15.0, y, 1.3, c);
+    draw_circle(x0 + 38.0, y + 3.0, 1.3, c);
+}
+
+fn draw_header_icon(icon: HeaderIcon, center: Vec2, size: f32, color: Color) {
+    let col = with_alpha(color, 0.96);
+    let s = size.max(8.0);
+    match icon {
+        HeaderIcon::Euro => draw_euro_icon(center.x - s * 0.32, center.y + s * 0.46, s, col),
+        HeaderIcon::Cart => {
+            draw_line(
+                center.x - s * 0.48,
+                center.y - s * 0.28,
+                center.x - s * 0.30,
+                center.y + s * 0.24,
+                2.3,
+                col,
+            );
+            draw_rectangle_lines(
+                center.x - s * 0.24,
+                center.y - s * 0.10,
+                s * 0.62,
+                s * 0.34,
+                2.0,
+                col,
+            );
+            draw_circle(center.x - s * 0.10, center.y + s * 0.36, s * 0.08, col);
+            draw_circle(center.x + s * 0.34, center.y + s * 0.36, s * 0.08, col);
+        }
+        HeaderIcon::Pulse => {
+            draw_line(
+                center.x - s * 0.52,
+                center.y,
+                center.x - s * 0.28,
+                center.y,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x - s * 0.28,
+                center.y,
+                center.x - s * 0.16,
+                center.y - s * 0.22,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x - s * 0.16,
+                center.y - s * 0.22,
+                center.x + s * 0.02,
+                center.y + s * 0.28,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x + s * 0.02,
+                center.y + s * 0.28,
+                center.x + s * 0.18,
+                center.y - s * 0.18,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x + s * 0.18,
+                center.y - s * 0.18,
+                center.x + s * 0.34,
+                center.y,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x + s * 0.34,
+                center.y,
+                center.x + s * 0.52,
+                center.y,
+                2.0,
+                col,
+            );
+        }
+        HeaderIcon::Shield => {
+            let pts = [
+                vec2(center.x, center.y - s * 0.54),
+                vec2(center.x + s * 0.42, center.y - s * 0.32),
+                vec2(center.x + s * 0.34, center.y + s * 0.24),
+                vec2(center.x, center.y + s * 0.54),
+                vec2(center.x - s * 0.34, center.y + s * 0.24),
+                vec2(center.x - s * 0.42, center.y - s * 0.32),
+            ];
+            for i in 0..pts.len() {
+                let a = pts[i];
+                let b = pts[(i + 1) % pts.len()];
+                draw_line(a.x, a.y, b.x, b.y, 1.8, col);
+            }
+            draw_line(
+                center.x - s * 0.16,
+                center.y,
+                center.x - s * 0.02,
+                center.y + s * 0.16,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x - s * 0.02,
+                center.y + s * 0.16,
+                center.x + s * 0.20,
+                center.y - s * 0.14,
+                2.0,
+                col,
+            );
+        }
+        HeaderIcon::Check => {
+            draw_circle(center.x, center.y, s * 0.48, with_alpha(col, 0.22));
+            draw_circle_lines(center.x, center.y, s * 0.48, 2.0, col);
+            draw_line(
+                center.x - s * 0.21,
+                center.y,
+                center.x - s * 0.04,
+                center.y + s * 0.17,
+                3.2,
+                col,
+            );
+            draw_line(
+                center.x - s * 0.04,
+                center.y + s * 0.17,
+                center.x + s * 0.25,
+                center.y - s * 0.20,
+                3.2,
+                col,
+            );
+        }
+        HeaderIcon::Clock => {
+            draw_circle_lines(center.x, center.y, s * 0.44, 2.0, col);
+            draw_line(center.x, center.y, center.x, center.y - s * 0.25, 2.0, col);
+            draw_line(
+                center.x,
+                center.y,
+                center.x + s * 0.22,
+                center.y + s * 0.12,
+                2.0,
+                col,
+            );
+        }
+        HeaderIcon::Calendar => {
+            draw_rectangle_lines(
+                center.x - s * 0.42,
+                center.y - s * 0.34,
+                s * 0.84,
+                s * 0.68,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x - s * 0.42,
+                center.y - s * 0.12,
+                center.x + s * 0.42,
+                center.y - s * 0.12,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x - s * 0.20,
+                center.y - s * 0.46,
+                center.x - s * 0.20,
+                center.y - s * 0.24,
+                2.0,
+                col,
+            );
+            draw_line(
+                center.x + s * 0.20,
+                center.y - s * 0.46,
+                center.x + s * 0.20,
+                center.y - s * 0.24,
+                2.0,
+                col,
+            );
+        }
+        HeaderIcon::Result => {
+            draw_rectangle(
+                center.x - s * 0.36,
+                center.y + s * 0.12,
+                s * 0.15,
+                s * 0.28,
+                col,
+            );
+            draw_rectangle(
+                center.x - s * 0.10,
+                center.y - s * 0.08,
+                s * 0.15,
+                s * 0.48,
+                col,
+            );
+            draw_rectangle(
+                center.x + s * 0.16,
+                center.y - s * 0.30,
+                s * 0.15,
+                s * 0.70,
+                col,
+            );
+        }
+    }
+}
+
+fn draw_footer_strip(state: &GameState, rect: Rect, mouse: Vec2) {
+    let scale = (rect.h / 50.0).clamp(0.82, 1.2);
+    draw_top_card_frame(rect, point_in_rect(mouse, rect));
+    let _revenue = state.sim.revenue_total();
+    let _cost = state.sim.cost_total();
+
+    let pad = (6.0 * scale).clamp(5.0, 8.0);
+    let gap = (8.0 * scale).clamp(6.0, 10.0);
+    let cell_h = (rect.h - pad * 2.0).max(28.0);
+    let y = rect.y + pad;
+    let speed_cluster_w = (rect.w * 0.18).clamp(220.0, 340.0);
+    let right_edge = rect.x + rect.w - pad;
+    let speed_rect = Rect::new(right_edge - speed_cluster_w, y, speed_cluster_w, cell_h);
+
+    let result_w = (rect.w * 0.17).clamp(190.0, 310.0);
+    let result_rect = Rect::new(speed_rect.x - gap - result_w, y, result_w, cell_h);
+
+    let fixed_right_x = result_rect.x - gap;
+    let cells = [
+        (
+            "HEURE",
+            state.sim.clock.format_hhmm(),
+            HeaderIcon::Clock,
+            rgba(150, 210, 252, 240),
+        ),
+        (
+            "JOUR",
+            format!("JOUR {}", state.sim.clock.day_index() + 1),
+            HeaderIcon::Calendar,
+            rgba(150, 210, 252, 240),
+        ),
+        (
+            "TRÉSORERIE",
+            format_money(state.sim.cash()),
+            HeaderIcon::Euro,
+            ui_col_accent(),
+        ),
+        (
+            "VENTES",
+            state.sim.sold_total().to_string(),
+            HeaderIcon::Cart,
+            rgba(84, 188, 242, 242),
+        ),
+        (
+            "CADENCE",
+            format!("{:.1} / h", state.sim.throughput_per_hour()),
+            HeaderIcon::Pulse,
+            rgba(86, 188, 232, 242),
+        ),
+        (
+            "FIABILITÉ",
+            format!("{:.0}%", (state.sim.otif() * 100.0).clamp(0.0, 999.0)),
+            HeaderIcon::Shield,
+            rgba(84, 218, 112, 242),
+        ),
+    ];
+    let available = (fixed_right_x - (rect.x + pad)).max(1.0);
+    let cell_w = ((available - gap * (cells.len() as f32 - 1.0)) / cells.len() as f32).max(70.0);
+    let mut x = rect.x + pad;
+    for (label, value, icon, accent) in cells {
+        if x + cell_w <= fixed_right_x + 0.5 {
+            draw_footer_cell(
+                Rect::new(x, y, cell_w, cell_h),
+                label,
+                &value,
+                icon,
+                accent,
+                mouse,
+                scale,
+            );
+        }
+        x += cell_w + gap;
+    }
+
+    let profit = state.sim.profit_total();
+    let profit_col = if profit >= 0.0 {
+        feedback_theme().positive
+    } else {
+        feedback_theme().danger
+    };
+    draw_footer_cell(
+        result_rect,
+        "RÉSULTAT",
+        &format_money(profit),
+        HeaderIcon::Result,
+        profit_col,
+        mouse,
+        scale,
+    );
+    draw_speed_cluster(state, speed_rect, mouse);
+}
+
+fn draw_footer_cell(
+    rect: Rect,
+    label: &str,
+    value: &str,
+    icon: HeaderIcon,
+    accent: Color,
+    mouse: Vec2,
+    scale: f32,
 ) {
-    draw_euro_icon(x + shadow_off.x, baseline_y + shadow_off.y, h, shadow);
-    draw_euro_icon(x, baseline_y, h, color);
+    let hovered = point_in_rect(mouse, rect);
+    draw_top_card_frame(rect, hovered);
+    draw_header_icon(
+        icon,
+        vec2(rect.x + 24.0 * scale, rect.y + rect.h * 0.54),
+        rect.h * 0.48,
+        accent,
+    );
+    let label_fs = (11.0 * scale).clamp(9.0, 12.0);
+    let value_fs = (18.0 * scale).clamp(14.0, 20.0);
+    let text_x = rect.x + (48.0 * scale).clamp(40.0, 54.0);
+    draw_text_shadowed(
+        label,
+        text_x,
+        rect.y + rect.h * 0.38,
+        label_fs,
+        ui_col_text_secondary(),
+        rgba(0, 0, 0, 160),
+        ui_shadow_offset(label_fs),
+    );
+    draw_text_shadowed(
+        value,
+        text_x,
+        rect.y + rect.h * 0.76,
+        value_fs,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 180),
+        ui_shadow_offset(value_fs),
+    );
+}
+
+fn draw_speed_cluster(state: &GameState, rect: Rect, mouse: Vec2) {
+    draw_top_card_frame(rect, point_in_rect(mouse, rect));
+    for (speed, brect) in footer_speed_button_rects(rect) {
+        let hovered = point_in_rect(mouse, brect);
+        let active = state.hud_ui.sim_speed == speed;
+        draw_small_button(brect, speed.label(), hovered, active);
+    }
+}
+
+fn footer_speed_button_rects(rect: Rect) -> [(SimSpeed, Rect); 4] {
+    let gap = 8.0;
+    let pad = 8.0;
+    let btn_h = (rect.h - pad * 2.0).max(24.0);
+    let btn_w = ((rect.w - pad * 2.0 - gap * 3.0) / 4.0).max(28.0);
+    let y = rect.y + (rect.h - btn_h) * 0.5;
+    [
+        (SimSpeed::Pause, Rect::new(rect.x + pad, y, btn_w, btn_h)),
+        (
+            SimSpeed::X1,
+            Rect::new(rect.x + pad + (btn_w + gap), y, btn_w, btn_h),
+        ),
+        (
+            SimSpeed::X2,
+            Rect::new(rect.x + pad + (btn_w + gap) * 2.0, y, btn_w, btn_h),
+        ),
+        (
+            SimSpeed::X4,
+            Rect::new(rect.x + pad + (btn_w + gap) * 3.0, y, btn_w, btn_h),
+        ),
+    ]
+}
+
+fn process_footer_strip_input(state: &mut GameState, rect: Rect, mouse: Vec2) -> bool {
+    let scale = (rect.h / 50.0).clamp(0.82, 1.2);
+    let pad = (6.0 * scale).clamp(5.0, 8.0);
+    let cell_h = (rect.h - pad * 2.0).max(28.0);
+    let speed_cluster_w = (rect.w * 0.18).clamp(220.0, 340.0);
+    let speed_rect = Rect::new(
+        rect.x + rect.w - pad - speed_cluster_w,
+        rect.y + pad,
+        speed_cluster_w,
+        cell_h,
+    );
+    for (speed, brect) in footer_speed_button_rects(speed_rect) {
+        if point_in_rect(mouse, brect) {
+            state.hud_ui.sim_speed = speed;
+            return true;
+        }
+    }
+    false
 }
 
 fn draw_euro_icon(x: f32, baseline_y: f32, h: f32, color: Color) {
@@ -1244,9 +1851,9 @@ fn pawn_grid_layout(panel: Rect) -> (Rect, f32, f32, f32, usize) {
     let scale = ((screen_width() / 1600.0).min(screen_height() / 900.0)).clamp(0.85, 1.15);
     let inner = pawn_inner_rect(panel);
     let card_h = (64.0 * scale).clamp(52.0, 74.0);
-    let card_w = (160.0 * scale).clamp(132.0, 180.0);
+    let card_w = (inner.w - 10.0).max(120.0);
     let gap = (10.0 * scale).clamp(8.0, 14.0);
-    let cols = (((inner.w + gap) / (card_w + gap)).floor() as usize).max(1);
+    let cols = 1;
     (inner, card_w, card_h, gap, cols)
 }
 
@@ -1328,7 +1935,7 @@ fn process_pawn_panel_input(
 }
 
 fn draw_pawn_panel(state: &GameState, panel: Rect, mouse: Vec2, time: f32) {
-    draw_panel_frame(panel, "Equipe", mouse);
+    draw_panel_frame(panel, "ÉQUIPE", mouse);
 
     let inner = pawn_inner_rect(panel);
     let content_h = pawn_content_height(state, panel);
@@ -1362,7 +1969,7 @@ fn pawn_slot_layout(state: &GameState, panel: Rect, scroll_y: f32) -> Vec<PawnSl
         let x = inner.x + col as f32 * (card_w + gap);
         let y = inner.y + row as f32 * (card_h + gap) - scroll_y;
         let rect = Rect::new(x, y, card_w, card_h);
-        let follow_rect = Rect::new(rect.x + rect.w - btn - 6.0, rect.y + 6.0, btn, btn);
+        let follow_rect = Rect::new(rect.x + rect.w - btn * 2.0 - 12.0, rect.y + 6.0, btn, btn);
         slots.push(PawnSlot {
             key: pawn.key,
             rect,
@@ -1432,7 +2039,7 @@ fn draw_pawn_slot(state: &GameState, slot: &PawnSlot, mouse: Vec2, time: f32) {
     let title_bg = Rect::new(
         slot.rect.x + 40.0,
         slot.rect.y + 6.0,
-        slot.rect.w - 72.0,
+        (slot.follow_rect.x - slot.rect.x - 46.0).max(42.0),
         18.0,
     );
     draw_rectangle(
@@ -1479,14 +2086,34 @@ fn draw_pawn_slot(state: &GameState, slot: &PawnSlot, mouse: Vec2, time: f32) {
 
     let follow_hover = point_in_rect(mouse, slot.follow_rect);
     let follow_active = following;
-    draw_small_button(slot.follow_rect, "F", follow_hover, follow_active);
+    draw_small_button(slot.follow_rect, "+", follow_hover, follow_active);
+    let menu_rect = Rect::new(
+        slot.follow_rect.x + slot.follow_rect.w + 6.0,
+        slot.follow_rect.y,
+        slot.follow_rect.w,
+        slot.follow_rect.h,
+    );
+    if menu_rect.x + menu_rect.w <= slot.rect.x + slot.rect.w - 6.0 {
+        draw_small_button(menu_rect, "...", point_in_rect(mouse, menu_rect), false);
+    }
 
     if let Some(pawn) = pawn {
-        let bar_w = slot.rect.w - 54.0;
+        let bar_w = (slot.rect.w - 118.0).max(44.0);
         let bar_x = slot.rect.x + 44.0;
         let bar_y = slot.rect.y + slot.rect.h - 14.0;
         let hp = pawn.metrics.synth[SynthBar::Sante as usize] as f32 / 100.0;
         draw_meter(bar_x, bar_y, bar_w, 7.0, hp, rgba(124, 226, 156, 240));
+        let pct = format!("{:.0}%", hp * 100.0);
+        let fs = 12.0;
+        draw_text_shadowed(
+            &pct,
+            bar_x + bar_w + 10.0,
+            bar_y + 8.5,
+            fs,
+            ui_col_text_primary(),
+            rgba(0, 0, 0, 150),
+            ui_shadow_offset(fs),
+        );
     }
 }
 
@@ -1521,7 +2148,7 @@ fn process_build_panel_input(state: &mut GameState, panel: Rect, mouse: Vec2) ->
 }
 
 fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
-    draw_panel_frame(panel, "Construction", mouse);
+    draw_panel_frame(panel, "CONSTRUCTION", mouse);
     let summary = build_panel_summary_rect(panel);
     let bg = rgba(12, 18, 26, 228);
     draw_rectangle(summary.x, summary.y, summary.w, summary.h, bg);
@@ -1551,9 +2178,9 @@ fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
 
     let menu_rect = build_menu_open_button_rect(panel);
     let menu_label = if state.hud_ui.build_menu_open {
-        "Fermer menu"
+        "FERMER MENU"
     } else {
-        "Menu construction"
+        "MENU CONSTRUCTION"
     };
     draw_small_button(
         menu_rect,
@@ -2403,9 +3030,9 @@ fn process_info_panel_wheel(state: &mut GameState, panel: Rect, wheel_y: f32) ->
 }
 
 fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
-    draw_panel_frame(panel, "Personnage", mouse);
+    draw_panel_frame(panel, "PERSONNAGE", mouse);
 
-    let inner = info_inner_rect(panel);
+    let inner = info_compact_inner_rect(panel);
     draw_rectangle(inner.x, inner.y, inner.w, inner.h, rgba(12, 18, 26, 228));
     draw_rectangle(
         inner.x,
@@ -2450,15 +3077,53 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     };
 
     let role = match pawn.key {
-        PawnKey::Player => "Patron",
-        PawnKey::Npc => "Visiteur",
-        PawnKey::SimWorker => "Employe",
+        PawnKey::Player => "PATRON",
+        PawnKey::Npc => "VISITEUR",
+        PawnKey::SimWorker => "EMPLOYÉ",
     };
-    let title = format!("{} - {}", pawn.name, role);
+    let portrait = Rect::new(inner.x + 10.0, inner.y + 10.0, 64.0, 64.0);
+    draw_rectangle(
+        portrait.x,
+        portrait.y,
+        portrait.w,
+        portrait.h,
+        rgba(20, 42, 66, 230),
+    );
+    draw_rectangle_lines(
+        portrait.x,
+        portrait.y,
+        portrait.w,
+        portrait.h,
+        1.5,
+        rgba(108, 178, 230, 180),
+    );
+    if let Some(record) = ui_pawns::pawn_visual_record(state, pawn.key) {
+        draw_character(
+            record,
+            CharacterRenderParams {
+                center: vec2(
+                    portrait.x + portrait.w * 0.5,
+                    portrait.y + portrait.h * 0.72,
+                ),
+                scale: 1.0,
+                presentation: crate::character::CharacterPresentation::Portrait,
+                facing: CharacterFacing::Front,
+                facing_left: false,
+                is_walking: false,
+                walk_cycle: 0.0,
+                gesture: CharacterGesture::None,
+                time: 0.0,
+                debug: false,
+            },
+        );
+    }
+
+    let title = format!("{} - {}", pawn.name.to_uppercase(), role);
+    let text_x = portrait.x + portrait.w + 14.0;
     draw_text_shadowed(
         &title,
-        inner.x + 10.0,
-        inner.y + 22.0,
+        text_x,
+        inner.y + 28.0,
         16.0,
         ui_col_text_primary(),
         rgba(0, 0, 0, 160),
@@ -2466,9 +3131,9 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     );
 
     draw_text_shadowed(
-        "Ouvrir une fenetre detaillee :",
-        inner.x + 10.0,
-        inner.y + 44.0,
+        "Ouvrir une fenêtre détaillée.",
+        text_x,
+        inner.y + 52.0,
         13.0,
         ui_col_text_secondary(),
         rgba(0, 0, 0, 140),
@@ -2480,14 +3145,99 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         let hovered = point_in_rect(mouse, rect);
         draw_small_button(rect, tab.label(), hovered, active);
     }
+
+    let rows = [
+        (
+            "Endurance",
+            pawn.metrics.synth[SynthBar::Sante as usize],
+            HeaderIcon::Shield,
+        ),
+        (
+            "Vitesse",
+            pawn.metrics.skills[SkillBar::Dexterite as usize],
+            HeaderIcon::Pulse,
+        ),
+        (
+            "Efficacité",
+            pawn.metrics.skills[SkillBar::Qualite as usize],
+            HeaderIcon::Check,
+        ),
+    ];
+    let tabs = info_quick_button_rects(panel);
+    let mut y = tabs
+        .first()
+        .map(|(_, rect)| rect.y + rect.h + 18.0)
+        .unwrap_or(inner.y + 104.0);
+    let bar_w = (inner.w - 158.0).max(80.0);
+    let bar_x = inner.x + inner.w - bar_w - 20.0;
+    for (label, value, icon) in rows {
+        draw_info_metric_row(inner.x + 18.0, y, bar_x, bar_w, label, value, icon);
+        y += 25.0;
+    }
+}
+
+fn info_compact_inner_rect(panel: Rect) -> Rect {
+    let pad = 10.0;
+    let header_h = 24.0;
+    Rect::new(
+        panel.x + pad,
+        panel.y + header_h + 10.0,
+        (panel.w - pad * 2.0).max(1.0),
+        (panel.h - header_h - 20.0).max(1.0),
+    )
+}
+
+fn draw_info_metric_row(
+    label_x: f32,
+    y: f32,
+    bar_x: f32,
+    bar_w: f32,
+    label: &str,
+    value: u8,
+    icon: HeaderIcon,
+) {
+    draw_header_icon(
+        icon,
+        vec2(label_x + 6.0, y - 5.0),
+        13.0,
+        rgba(184, 218, 242, 230),
+    );
+    draw_text_shadowed(
+        label,
+        label_x + 24.0,
+        y,
+        13.0,
+        ui_col_text_secondary(),
+        rgba(0, 0, 0, 140),
+        ui_shadow_offset(13.0),
+    );
+    draw_meter(
+        bar_x,
+        y - 9.0,
+        bar_w,
+        8.0,
+        value as f32 / 100.0,
+        rgba(118, 212, 116, 240),
+    );
+    let pct = format!("{value}%");
+    let fs = 12.0;
+    draw_text_shadowed(
+        &pct,
+        bar_x + bar_w + 8.0,
+        y,
+        fs,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 145),
+        ui_shadow_offset(fs),
+    );
 }
 
 fn info_quick_button_rects(panel: Rect) -> Vec<(HudInfoTab, Rect)> {
-    let inner = info_inner_rect(panel);
-    let y = inner.y + 56.0;
+    let inner = info_compact_inner_rect(panel);
+    let y = inner.y + 88.0;
     let gap = 8.0;
     let w = ((inner.w - gap) * 0.5).max(60.0);
-    let h = 28.0;
+    let h = 34.0;
     vec![
         (HudInfoTab::Fiche, Rect::new(inner.x, y, w, h)),
         (
@@ -2521,7 +3271,7 @@ fn draw_info_window(state: &GameState, mouse: Vec2) {
         screen_height(),
         rgba(4, 8, 12, 120),
     );
-    draw_panel_frame(panel, "Personnage", mouse);
+    draw_panel_frame(panel, "PERSONNAGE", mouse);
 
     let close_rect = info_window_close_rect(panel);
     draw_small_button(close_rect, "X", point_in_rect(mouse, close_rect), false);
@@ -2920,7 +3670,7 @@ fn draw_minimap_panel(
     map_view: Rect,
     world_camera: &Camera2D,
 ) {
-    draw_panel_frame(panel, "Mini-carte", mouse);
+    draw_panel_frame(panel, "MINI-CARTE", mouse);
 
     let inner = minimap_inner_rect(panel);
     let bg = rgba(10, 14, 18, 240);
@@ -2964,13 +3714,13 @@ fn draw_minimap_panel(
             } else if matches!(kind, Tile::FloorMetal) {
                 rgba(86, 112, 128, 140)
             } else if matches!(kind, Tile::FloorWood) {
-                rgba(120, 96, 78, 132)
+                rgba(128, 78, 42, 158)
             } else if matches!(kind, Tile::FloorMoss) {
-                rgba(74, 118, 86, 132)
+                rgba(58, 120, 62, 154)
             } else if matches!(kind, Tile::FloorSand) {
-                rgba(130, 112, 84, 132)
+                rgba(118, 98, 58, 142)
             } else {
-                rgba(60, 80, 100, 110)
+                rgba(56, 106, 54, 138)
             };
             let x = inner.x + (tx as f32 / state.world.w as f32) * inner.w;
             let y = inner.y + (ty as f32 / state.world.h as f32) * inner.h;
@@ -3017,10 +3767,23 @@ fn draw_minimap_panel(
     }
 
     ensure_default_material();
-    let a = world_camera.screen_to_world(vec2(map_view.x, map_view.y));
-    let b = world_camera.screen_to_world(vec2(map_view.x + map_view.w, map_view.y));
-    let c = world_camera.screen_to_world(vec2(map_view.x + map_view.w, map_view.y + map_view.h));
-    let d = world_camera.screen_to_world(vec2(map_view.x, map_view.y + map_view.h));
+    let a =
+        camera_screen_to_world_in_view_rect(world_camera, vec2(map_view.x, map_view.y), map_view);
+    let b = camera_screen_to_world_in_view_rect(
+        world_camera,
+        vec2(map_view.x + map_view.w, map_view.y),
+        map_view,
+    );
+    let c = camera_screen_to_world_in_view_rect(
+        world_camera,
+        vec2(map_view.x + map_view.w, map_view.y + map_view.h),
+        map_view,
+    );
+    let d = camera_screen_to_world_in_view_rect(
+        world_camera,
+        vec2(map_view.x, map_view.y + map_view.h),
+        map_view,
+    );
 
     let min_x = a.x.min(b.x).min(c.x).min(d.x).clamp(0.0, world_w);
     let max_x = a.x.max(b.x).max(c.x).max(d.x).clamp(0.0, world_w);
@@ -3049,6 +3812,18 @@ fn minimap_inner_rect(panel: Rect) -> Rect {
 fn format_money(amount: f64) -> String {
     let rounded = amount.round() as i64;
     format_int_fr(rounded)
+}
+
+fn format_clock_hhmmss(t_sim_s: f64) -> String {
+    let total = if t_sim_s.is_finite() {
+        t_sim_s.max(0.0).floor() as u64
+    } else {
+        0
+    };
+    let h = (total / 3600) % 24;
+    let m = (total / 60) % 60;
+    let s = total % 60;
+    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn format_int_fr(v: i64) -> String {
@@ -3182,6 +3957,33 @@ mod tests {
                 sum <= sw + 0.001,
                 "sum({sum}) should fit sw({sw}); widths=({pawn_w},{build_w},{info_w},{phone_w},{minimap_w})"
             );
+        }
+    }
+
+    #[test]
+    fn top_strip_layout_keeps_all_cards_inside_viewport() {
+        for sw in [640.0_f32, 800.0, 1024.0, 1228.0, 1536.0, 1920.0] {
+            let viewport = Rect::new(0.0, 0.0, sw, 78.0);
+            let layout = compute_top_strip_layout(viewport, 1.0, 5);
+            let mut cards = vec![layout.brand, layout.nav, layout.simulation];
+            cards.extend(layout.metrics.iter().copied());
+
+            for card in &cards {
+                assert!(card.w > 0.0, "card width should stay positive for sw={sw}");
+                assert!(
+                    card.x >= viewport.x - 0.001,
+                    "card {card:?} should not overflow left for sw={sw}"
+                );
+                assert!(
+                    card.x + card.w <= viewport.x + viewport.w + 0.001,
+                    "card {card:?} should not overflow right for sw={sw}"
+                );
+            }
+
+            assert!(layout.brand.x + layout.brand.w <= layout.nav.x + 0.001);
+            assert!(layout.nav.x + layout.nav.w <= layout.simulation.x + 0.001);
+            let first_metric = layout.metrics.first().expect("metric card");
+            assert!(layout.simulation.x + layout.simulation.w <= first_metric.x + 0.001);
         }
     }
 }

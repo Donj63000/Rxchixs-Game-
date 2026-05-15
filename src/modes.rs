@@ -78,6 +78,18 @@ fn compute_editor_panel_widths(sw: f32, margin: f32) -> (f32, f32, f32) {
     (left_panel_w, right_panel_w, map_w)
 }
 
+fn play_map_view_rect_from_hud(hud_layout: &ui_hud::HudLayout, margin: f32, sw: f32) -> Rect {
+    let top_y = hud_layout.top_strip_rect.y + hud_layout.top_strip_rect.h;
+    let view_y = top_y + margin;
+    let bottom_y = hud_layout.bar_rect.y - margin;
+    Rect::new(
+        margin,
+        view_y,
+        (sw - margin * 2.0).max(1.0),
+        (bottom_y - view_y).max(1.0),
+    )
+}
+
 fn layout_save_failure_status(err: &str) -> String {
     format!("Sauvegarde layout echouee: {err}")
 }
@@ -917,12 +929,7 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
 
     let sw = screen_width();
     let margin = PLAY_CAMERA_MARGIN;
-    let map_view_rect = Rect::new(
-        margin,
-        margin,
-        (sw - margin * 2.0).max(1.0),
-        (hud_layout.bar_rect.y - margin * 2.0).max(1.0),
-    );
+    let map_view_rect = play_map_view_rect_from_hud(&hud_layout, margin, sw);
     let (world_camera, clamped_center, clamped_zoom) = build_world_camera_for_viewport(
         &state.world,
         state.camera_center,
@@ -1016,7 +1023,9 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
 
     draw_lighting_region(&state.props, &state.palette, time, visible_bounds);
     begin_ui_pass();
-    draw_clark_status_panel(state);
+    if state.debug {
+        draw_clark_status_panel(state);
+    }
     draw_rectangle_lines(
         map_view_rect.x + 0.5,
         map_view_rect.y + 0.5,
@@ -1199,12 +1208,7 @@ pub(crate) fn run_play_frame(
     }
     let sw = screen_width();
     let margin = PLAY_CAMERA_MARGIN;
-    let input_view_rect = Rect::new(
-        margin,
-        margin,
-        (sw - margin * 2.0).max(1.0),
-        (hud_layout.bar_rect.y - margin * 2.0).max(1.0),
-    );
+    let input_view_rect = play_map_view_rect_from_hud(&hud_layout, margin, sw);
     let mouse_in_map_input = point_in_rect(mouse, input_view_rect) && !hud_input.mouse_over_ui;
 
     // Wheel: rotate build blocks with mouse in construction mode, otherwise zoom camera.
@@ -1264,12 +1268,7 @@ pub(crate) fn run_play_frame(
     }
 
     // --- Build world camera ---
-    let view_rect = Rect::new(
-        margin,
-        margin,
-        (sw - margin * 2.0).max(1.0),
-        (hud_layout.bar_rect.y - margin * 2.0).max(1.0),
-    );
+    let view_rect = play_map_view_rect_from_hud(&hud_layout, margin, sw);
     let (world_camera, clamped_center, clamped_zoom) = build_world_camera_for_viewport(
         &state.world,
         state.camera_center,
@@ -1285,7 +1284,7 @@ pub(crate) fn run_play_frame(
     // Mouse -> world only if cursor is in the map AND not hovering UI.
     let mouse_in_map = point_in_rect(mouse, map_view_rect) && !hud_input.mouse_over_ui;
     let mouse_world = if mouse_in_map {
-        let mut pos = world_camera.screen_to_world(mouse);
+        let mut pos = camera_screen_to_world_in_view_rect(&world_camera, mouse, map_view_rect);
         let world_w = state.world.w as f32 * TILE_SIZE;
         let world_h = state.world.h as f32 * TILE_SIZE;
         pos.x = pos.x.clamp(0.0, (world_w - 0.001).max(0.0));
@@ -1999,7 +1998,9 @@ pub(crate) fn run_play_frame(
     draw_lighting_region(&state.props, &state.palette, time, visible_bounds);
     begin_ui_pass();
 
-    draw_clark_status_panel(state);
+    if state.debug {
+        draw_clark_status_panel(state);
+    }
 
     draw_rectangle_lines(
         map_view_rect.x + 0.5,
@@ -2120,36 +2121,6 @@ pub(crate) fn run_play_frame(
             font_size,
             line_height,
             Color::from_rgba(236, 246, 255, 255),
-        );
-    } else {
-        let panel = Rect::new(
-            8.0,
-            hud_y0 - 10.0,
-            (screen_width() * 0.84).clamp(620.0, 1320.0),
-            72.0,
-        );
-        draw_overlay_panel(panel);
-        draw_overlay_line(
-            "Mode jeu | Echap: pause | F10: editeur | F11: plein ecran",
-            panel.x + 10.0,
-            panel.y + 24.0,
-            21.0,
-            Color::from_rgba(224, 240, 250, 255),
-        );
-        draw_overlay_line(
-            "Commandes: ZQSD/WASD camera, molette zoom, clic carte deplacement, E interaction/monter, R descendre, F charger/decharger caisse, A/E mât",
-            panel.x + 10.0,
-            panel.y + 44.0,
-            16.0,
-            Color::from_rgba(204, 228, 242, 255),
-        );
-        let hud = state.sim.short_hud();
-        draw_overlay_line(
-            &hud,
-            panel.x + 10.0,
-            panel.y + 63.0,
-            16.0,
-            Color::from_rgba(196, 224, 236, 255),
         );
     }
 
@@ -2305,7 +2276,7 @@ pub(crate) fn run_editor_frame(
         map.world.h as f32 * TILE_SIZE,
     );
     let world_mouse = if frame.mouse_over_map {
-        let mut pos = world_camera.screen_to_world(mouse);
+        let mut pos = camera_screen_to_world_in_view_rect(&world_camera, mouse, map_view_rect);
         pos.x = pos.x.clamp(0.0, (world_size_px.x - 0.001).max(0.0));
         pos.y = pos.y.clamp(0.0, (world_size_px.y - 0.001).max(0.0));
         Some(pos)
