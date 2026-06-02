@@ -4,7 +4,6 @@ use ron::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::Write;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -13,6 +12,7 @@ const FACTORY_LAYOUT_PATH: &str = "data/starter_factory.ron";
 const STARTER_SIM_CONFIG_SCHEMA_VERSION: u32 = 1;
 const FACTORY_LAYOUT_SCHEMA_VERSION: u32 = 1;
 const RESERVATION_TTL_SECONDS: f64 = 8.0;
+const ACTION_STATUS_TTL_SIM_SECONDS: f64 = 240.0;
 const RACK_NIVEAU_COUNT: usize = 6;
 const SAC_CAPACITY_UNITS: u32 = 14;
 const SACS_PAR_BOX: u32 = 21;
@@ -889,6 +889,21 @@ pub struct AgentDebugView {
     pub label: String,
 }
 
+#[derive(Clone, Debug)]
+struct ModernLineReadinessCache {
+    dirty: bool,
+    reason: Option<String>,
+}
+
+impl Default for ModernLineReadinessCache {
+    fn default() -> Self {
+        Self {
+            dirty: true,
+            reason: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 struct FactoryLayoutAsset {
@@ -960,7 +975,7 @@ impl FactoryLayoutAsset {
         }
 
         let mut seen_ids = HashSet::new();
-        for block in &self.blocks {
+        for (idx, block) in self.blocks.iter().enumerate() {
             if block.id == 0 || !seen_ids.insert(block.id) {
                 return Err(format!("id bloc duplique ou invalide: {}", block.id));
             }
@@ -979,6 +994,24 @@ impl FactoryLayoutAsset {
                     block.origin_tile.0,
                     block.origin_tile.1
                 ));
+            }
+            for previous in &self.blocks[..idx] {
+                let previous_footprint = previous
+                    .kind
+                    .footprint_for_orientation(previous.orientation);
+                let overlaps = block.origin_tile.0 < previous.origin_tile.0 + previous_footprint.0
+                    && block.origin_tile.0 + footprint.0 > previous.origin_tile.0
+                    && block.origin_tile.1 < previous.origin_tile.1 + previous_footprint.1
+                    && block.origin_tile.1 + footprint.1 > previous.origin_tile.1;
+                if overlaps {
+                    return Err(format!(
+                        "blocs superposes: #{} {} et #{} {}",
+                        previous.id,
+                        previous.kind.label(),
+                        block.id,
+                        block.kind.label()
+                    ));
+                }
             }
         }
         Ok(())
@@ -1014,6 +1047,9 @@ pub struct FactorySim {
     sales_manager_assigned: bool,
     sale_office_present: bool,
     build_status: String,
+    build_status_ttl_s: f64,
+    production_status: String,
+    modern_line_cache: ModernLineReadinessCache,
 }
 
 impl FactorySim {
@@ -1033,7 +1069,10 @@ impl FactorySim {
             .flatten()
             .collect::<Vec<_>>();
         if !warnings.is_empty() {
-            sim.build_status = format!("Donnees de demarrage degradees: {}", warnings.join(" | "));
+            sim.set_status_line(format!(
+                "Donnees de demarrage degradees: {}",
+                warnings.join(" | ")
+            ));
         }
         sim
     }
@@ -1122,7 +1161,71 @@ impl FactorySim {
             sales_manager_assigned: true,
             sale_office_present: false,
             build_status: String::new(),
+            build_status_ttl_s: 0.0,
+            production_status: "Simulation initialisee".to_string(),
+            modern_line_cache: ModernLineReadinessCache::default(),
         }
+    }
+
+    fn set_action_status(&mut self, status: impl Into<String>) {
+        self.build_status = status.into();
+        self.build_status_ttl_s = ACTION_STATUS_TTL_SIM_SECONDS;
+    }
+
+    fn tick_action_status(&mut self, dt_sim: f64) {
+        if self.build_status.is_empty() || dt_sim <= 0.0 {
+            return;
+        }
+        self.build_status_ttl_s = (self.build_status_ttl_s - dt_sim).max(0.0);
+        if self.build_status_ttl_s <= f64::EPSILON {
+            self.build_status.clear();
+        }
+    }
+
+    fn set_production_status(&mut self, status: impl Into<String>) {
+        self.production_status = status.into();
+    }
+
+    fn mark_modern_line_cache_dirty(&mut self) {
+        self.modern_line_cache.dirty = true;
+    }
+
+    fn cached_modern_line_readiness_reason(&mut self) -> Option<String> {
+        if self.modern_line_cache.dirty {
+            self.modern_line_cache.reason = self.modern_line_readiness_reason_uncached();
+            self.modern_line_cache.dirty = false;
+        }
+        self.modern_line_cache.reason.clone()
+    }
+
+    fn refresh_production_status(&mut self, modern_readiness_reason: Option<&str>) {
+        if self.line.finished > 0 && !self.sales_operational() {
+            self.set_production_status(format!(
+                "Vente en attente: {} (stock fini={})",
+                self.sales_block_reason(),
+                self.line.finished
+            ));
+            return;
+        }
+
+        if let Some(reason) = modern_readiness_reason {
+            if self.modern_line_present() {
+                self.set_production_status(format!(
+                    "Ligne de production non operationnelle: {reason}"
+                ));
+            } else {
+                self.set_production_status(format!(
+                    "Ligne legacy active | finis={} ventes={}",
+                    self.line.finished, self.line.sold_total
+                ));
+            }
+            return;
+        }
+
+        self.set_production_status(format!(
+            "Ligne complete active | sacs bleus={} sacs rouges={} boxes bleues={}",
+            self.line.sacs_bleus_total, self.line.sacs_rouges_total, self.line.boxes_bleues_total
+        ));
     }
 
     pub fn step(&mut self, real_dt_seconds: f32) {
@@ -1138,6 +1241,7 @@ impl FactorySim {
 
         let dt_sim = real_dt * self.config.time_scale.max(0.0);
         self.clock.advance(dt_sim);
+        self.tick_action_status(dt_sim);
         let dt_hours = dt_sim / 3600.0;
 
         let per_hour = self.config.raw_delivery_per_hour.max(0.0);
@@ -1152,25 +1256,11 @@ impl FactorySim {
         let workers = self.config.worker_count as f64;
         self.economy.spend(wage * workers * dt_hours);
 
-        if let Some(reason) = self.modern_line_readiness_reason() {
+        let modern_readiness_reason = self.cached_modern_line_readiness_reason();
+        if modern_readiness_reason.is_some() {
             self.tick_legacy_line(dt_sim, dt_hours);
-            if self.modern_line_present() {
-                self.build_status.clear();
-                let _ = write!(
-                    &mut self.build_status,
-                    "Ligne de production non operationnelle: {reason}"
-                );
-            }
         } else {
             self.tick_modern_line(dt_sim);
-            self.build_status.clear();
-            let _ = write!(
-                &mut self.build_status,
-                "Ligne complete active | sacs bleus={} sacs rouges={} boxes bleues={}",
-                self.line.sacs_bleus_total,
-                self.line.sacs_rouges_total,
-                self.line.boxes_bleues_total
-            );
         }
 
         self.tick_reservations(dt_sim);
@@ -1178,15 +1268,16 @@ impl FactorySim {
         self.refresh_jobs();
         self.tick_agent(dt_sim);
         self.refresh_kpi(dt_hours);
+        self.refresh_production_status(modern_readiness_reason.as_deref());
     }
 
     pub fn toggle_zone_overlay(&mut self) {
         self.show_zone_overlay = !self.show_zone_overlay;
-        self.build_status = if self.show_zone_overlay {
+        self.set_status_line(if self.show_zone_overlay {
             "Surcouche zones : activee".to_string()
         } else {
             "Surcouche zones : desactivee".to_string()
-        };
+        });
     }
 
     // --- Public, stable accessors for UI/debug (no string parsing) ---
@@ -1252,6 +1343,17 @@ impl FactorySim {
         }
     }
 
+    fn job_target_label(&self, kind: &JobKind) -> String {
+        match *kind {
+            JobKind::Haul {
+                from_block,
+                to_block,
+                ..
+            } => format!("B{from_block}->B{to_block}"),
+            JobKind::OperateMachine { block_id } => format!("B{block_id}"),
+        }
+    }
+
     pub fn zone_overlay_enabled(&self) -> bool {
         self.show_zone_overlay
     }
@@ -1262,11 +1364,11 @@ impl FactorySim {
             self.pending_move_block = None;
             self.pending_zone_rect_start = None;
         }
-        self.build_status = if self.build_mode {
+        self.set_status_line(if self.build_mode {
             "Mode construction : actif".to_string()
         } else {
             "Mode construction : arret".to_string()
-        };
+        });
     }
 
     pub fn build_mode_enabled(&self) -> bool {
@@ -1278,7 +1380,10 @@ impl FactorySim {
         self.floor_paint_mode = false;
         self.zone_paint_mode = false;
         self.pending_zone_rect_start = None;
-        self.build_status = format!("Brosse blocs : {}", self.block_brush.buyable_label());
+        self.set_status_line(format!(
+            "Brosse blocs : {}",
+            self.block_brush.buyable_label()
+        ));
     }
 
     pub fn cycle_zone_brush(&mut self) {
@@ -1292,7 +1397,7 @@ impl FactorySim {
         self.floor_paint_mode = false;
         self.zone_paint_mode = true;
         self.pending_zone_rect_start = None;
-        self.build_status = format!("Brosse zones : {}", self.zone_brush.label());
+        self.set_status_line(format!("Brosse zones : {}", self.zone_brush.label()));
     }
 
     pub fn cycle_floor_brush(&mut self) {
@@ -1306,7 +1411,7 @@ impl FactorySim {
         self.floor_paint_mode = true;
         self.zone_paint_mode = false;
         self.pending_zone_rect_start = None;
-        self.build_status = format!("Brosse sols : {}", self.floor_brush.label());
+        self.set_status_line(format!("Brosse sols : {}", self.floor_brush.label()));
     }
 
     pub fn toggle_zone_paint_mode(&mut self) {
@@ -1315,11 +1420,11 @@ impl FactorySim {
         if self.zone_paint_mode {
             self.floor_paint_mode = false;
         }
-        self.build_status = if self.zone_paint_mode {
+        self.set_status_line(if self.zone_paint_mode {
             "Peinture zones : activee".to_string()
         } else {
             "Peinture zones : desactivee".to_string()
-        };
+        });
     }
 
     pub fn cash(&self) -> f64 {
@@ -1363,7 +1468,10 @@ impl FactorySim {
         self.zone_paint_mode = false;
         self.floor_paint_mode = false;
         self.pending_zone_rect_start = None;
-        self.build_status = format!("Brosse blocs : {}", self.block_brush.buyable_label());
+        self.set_status_line(format!(
+            "Brosse blocs : {}",
+            self.block_brush.buyable_label()
+        ));
     }
 
     pub fn block_orientation(&self) -> BlockOrientation {
@@ -1372,7 +1480,10 @@ impl FactorySim {
 
     pub fn set_block_orientation(&mut self, orientation: BlockOrientation) {
         self.block_orientation = orientation;
-        self.build_status = format!("Orientation bloc : {}", self.block_orientation.label());
+        self.set_status_line(format!(
+            "Orientation bloc : {}",
+            self.block_orientation.label()
+        ));
     }
 
     pub fn zone_brush(&self) -> ZoneKind {
@@ -1382,7 +1493,7 @@ impl FactorySim {
     pub fn set_zone_brush(&mut self, kind: ZoneKind) {
         self.zone_brush = kind;
         self.pending_zone_rect_start = None;
-        self.build_status = format!("Brosse zones : {}", self.zone_brush.label());
+        self.set_status_line(format!("Brosse zones : {}", self.zone_brush.label()));
     }
 
     pub fn zone_paint_mode_enabled(&self) -> bool {
@@ -1395,11 +1506,11 @@ impl FactorySim {
         if self.zone_paint_mode {
             self.floor_paint_mode = false;
         }
-        self.build_status = if self.zone_paint_mode {
+        self.set_status_line(if self.zone_paint_mode {
             "Peinture zones : activee".to_string()
         } else {
             "Peinture zones : desactivee".to_string()
-        };
+        });
     }
 
     pub fn floor_brush(&self) -> BuildFloorKind {
@@ -1411,7 +1522,7 @@ impl FactorySim {
         self.floor_paint_mode = true;
         self.zone_paint_mode = false;
         self.pending_zone_rect_start = None;
-        self.build_status = format!("Brosse sols : {}", self.floor_brush.label());
+        self.set_status_line(format!("Brosse sols : {}", self.floor_brush.label()));
     }
 
     pub fn floor_paint_mode_enabled(&self) -> bool {
@@ -1424,11 +1535,11 @@ impl FactorySim {
             self.zone_paint_mode = false;
             self.pending_zone_rect_start = None;
         }
-        self.build_status = if self.floor_paint_mode {
+        self.set_status_line(if self.floor_paint_mode {
             "Peinture sols : activee".to_string()
         } else {
             "Peinture sols : desactivee".to_string()
-        };
+        });
     }
 
     pub fn pending_move_block(&self) -> Option<BlockId> {
@@ -1437,7 +1548,7 @@ impl FactorySim {
 
     pub fn clear_pending_move_block(&mut self) {
         self.pending_move_block = None;
-        self.build_status = "Deplacement annule".to_string();
+        self.set_status_line("Deplacement annule");
     }
 
     pub fn sales_manager_assigned(&self) -> bool {
@@ -1446,11 +1557,11 @@ impl FactorySim {
 
     pub fn toggle_sales_manager_assigned(&mut self) {
         self.sales_manager_assigned = !self.sales_manager_assigned;
-        self.build_status = if self.sales_manager_assigned {
+        self.set_status_line(if self.sales_manager_assigned {
             "Responsable des ventes : assigne".to_string()
         } else {
             "Responsable des ventes : non assigne".to_string()
-        };
+        });
     }
 
     pub fn sales_operational(&self) -> bool {
@@ -1481,6 +1592,31 @@ impl FactorySim {
 
     pub fn descente_rouge_fill_ratio(&self) -> f32 {
         (self.line.red_bag_fill as f32 / SAC_CAPACITY_UNITS as f32).clamp(0.0, 1.0)
+    }
+
+    fn modern_stage_cycle_s(&self, kind: BlockKind, base_cycle_s: f64) -> f64 {
+        let speed = self
+            .first_block_by_kind(kind)
+            .map(|block| zone_rules(self.zones.get(block.origin_tile)).speed_multiplier)
+            .unwrap_or(1.0)
+            .max(0.1);
+        (base_cycle_s / speed).max(0.001)
+    }
+
+    fn modern_sorted_units_total(&self) -> u64 {
+        u64::from(self.line.sacs_bleus_total)
+            .saturating_mul(u64::from(SAC_CAPACITY_UNITS))
+            .saturating_add(
+                u64::from(self.line.sacs_rouges_total)
+                    .saturating_mul(u64::from(SAC_CAPACITY_UNITS)),
+            )
+            .saturating_add(u64::from(self.line.blue_bag_fill))
+            .saturating_add(u64::from(self.line.red_bag_fill))
+    }
+
+    fn modern_next_sortex_unit_is_blue(&self) -> bool {
+        let next_unit_index = self.modern_sorted_units_total().saturating_add(1);
+        !next_unit_index.is_multiple_of(5)
     }
 
     pub fn modern_line_ready(&self) -> bool {
@@ -1585,7 +1721,9 @@ impl FactorySim {
         if !self.line.lavage_busy {
             0.0
         } else {
-            (self.line.lavage_progress_s / MODERN_CYCLE_LAVAGE_S).clamp(0.0, 1.0) as f32
+            (self.line.lavage_progress_s
+                / self.modern_stage_cycle_s(BlockKind::FluidityTank, MODERN_CYCLE_LAVAGE_S))
+            .clamp(0.0, 1.0) as f32
         }
     }
 
@@ -1593,7 +1731,9 @@ impl FactorySim {
         if !self.line.coupe_busy {
             0.0
         } else {
-            (self.line.coupe_progress_s / MODERN_CYCLE_COUPE_S).clamp(0.0, 1.0) as f32
+            (self.line.coupe_progress_s
+                / self.modern_stage_cycle_s(BlockKind::Cutter, MODERN_CYCLE_COUPE_S))
+            .clamp(0.0, 1.0) as f32
         }
     }
 
@@ -1601,7 +1741,9 @@ impl FactorySim {
         if !self.line.four_busy {
             0.0
         } else {
-            (self.line.four_progress_s / MODERN_CYCLE_FOUR_S).clamp(0.0, 1.0) as f32
+            (self.line.four_progress_s
+                / self.modern_stage_cycle_s(BlockKind::DryerOven, MODERN_CYCLE_FOUR_S))
+            .clamp(0.0, 1.0) as f32
         }
     }
 
@@ -1609,7 +1751,9 @@ impl FactorySim {
         if !self.line.floc_busy {
             0.0
         } else {
-            (self.line.floc_progress_s / MODERN_CYCLE_FLOC_S).clamp(0.0, 1.0) as f32
+            (self.line.floc_progress_s
+                / self.modern_stage_cycle_s(BlockKind::Flaker, MODERN_CYCLE_FLOC_S))
+            .clamp(0.0, 1.0) as f32
         }
     }
 
@@ -1617,7 +1761,9 @@ impl FactorySim {
         if !self.line.sortex_busy {
             0.0
         } else {
-            (self.line.sortex_progress_s / MODERN_CYCLE_SORTEX_S).clamp(0.0, 1.0) as f32
+            (self.line.sortex_progress_s
+                / self.modern_stage_cycle_s(BlockKind::Sortex, MODERN_CYCLE_SORTEX_S))
+            .clamp(0.0, 1.0) as f32
         }
     }
 
@@ -1724,6 +1870,7 @@ impl FactorySim {
         let mut block = self.make_block(id, kind, tile, orientation);
         block.footprint = footprint;
         self.blocks.push(block);
+        self.mark_modern_line_cache_dirty();
 
         let (guidance, connected) = if kind.is_modern_line_component() {
             self.modern_line_placement_guidance(kind, tile, footprint, orientation)
@@ -1746,7 +1893,7 @@ impl FactorySim {
             }
             status.push_str(&guidance);
         }
-        self.build_status = status;
+        self.set_status_line(status);
         Ok(id)
     }
 
@@ -1918,7 +2065,7 @@ impl FactorySim {
             );
         }
 
-        if let Some(reason) = self.modern_line_readiness_reason() {
+        if let Some(reason) = self.modern_line_readiness_reason_uncached() {
             return (format!("Connexion a corriger: {reason}"), false);
         }
 
@@ -1973,9 +2120,9 @@ impl FactorySim {
             } else {
                 block_kind.label()
             };
-            self.build_status = format!("Source deplacement=#{} {}", block_id, label);
+            self.set_status_line(format!("Source deplacement=#{} {}", block_id, label));
         } else {
-            self.build_status = "Source deplacement: aucun bloc ici".to_string();
+            self.set_status_line("Source deplacement: aucun bloc ici");
         }
     }
 
@@ -2008,11 +2155,15 @@ impl FactorySim {
             if let Some(index) = self.block_index_at_tile(tile) {
                 let removed = self.blocks.remove(index);
                 self.purge_jobs_referencing_block(removed.id);
+                self.mark_modern_line_cache_dirty();
                 self.economy.earn(removed.kind.capex() * 0.6);
-                self.build_status =
-                    format!("Vendu #{} {}", removed.id, removed.kind.buyable_label());
+                self.set_status_line(format!(
+                    "Vendu #{} {}",
+                    removed.id,
+                    removed.kind.buyable_label()
+                ));
             } else {
-                self.build_status = "Aucun bloc a vendre".to_string();
+                self.set_status_line("Aucun bloc a vendre");
             }
             return;
         }
@@ -2027,19 +2178,23 @@ impl FactorySim {
                 {
                     self.blocks[idx].origin_tile = tile;
                     self.pending_move_block = None;
-                    self.build_status = format!("Deplace #{} -> ({}, {})", move_id, tile.0, tile.1);
+                    self.mark_modern_line_cache_dirty();
+                    self.set_status_line(format!(
+                        "Deplace #{} -> ({}, {})",
+                        move_id, tile.0, tile.1
+                    ));
                 } else {
-                    self.build_status = "Deplacement impossible: destination occupee".to_string();
+                    self.set_status_line("Deplacement impossible: destination occupee");
                 }
             } else {
                 self.pending_move_block = None;
-                self.build_status = "Deplacement annule: source introuvable".to_string();
+                self.set_status_line("Deplacement annule: source introuvable");
             }
             return;
         }
 
         if !self.block_brush.is_player_buyable() {
-            self.build_status = "Bloc non achetable par le joueur".to_string();
+            self.set_status_line("Bloc non achetable par le joueur");
             return;
         }
         let placement = self.can_place_block_at(
@@ -2052,7 +2207,7 @@ impl FactorySim {
         let footprint = match placement {
             Ok(footprint) => footprint,
             Err(reason) => {
-                self.build_status = reason;
+                self.set_status_line(reason);
                 return;
             }
         };
@@ -2071,10 +2226,10 @@ impl FactorySim {
         let id = self.next_block_id;
         let capex = self.block_brush.capex();
         if self.economy.cash < capex {
-            self.build_status = format!(
+            self.set_status_line(format!(
                 "Tresorerie insuffisante: {} EUR requis",
                 format_int_fr(capex.round() as i64)
-            );
+            ));
             return;
         }
         self.next_block_id = self.next_block_id.saturating_add(1);
@@ -2082,6 +2237,7 @@ impl FactorySim {
         let mut block = self.make_block(id, self.block_brush, tile, self.block_orientation);
         block.footprint = footprint;
         self.blocks.push(block);
+        self.mark_modern_line_cache_dirty();
         let mut status = format!(
             "Place {} #{} [{} {}x{}]",
             self.block_brush.buyable_label(),
@@ -2098,7 +2254,7 @@ impl FactorySim {
             }
             status.push_str(&placement_guidance);
         }
-        self.build_status = status;
+        self.set_status_line(status);
     }
 
     pub fn save_layout(&mut self) -> Result<(), String> {
@@ -2111,7 +2267,7 @@ impl FactorySim {
             agent_tile: self.agent.tile,
         };
         self.save_layout_asset(&layout)?;
-        self.build_status = format!("Layout usine sauvegarde: {FACTORY_LAYOUT_PATH}");
+        self.set_status_line(format!("Layout usine sauvegarde: {FACTORY_LAYOUT_PATH}"));
         Ok(())
     }
 
@@ -2225,11 +2381,15 @@ impl FactorySim {
     }
 
     pub fn status_line(&self) -> &str {
-        &self.build_status
+        if self.build_status.is_empty() {
+            &self.production_status
+        } else {
+            &self.build_status
+        }
     }
 
     pub fn set_status_line(&mut self, status: impl Into<String>) {
-        self.build_status = status.into();
+        self.set_action_status(status);
     }
 
     fn apply_zone_rect_click(&mut self, tile: (i32, i32), right_click: bool) {
@@ -2240,12 +2400,12 @@ impl FactorySim {
         };
         let Some(start) = self.pending_zone_rect_start.take() else {
             self.pending_zone_rect_start = Some(tile);
-            self.build_status = format!(
+            self.set_status_line(format!(
                 "Zone {}: coin 1 fixe en ({}, {}), clique le coin oppose",
                 zone_target.label(),
                 tile.0,
                 tile.1
-            );
+            ));
             return;
         };
 
@@ -2265,12 +2425,12 @@ impl FactorySim {
 
         let total_cost = zone_target.capex_par_tuile_eur() * changed_tiles as f64;
         if total_cost > 0.0 && self.economy.cash < total_cost {
-            self.build_status = format!(
+            self.set_status_line(format!(
                 "Tresorerie insuffisante: {} EUR requis pour zone {} ({} tuiles)",
                 format_int_fr(total_cost.round() as i64),
                 zone_target.label(),
                 changed_tiles
-            );
+            ));
             return;
         }
         if total_cost > 0.0 {
@@ -2283,7 +2443,7 @@ impl FactorySim {
             }
         }
 
-        self.build_status = format!(
+        self.set_status_line(format!(
             "Zone {} appliquee sur rectangle ({}, {}) -> ({}, {}) [{} tuiles]",
             zone_target.label(),
             min_x,
@@ -2291,16 +2451,16 @@ impl FactorySim {
             max_x,
             max_y,
             changed_tiles
-        );
+        ));
     }
 
     fn apply_floor_click(&mut self, world: &mut crate::World, tile: (i32, i32), right_click: bool) {
         if tile.0 <= 0 || tile.1 <= 0 || tile.0 >= self.map_w - 1 || tile.1 >= self.map_h - 1 {
-            self.build_status = "Pose sol impossible sur la bordure".to_string();
+            self.set_status_line("Pose sol impossible sur la bordure");
             return;
         }
         if world.is_solid(tile.0, tile.1) {
-            self.build_status = "Pose sol impossible: mur present".to_string();
+            self.set_status_line("Pose sol impossible: mur present");
             return;
         }
 
@@ -2310,7 +2470,7 @@ impl FactorySim {
             self.floor_brush.to_tile()
         };
         if world.get(tile.0, tile.1) == next_tile {
-            self.build_status = "Aucun changement de sol".to_string();
+            self.set_status_line("Aucun changement de sol");
             return;
         }
 
@@ -2320,10 +2480,10 @@ impl FactorySim {
             self.floor_brush.capex_par_tuile_eur()
         };
         if capex > 0.0 && self.economy.cash < capex {
-            self.build_status = format!(
+            self.set_status_line(format!(
                 "Tresorerie insuffisante: {} EUR requis",
                 format_int_fr(capex.round() as i64)
-            );
+            ));
             return;
         }
         if capex > 0.0 {
@@ -2331,7 +2491,7 @@ impl FactorySim {
         }
 
         world.set(tile.0, tile.1, next_tile);
-        self.build_status = if right_click {
+        self.set_status_line(if right_click {
             format!("Sol reinitialise @ ({}, {})", tile.0, tile.1)
         } else {
             format!(
@@ -2340,7 +2500,7 @@ impl FactorySim {
                 tile.0,
                 tile.1
             )
-        };
+        });
     }
 
     fn first_block_by_kind(&self, kind: BlockKind) -> Option<&BlockInstance> {
@@ -2663,7 +2823,7 @@ impl FactorySim {
             .any(|block| block.kind.is_modern_line_component())
     }
 
-    fn modern_line_readiness_reason(&self) -> Option<String> {
+    fn modern_line_readiness_reason_uncached(&self) -> Option<String> {
         for kind in MODERN_LINE_REQUIRED_KINDS {
             if self.first_block_by_kind(kind).is_none() {
                 return Some(format!("Bloc manquant: {}", kind.buyable_label()));
@@ -2799,20 +2959,12 @@ impl FactorySim {
             }
         }
 
-        if self.line.finished > 0 {
-            if self.sales_operational() {
-                let sold = self.line.finished;
-                self.line.finished = 0;
-                self.line.sold_total = self.line.sold_total.saturating_add(sold);
-                self.economy
-                    .earn(sold as f64 * self.config.sale_price.max(0.0));
-            } else {
-                self.build_status = format!(
-                    "Vente en attente: {} (stock fini={})",
-                    self.sales_block_reason(),
-                    self.line.finished
-                );
-            }
+        if self.line.finished > 0 && self.sales_operational() {
+            let sold = self.line.finished;
+            self.line.finished = 0;
+            self.line.sold_total = self.line.sold_total.saturating_add(sold);
+            self.economy
+                .earn(sold as f64 * self.config.sale_price.max(0.0));
         }
 
         let _ = dt_hours;
@@ -2822,6 +2974,13 @@ impl FactorySim {
         self.line.descente_bleue_beacon_s = (self.line.descente_bleue_beacon_s - dt_sim).max(0.0);
         self.line.descente_rouge_beacon_s = (self.line.descente_rouge_beacon_s - dt_sim).max(0.0);
 
+        let lavage_cycle_s =
+            self.modern_stage_cycle_s(BlockKind::FluidityTank, MODERN_CYCLE_LAVAGE_S);
+        let coupe_cycle_s = self.modern_stage_cycle_s(BlockKind::Cutter, MODERN_CYCLE_COUPE_S);
+        let four_cycle_s = self.modern_stage_cycle_s(BlockKind::DryerOven, MODERN_CYCLE_FOUR_S);
+        let floc_cycle_s = self.modern_stage_cycle_s(BlockKind::Flaker, MODERN_CYCLE_FLOC_S);
+        let sortex_cycle_s = self.modern_stage_cycle_s(BlockKind::Sortex, MODERN_CYCLE_SORTEX_S);
+
         if !self.line.lavage_busy && self.line.raw > 0 {
             self.line.raw -= 1;
             self.line.lavage_busy = true;
@@ -2829,7 +2988,7 @@ impl FactorySim {
         }
         if self.line.lavage_busy {
             self.line.lavage_progress_s += dt_sim;
-            if self.line.lavage_progress_s >= MODERN_CYCLE_LAVAGE_S {
+            if self.line.lavage_progress_s >= lavage_cycle_s {
                 self.line.lavage_busy = false;
                 self.line.lavage_progress_s = 0.0;
                 self.line.washed = self.line.washed.saturating_add(1);
@@ -2847,7 +3006,7 @@ impl FactorySim {
         }
         if self.line.coupe_busy {
             self.line.coupe_progress_s += dt_sim;
-            if self.line.coupe_progress_s >= MODERN_CYCLE_COUPE_S {
+            if self.line.coupe_progress_s >= coupe_cycle_s {
                 self.line.coupe_busy = false;
                 self.line.coupe_progress_s = 0.0;
                 self.line.sliced = self.line.sliced.saturating_add(1);
@@ -2862,7 +3021,7 @@ impl FactorySim {
         }
         if self.line.four_busy {
             self.line.four_progress_s += dt_sim;
-            if self.line.four_progress_s >= MODERN_CYCLE_FOUR_S {
+            if self.line.four_progress_s >= four_cycle_s {
                 self.line.four_busy = false;
                 self.line.four_progress_s = 0.0;
                 self.line.dehydrated = self.line.dehydrated.saturating_add(1);
@@ -2879,7 +3038,7 @@ impl FactorySim {
         }
         if self.line.floc_busy {
             self.line.floc_progress_s += dt_sim;
-            if self.line.floc_progress_s >= MODERN_CYCLE_FLOC_S {
+            if self.line.floc_progress_s >= floc_cycle_s {
                 self.line.floc_busy = false;
                 self.line.floc_progress_s = 0.0;
                 self.line.flakes = self.line.flakes.saturating_add(1);
@@ -2893,15 +3052,10 @@ impl FactorySim {
         }
         if self.line.sortex_busy {
             self.line.sortex_progress_s += dt_sim;
-            if self.line.sortex_progress_s >= MODERN_CYCLE_SORTEX_S {
+            if self.line.sortex_progress_s >= sortex_cycle_s {
                 self.line.sortex_busy = false;
                 self.line.sortex_progress_s = 0.0;
-                let split_seed = self.line.sacs_bleus_total
-                    + self.line.sacs_rouges_total
-                    + self.line.blue_bag_fill
-                    + self.line.red_bag_fill;
-                let blue_path = !split_seed.is_multiple_of(5);
-                if blue_path {
+                if self.modern_next_sortex_unit_is_blue() {
                     self.line.blue_bag_fill = self.line.blue_bag_fill.saturating_add(1);
                     if self.line.blue_bag_fill >= SAC_CAPACITY_UNITS {
                         self.line.blue_bag_fill = 0;
@@ -2909,6 +3063,7 @@ impl FactorySim {
                         self.line.descente_bleue_beacon_s = 7.0;
                     }
                 } else {
+                    self.kpi.scrap_total = self.kpi.scrap_total.saturating_add(1);
                     self.line.red_bag_fill = self.line.red_bag_fill.saturating_add(1);
                     if self.line.red_bag_fill >= SAC_CAPACITY_UNITS {
                         self.line.red_bag_fill = 0;
@@ -2919,28 +3074,14 @@ impl FactorySim {
             }
         }
 
-        while self.line.sacs_bleus_total
-            >= (self.line.boxes_bleues_total + 1).saturating_mul(SACS_PAR_BOX)
-        {
-            self.line.boxes_bleues_total = self.line.boxes_bleues_total.saturating_add(1);
-            self.line.finished = self.line.finished.saturating_add(1);
-            self.line.produced_finished_total = self.line.produced_finished_total.saturating_add(1);
-        }
+        self.sync_modern_finished_boxes();
 
-        if self.line.finished > 0 {
-            if self.sales_operational() {
-                let sold = self.line.finished;
-                self.line.finished = 0;
-                self.line.sold_total = self.line.sold_total.saturating_add(sold);
-                self.economy
-                    .earn(sold as f64 * self.config.sale_price.max(0.0));
-            } else {
-                self.build_status = format!(
-                    "Vente en attente: {} (boxes bleues={})",
-                    self.sales_block_reason(),
-                    self.line.finished
-                );
-            }
+        if self.line.finished > 0 && self.sales_operational() {
+            let sold = self.line.finished;
+            self.line.finished = 0;
+            self.line.sold_total = self.line.sold_total.saturating_add(sold);
+            self.economy
+                .earn(sold as f64 * self.config.sale_price.max(0.0));
         }
 
         self.line.wip = self
@@ -2969,6 +3110,19 @@ impl FactorySim {
         } else {
             self.line.four_progress_s
         };
+    }
+
+    fn sync_modern_finished_boxes(&mut self) {
+        let expected_boxes = self.line.sacs_bleus_total / SACS_PAR_BOX;
+        if expected_boxes <= self.line.boxes_bleues_total {
+            return;
+        }
+
+        let new_boxes = expected_boxes - self.line.boxes_bleues_total;
+        self.line.boxes_bleues_total = expected_boxes;
+        self.line.finished = self.line.finished.saturating_add(new_boxes);
+        self.line.produced_finished_total =
+            self.line.produced_finished_total.saturating_add(new_boxes);
     }
 
     fn sync_blocks_from_line(&mut self) {
@@ -3259,33 +3413,36 @@ impl FactorySim {
             let job_id = self.jobs[job_idx].id;
             let keys = self.reservation_keys_for_job(&self.jobs[job_idx].kind);
             if self.try_reserve_all(keys, job_id).is_ok() {
+                let job_kind = self.jobs[job_idx].kind.clone();
+                let job_priority = self.jobs[job_idx].priority;
+                let job_label = self.job_kind_label(&job_kind);
+                let job_target = self.job_target_label(&job_kind);
                 let agent_id = self.agent.id;
                 self.jobs[job_idx].state = JobState::Claimed;
                 self.jobs[job_idx].assigned_agent = Some(agent_id);
                 self.jobs[job_idx].score_debug = format!(
                     "priorite={} fatigue={:.1} stress={:.1}",
-                    self.jobs[job_idx].priority, self.agent.fatigue, self.agent.stress
+                    job_priority, self.agent.fatigue, self.agent.stress
                 );
                 self.agent.current_job = Some(job_id);
                 self.agent.job_progress_s = 0.0;
                 self.agent.decision_debug = format!(
-                    "{} score:{}",
-                    self.job_kind_label(&self.jobs[job_idx].kind),
+                    "job=#{job_id} {job_label} cible={job_target} priorite={job_priority} score:{}",
                     self.jobs[job_idx].score_debug
                 );
             } else {
+                let job_kind = self.jobs[job_idx].kind.clone();
+                let job_priority = self.jobs[job_idx].priority;
+                let job_target = self.job_target_label(&job_kind);
                 if !matches!(
                     self.jobs[job_idx].state,
                     JobState::Blocked(ref reason) if reason == "conflit reservation"
                 ) {
                     self.jobs[job_idx].state = JobState::Blocked("conflit reservation".to_string());
                 }
-                if self.agent.decision_debug != "bloque: conflit reservation" {
-                    self.agent.decision_debug.clear();
-                    self.agent
-                        .decision_debug
-                        .push_str("bloque: conflit reservation");
-                }
+                self.agent.decision_debug = format!(
+                    "bloque job=#{job_id} cible={job_target} priorite={job_priority} raison=conflit reservation"
+                );
             }
         } else {
             if self.agent.decision_debug != "inactif(aucune tache en attente)" {
@@ -3590,7 +3747,7 @@ impl FactorySim {
             self.kpi.otif * 100.0,
             zone_summary,
             self.build_hint_line(),
-            self.build_status
+            self.status_line()
         )
     }
 }
@@ -3614,16 +3771,10 @@ mod tests {
     use super::*;
 
     fn temp_ron_path(name: &str) -> std::path::PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "rxchixs_sim_{}_{}_{}.ron",
-            name,
-            std::process::id(),
-            stamp
-        ))
+        let path =
+            std::env::temp_dir().join(format!("rxchixs_sim_{}_{}.ron", name, std::process::id()));
+        let _ = fs::remove_file(&path);
+        path
     }
 
     #[test]
@@ -3717,6 +3868,117 @@ mod tests {
 
         sim.apply_build_click(&mut world, tile, true);
         assert!(sim.block_at_tile(tile).is_none());
+    }
+
+    #[test]
+    fn action_status_survives_production_tick_until_deterministic_expiry() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let mut world = crate::World::new_room(25, 15);
+        sim.toggle_build_mode();
+
+        sim.apply_build_click(&mut world, (6, 11), false);
+        assert!(sim.status_line().contains("Place"));
+
+        sim.step(1.0 / 60.0);
+        assert!(sim.status_line().contains("Place"));
+
+        for _ in 0..ACTION_STATUS_TTL_SIM_SECONDS as usize {
+            sim.step(1.0 / 60.0);
+        }
+        assert!(!sim.status_line().contains("Place"));
+    }
+
+    #[test]
+    fn sales_blocked_status_is_visible_after_tick() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        sim.sales_manager_assigned = false;
+        sim.line.finished = 2;
+
+        sim.step(1.0 / 60.0);
+
+        assert!(sim.status_line().contains("Vente en attente"));
+        assert!(sim.status_line().contains("Responsable"));
+        assert_eq!(sim.line.finished, 2);
+    }
+
+    #[test]
+    fn factory_layout_validation_rejects_overlapping_block_footprints() {
+        let layout = FactoryLayoutAsset {
+            schema_version: FACTORY_LAYOUT_SCHEMA_VERSION,
+            map_w: 12,
+            map_h: 12,
+            zones: ZoneLayer::new(12, 12, ZoneKind::Neutral),
+            blocks: vec![
+                BlockInstance {
+                    id: 1,
+                    kind: BlockKind::Storage,
+                    origin_tile: (3, 3),
+                    footprint: (1, 1),
+                    ..BlockInstance::default()
+                },
+                BlockInstance {
+                    id: 2,
+                    kind: BlockKind::Buffer,
+                    origin_tile: (3, 3),
+                    footprint: (1, 1),
+                    ..BlockInstance::default()
+                },
+            ],
+            agent_tile: (4, 4),
+        };
+
+        let err = layout.validate().expect_err("layout superpose refuse");
+        assert!(err.contains("superposes"));
+    }
+
+    #[test]
+    fn modern_line_cache_is_invalidated_by_placement_and_sale() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 80, 60);
+        let mut world = crate::World::new_room(80, 60);
+        sim.blocks.clear();
+        sim.mark_modern_line_cache_dirty();
+        assert!(sim.cached_modern_line_readiness_reason().is_some());
+        assert!(!sim.modern_line_cache.dirty);
+
+        sim.toggle_build_mode();
+        sim.set_block_brush(BlockKind::InputHopper);
+        sim.apply_build_click(&mut world, (20, 20), false);
+        assert!(sim.modern_line_cache.dirty);
+
+        assert!(sim.cached_modern_line_readiness_reason().is_some());
+        assert!(!sim.modern_line_cache.dirty);
+
+        sim.apply_build_click(&mut world, (20, 20), true);
+        assert!(sim.modern_line_cache.dirty);
+    }
+
+    #[test]
+    fn agent_debug_label_exposes_blocked_job_priority_target_and_reason() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let job_id = 99;
+        sim.jobs.push(Job {
+            id: job_id,
+            kind: JobKind::OperateMachine { block_id: 1 },
+            state: JobState::Pending,
+            priority: 42,
+            score_debug: String::new(),
+            assigned_agent: None,
+        });
+        sim.reservations.insert(
+            ReservationKey::BlockInput(1),
+            Reservation {
+                job_id: 777,
+                ttl_s: RESERVATION_TTL_SECONDS,
+            },
+        );
+
+        sim.tick_agent(1.0 / 60.0);
+
+        let label = &sim.agent_debug_views()[0].label;
+        assert!(label.contains("job=#99"));
+        assert!(label.contains("cible=B1"));
+        assert!(label.contains("priorite=42"));
+        assert!(label.contains("raison=conflit reservation"));
     }
 
     #[test]
@@ -4348,6 +4610,8 @@ mod tests {
         place(BlockKind::BlueBagChute, (115, 49), BlockOrientation::East);
         place(BlockKind::RedBagChute, (115, 52), BlockOrientation::East);
 
+        sim.build_status.clear();
+        sim.build_status_ttl_s = 0.0;
         sim.step(1.0 / 60.0);
 
         assert!(sim.status_line().contains("Connexion invalide"));
@@ -4396,6 +4660,63 @@ mod tests {
         assert!(!sim.status_line().contains("non operationnelle"));
         assert!(sim.line.produced_wip_total > 0);
         assert!(sim.line.sacs_bleus_total + sim.line.sacs_rouges_total > 0);
+    }
+
+    #[test]
+    fn modern_sortex_counts_red_outputs_as_scrap() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 80, 60);
+        sim.line.flakes = 5;
+
+        for _ in 0..5 {
+            sim.tick_modern_line(MODERN_CYCLE_SORTEX_S);
+        }
+
+        assert_eq!(sim.line.blue_bag_fill, 4);
+        assert_eq!(sim.line.red_bag_fill, 1);
+        assert_eq!(sim.kpi.scrap_total, 1);
+        assert_eq!(sim.modern_sorted_units_total(), 5);
+    }
+
+    #[test]
+    fn modern_stage_cycles_use_block_zone_speed() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 80, 60);
+        let world = crate::World::new_room(80, 60);
+        sim.blocks.clear();
+        for y in 20..23 {
+            for x in 20..23 {
+                sim.zones.set((x, y), ZoneKind::Processing);
+            }
+        }
+        sim.poser_bloc_script(
+            &world,
+            BlockKind::Cutter,
+            (20, 20),
+            BlockOrientation::East,
+            false,
+        )
+        .expect("cutter should be placeable");
+        sim.line.washed = 1;
+
+        let boosted_cycle_s =
+            MODERN_CYCLE_COUPE_S / zone_rules(ZoneKind::Processing).speed_multiplier;
+        assert!(boosted_cycle_s < MODERN_CYCLE_COUPE_S);
+        sim.tick_modern_line(boosted_cycle_s + 0.01);
+
+        assert!(!sim.line.coupe_busy);
+        assert!(sim.line.four_busy);
+    }
+
+    #[test]
+    fn modern_box_sync_batches_blue_bags_without_iterating_each_box() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 80, 60);
+        sim.line.sacs_bleus_total = SACS_PAR_BOX * 3;
+        sim.line.boxes_bleues_total = 1;
+
+        sim.sync_modern_finished_boxes();
+
+        assert_eq!(sim.line.boxes_bleues_total, 3);
+        assert_eq!(sim.line.finished, 2);
+        assert_eq!(sim.line.produced_finished_total, 2);
     }
 
     #[test]

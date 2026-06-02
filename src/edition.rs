@@ -1134,7 +1134,7 @@ fn initial_play_camera_center(world: &World, fallback_spawn: (i32, i32)) -> Vec2
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::process;
 
     fn test_map(w: i32, h: i32) -> MapAsset {
         let mut world = World {
@@ -1153,6 +1153,12 @@ mod tests {
             player_spawn: (1, 1),
             npc_spawn: (w - 2, h - 2),
         }
+    }
+
+    fn temp_test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rxchixs_{name}_{}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir
     }
 
     #[test]
@@ -1404,11 +1410,7 @@ mod tests {
 
     #[test]
     fn next_available_file_name_adds_increment_when_name_exists() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("temps systeme")
-            .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("rxchixs_layout_test_{stamp}"));
+        let temp_dir = temp_test_dir("layout_test");
         fs::create_dir_all(&temp_dir).expect("dossier temp");
         fs::write(temp_dir.join("layout.ron"), "x").expect("fichier 1");
         fs::write(temp_dir.join("layout_2.ron"), "x").expect("fichier 2");
@@ -1455,11 +1457,7 @@ mod tests {
     fn editor_autosave_map_writes_loadable_payload() {
         let map = test_map(10, 10);
         let editor = EditorState::new();
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("temps systeme")
-            .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("rxchixs_autosave_test_{stamp}"));
+        let temp_dir = temp_test_dir("autosave_test");
         fs::create_dir_all(&temp_dir).expect("dossier temp");
         let file_path = temp_dir.join("autosave.ron");
         let path = file_path.to_string_lossy().to_string();
