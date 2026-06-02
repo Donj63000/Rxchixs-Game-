@@ -1,3 +1,7 @@
+use crate::gestion::{
+    EmployeeRole, LineOperationalState, PersonnelState, ProductionLineId, ProductionLineState,
+    SalesState, SimCommand, StockState,
+};
 use ron::{
     de::from_str as ron_from_str,
     ser::{PrettyConfig, to_string_pretty as ron_to_string_pretty},
@@ -21,6 +25,9 @@ const MODERN_CYCLE_COUPE_S: f64 = 11.0;
 const MODERN_CYCLE_FOUR_S: f64 = 42.0;
 const MODERN_CYCLE_FLOC_S: f64 = 14.0;
 const MODERN_CYCLE_SORTEX_S: f64 = 9.0;
+const FACTORY_SIM_SAVE_SCHEMA_VERSION: u32 = 1;
+const MAIN_PRODUCTION_LINE_ID: ProductionLineId = 1;
+const TEMP_CONTRACT_SECONDS: f64 = 2.0 * 3600.0;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct SimClock {
@@ -233,7 +240,7 @@ impl StarterSimConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StarterLineState {
     pub raw: u32,
     pub wip: u32,
@@ -872,6 +879,31 @@ pub struct BlockDebugView {
     pub rack_levels: [bool; RACK_NIVEAU_COUNT],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockRenderView {
+    pub id: BlockId,
+    pub kind: BlockKind,
+    pub tile: (i32, i32),
+    pub footprint: (i32, i32),
+    pub orientation: BlockOrientation,
+    pub raw_qty: u32,
+    pub rack_levels: [bool; RACK_NIVEAU_COUNT],
+}
+
+impl BlockDebugView {
+    pub fn render_view(&self) -> BlockRenderView {
+        BlockRenderView {
+            id: self.id,
+            kind: self.kind,
+            tile: self.tile,
+            footprint: self.footprint,
+            orientation: self.orientation,
+            raw_qty: self.raw_qty,
+            rack_levels: self.rack_levels,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BuildBlockPreview {
     pub kind: BlockKind,
@@ -906,7 +938,7 @@ impl Default for ModernLineReadinessCache {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
-struct FactoryLayoutAsset {
+pub(crate) struct FactoryLayoutAsset {
     schema_version: u32,
     map_w: i32,
     map_h: i32,
@@ -1018,11 +1050,33 @@ impl FactoryLayoutAsset {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct FactorySimSaveAsset {
+    #[serde(default = "default_factory_sim_save_schema_version")]
+    pub schema_version: u32,
+    pub clock: SimClock,
+    pub economy: Economy,
+    pub personnel: PersonnelState,
+    pub stock: StockState,
+    pub sales: SalesState,
+    pub production_lines: Vec<ProductionLineState>,
+    pub line: StarterLineState,
+    pub layout: FactoryLayoutAsset,
+}
+
+fn default_factory_sim_save_schema_version() -> u32 {
+    FACTORY_SIM_SAVE_SCHEMA_VERSION
+}
+
 pub struct FactorySim {
     pub clock: SimClock,
     pub economy: Economy,
     pub config: StarterSimConfig,
     pub line: StarterLineState,
+    personnel: PersonnelState,
+    stock: StockState,
+    production_lines: Vec<ProductionLineState>,
+    sales: SalesState,
     zones: ZoneLayer,
     blocks: Vec<BlockInstance>,
     jobs: Vec<Job>,
@@ -1044,7 +1098,6 @@ pub struct FactorySim {
     floor_brush: BuildFloorKind,
     pending_zone_rect_start: Option<(i32, i32)>,
     pending_move_block: Option<BlockId>,
-    sales_manager_assigned: bool,
     sale_office_present: bool,
     build_status: String,
     build_status_ttl_s: f64,
@@ -1123,11 +1176,24 @@ impl FactorySim {
             );
         }
 
+        let mut production_lines = vec![ProductionLineState::main_line()];
+        let personnel = PersonnelState::sandbox_start(0.0, MAIN_PRODUCTION_LINE_ID);
+        if let Some(lead) = personnel.team_lead_for_line(MAIN_PRODUCTION_LINE_ID) {
+            production_lines[0].assigned_lead_id = Some(lead.id);
+        }
+        let stock = StockState::sandbox_start();
+        let mut line = StarterLineState::new();
+        line.raw = stock.raw_line_input;
+
         Self {
             clock: SimClock::new(),
             economy: Economy::new(config.starting_cash),
             config,
-            line: StarterLineState::new(),
+            line,
+            personnel,
+            stock,
+            production_lines,
+            sales: SalesState::default(),
             zones: layout.zones,
             blocks: layout.blocks,
             jobs: Vec::new(),
@@ -1158,7 +1224,6 @@ impl FactorySim {
             floor_brush: BuildFloorKind::Standard,
             pending_zone_rect_start: None,
             pending_move_block: None,
-            sales_manager_assigned: true,
             sale_office_present: false,
             build_status: String::new(),
             build_status_ttl_s: 0.0,
@@ -1208,6 +1273,12 @@ impl FactorySim {
             return;
         }
 
+        if self.main_line_state().status == LineOperationalState::Bloquee {
+            let reason = self.main_line_state().block_reason.clone();
+            self.set_production_status(format!("Ligne 1 bloquee: {reason}"));
+            return;
+        }
+
         if let Some(reason) = modern_readiness_reason {
             if self.modern_line_present() {
                 self.set_production_status(format!(
@@ -1228,41 +1299,209 @@ impl FactorySim {
         ));
     }
 
+    fn sale_office_count(&self) -> usize {
+        self.blocks
+            .iter()
+            .filter(|block| {
+                block.kind == BlockKind::Seller
+                    && self.zones.get(block.origin_tile) == ZoneKind::Support
+            })
+            .count()
+    }
+
+    fn refresh_static_capabilities(&mut self) {
+        self.sale_office_present = self.sale_office_count() > 0;
+    }
+
+    fn main_line_state(&self) -> &ProductionLineState {
+        self.production_lines
+            .iter()
+            .find(|line| line.id == MAIN_PRODUCTION_LINE_ID)
+            .unwrap_or(&self.production_lines[0])
+    }
+
+    fn main_line_state_mut(&mut self) -> &mut ProductionLineState {
+        let index = self
+            .production_lines
+            .iter()
+            .position(|line| line.id == MAIN_PRODUCTION_LINE_ID)
+            .unwrap_or(0);
+        &mut self.production_lines[index]
+    }
+
+    fn line_has_work_in_progress(&self) -> bool {
+        self.line.wip > 0
+            || self.line.washed > 0
+            || self.line.sliced > 0
+            || self.line.dehydrated > 0
+            || self.line.flakes > 0
+            || self.line.machine_a_busy
+            || self.line.machine_b_busy
+            || self.line.lavage_busy
+            || self.line.coupe_busy
+            || self.line.four_busy
+            || self.line.floc_busy
+            || self.line.sortex_busy
+    }
+
+    fn production_staffing_factor(&self) -> f64 {
+        self.main_line_state().staffing_factor.max(0.1)
+    }
+
+    fn refresh_line_statuses(&mut self, modern_readiness_reason: Option<&str>) -> Option<String> {
+        let Some(lead_id) = self
+            .personnel
+            .team_lead_for_line(MAIN_PRODUCTION_LINE_ID)
+            .map(|lead| lead.id)
+        else {
+            let line = self.main_line_state_mut();
+            line.assigned_lead_id = None;
+            line.set_blocked("aucun chef d'equipe assigne");
+            return Some("aucun chef d'equipe assigne".to_string());
+        };
+
+        if self.modern_line_present()
+            && let Some(reason) = modern_readiness_reason
+        {
+            let line = self.main_line_state_mut();
+            line.assigned_lead_id = Some(lead_id);
+            line.set_blocked(reason.to_string());
+            return Some(reason.to_string());
+        }
+
+        if self.line.raw == 0 && !self.line_has_work_in_progress() {
+            let reason = if self.stock.raw_receiving > 0
+                && self.personnel.available_role_count(EmployeeRole::Cariste) == 0
+            {
+                "stock entree vide, caristes absents"
+            } else {
+                "stock entree vide"
+            };
+            let line = self.main_line_state_mut();
+            line.assigned_lead_id = Some(lead_id);
+            line.set_blocked(reason);
+            return Some(reason.to_string());
+        }
+
+        let active_temps = self.personnel.active_temps_for_lead(lead_id);
+        self.main_line_state_mut().set_active(lead_id, active_temps);
+        None
+    }
+
+    fn tick_team_leads_and_temps(&mut self, dt_sim: f64) {
+        self.personnel.tick_temp_contracts(dt_sim);
+
+        let Some(lead) = self
+            .personnel
+            .team_lead_for_line(MAIN_PRODUCTION_LINE_ID)
+            .cloned()
+        else {
+            return;
+        };
+
+        if !self.stock.has_any_raw_for_line() && !self.line_has_work_in_progress() {
+            let _ = self
+                .personnel
+                .release_finished_temps_without_stock(MAIN_PRODUCTION_LINE_ID);
+            return;
+        }
+
+        let Some(policy) = lead.temp_policy.clone() else {
+            return;
+        };
+        if !policy.enabled || self.economy.cash < policy.min_cash_reserve {
+            return;
+        }
+
+        let max_temps = policy.max_temps.min(3) as usize;
+        let desired = if self.stock.raw_line_input >= 90 || self.stock.raw_receiving >= 300 {
+            max_temps.min(2)
+        } else if self.stock.raw_line_input > 0 || self.stock.raw_receiving > 0 {
+            max_temps.min(1)
+        } else {
+            0
+        };
+        let mut active = self.personnel.active_temps_for_lead(lead.id);
+        while active < desired {
+            if self
+                .personnel
+                .hire_temp_for_lead(
+                    lead.id,
+                    MAIN_PRODUCTION_LINE_ID,
+                    self.clock.seconds(),
+                    TEMP_CONTRACT_SECONDS,
+                )
+                .is_err()
+            {
+                break;
+            }
+            active += 1;
+        }
+    }
+
+    fn tick_payroll(&mut self, dt_hours: f64) {
+        let payroll = self.personnel.hourly_payroll_eur();
+        self.economy.spend(payroll * dt_hours);
+    }
+
+    fn sync_line_raw_from_stock(&mut self) {
+        self.line.raw = self.stock.raw_line_input;
+    }
+
+    fn sync_stock_raw_from_line(&mut self) {
+        self.stock.raw_line_input = self.line.raw.min(crate::gestion::RAW_LINE_INPUT_CAPACITY);
+    }
+
+    fn tick_sales(&mut self, dt_hours: f64) {
+        let admins = self
+            .personnel
+            .available_role_count(EmployeeRole::AdministrateurVente);
+        let offices = self.sale_office_count();
+        let (sold, revenue) = self.sales.tick(
+            dt_hours,
+            &mut self.line.finished,
+            admins,
+            offices,
+            self.config.sale_price,
+        );
+        if sold > 0 {
+            self.line.sold_total = self.line.sold_total.saturating_add(sold);
+            self.economy.earn(revenue);
+        }
+    }
+
     pub fn step(&mut self, real_dt_seconds: f32) {
         let real_dt = real_dt_seconds as f64;
         if !real_dt.is_finite() || real_dt <= 0.0 {
             return;
         }
 
-        self.sale_office_present = self.blocks.iter().any(|block| {
-            block.kind == BlockKind::Seller
-                && self.zones.get(block.origin_tile) == ZoneKind::Support
-        });
-
         let dt_sim = real_dt * self.config.time_scale.max(0.0);
         self.clock.advance(dt_sim);
         self.tick_action_status(dt_sim);
         let dt_hours = dt_sim / 3600.0;
 
-        let per_hour = self.config.raw_delivery_per_hour.max(0.0);
-        self.line.delivery_accum += per_hour * dt_hours;
-        let delivered = self.line.delivery_accum.floor() as u32;
-        if delivered > 0 {
-            self.line.raw = self.line.raw.saturating_add(delivered);
-            self.line.delivery_accum -= delivered as f64;
-        }
-
-        let wage = self.config.wage_per_hour.max(0.0);
-        let workers = self.config.worker_count as f64;
-        self.economy.spend(wage * workers * dt_hours);
+        self.stock.tick_purchase_orders(dt_sim);
+        self.refresh_static_capabilities();
+        self.tick_payroll(dt_hours);
+        self.tick_team_leads_and_temps(dt_sim);
+        let caristes = self.personnel.available_role_count(EmployeeRole::Cariste);
+        self.stock.tick_cariste_transfer(dt_hours, caristes);
+        self.sync_line_raw_from_stock();
 
         let modern_readiness_reason = self.cached_modern_line_readiness_reason();
-        if modern_readiness_reason.is_some() {
-            self.tick_legacy_line(dt_sim, dt_hours);
-        } else {
-            self.tick_modern_line(dt_sim);
+        let production_block_reason =
+            self.refresh_line_statuses(modern_readiness_reason.as_deref());
+        if production_block_reason.is_none() {
+            if modern_readiness_reason.is_some() {
+                self.tick_legacy_line(dt_sim, dt_hours);
+            } else {
+                self.tick_modern_line(dt_sim);
+            }
+            self.sync_stock_raw_from_line();
         }
 
+        self.tick_sales(dt_hours);
         self.tick_reservations(dt_sim);
         self.sync_blocks_from_line();
         self.refresh_jobs();
@@ -1431,6 +1670,34 @@ impl FactorySim {
         self.economy.cash
     }
 
+    pub fn personnel(&self) -> &PersonnelState {
+        &self.personnel
+    }
+
+    pub fn stock(&self) -> &StockState {
+        &self.stock
+    }
+
+    pub fn sales_state(&self) -> &SalesState {
+        &self.sales
+    }
+
+    pub fn main_production_line(&self) -> &ProductionLineState {
+        self.main_line_state()
+    }
+
+    pub fn payroll_per_hour(&self) -> f64 {
+        self.personnel.hourly_payroll_eur()
+    }
+
+    pub fn sales_capacity_per_hour(&self) -> f64 {
+        crate::gestion::vente::SalesState::capacity_units_per_hour(
+            self.personnel
+                .available_role_count(EmployeeRole::AdministrateurVente),
+            self.sale_office_count(),
+        )
+    }
+
     pub fn revenue_total(&self) -> f64 {
         self.economy.revenue_total
     }
@@ -1552,29 +1819,141 @@ impl FactorySim {
     }
 
     pub fn sales_manager_assigned(&self) -> bool {
-        self.sales_manager_assigned
+        self.personnel
+            .available_role_count(EmployeeRole::AdministrateurVente)
+            > 0
     }
 
     pub fn toggle_sales_manager_assigned(&mut self) {
-        self.sales_manager_assigned = !self.sales_manager_assigned;
-        self.set_status_line(if self.sales_manager_assigned {
-            "Responsable des ventes : assigne".to_string()
+        if let Some(admin_id) = self
+            .personnel
+            .employees
+            .iter()
+            .find(|employee| employee.role == EmployeeRole::AdministrateurVente)
+            .map(|employee| employee.id)
+        {
+            match self.apply_command(SimCommand::FireEmployee {
+                employee_id: admin_id,
+            }) {
+                Ok(msg) | Err(msg) => self.set_status_line(msg),
+            }
         } else {
-            "Responsable des ventes : non assigne".to_string()
-        });
+            match self.apply_command(SimCommand::HireEmployee {
+                role: EmployeeRole::AdministrateurVente,
+            }) {
+                Ok(msg) | Err(msg) => self.set_status_line(msg),
+            }
+        }
     }
 
     pub fn sales_operational(&self) -> bool {
-        self.sale_office_present && self.sales_manager_assigned
+        self.sale_office_present
+            && self
+                .personnel
+                .available_role_count(EmployeeRole::AdministrateurVente)
+                > 0
     }
 
     pub fn sales_block_reason(&self) -> &'static str {
         if !self.sale_office_present {
             "Bureau de vente manquant dans zone vente"
-        } else if !self.sales_manager_assigned {
-            "Responsable des ventes non assigne"
+        } else if self
+            .personnel
+            .available_role_count(EmployeeRole::AdministrateurVente)
+            == 0
+        {
+            "Aucun administrateur de vente"
         } else {
             "Operationnel"
+        }
+    }
+
+    pub fn apply_command(&mut self, command: SimCommand) -> Result<String, String> {
+        match command {
+            SimCommand::HireEmployee { role } => {
+                let cost = role.hiring_cost_eur();
+                if self.economy.cash < cost {
+                    return Err(format!(
+                        "Tresorerie insuffisante: {:.0} EUR requis pour recruter {}",
+                        cost,
+                        role.label()
+                    ));
+                }
+                if cost > 0.0 {
+                    self.economy.spend(cost);
+                }
+                let id = self.personnel.hire(role, self.clock.seconds())?;
+                if role == EmployeeRole::ChefEquipe
+                    && self
+                        .personnel
+                        .team_lead_for_line(MAIN_PRODUCTION_LINE_ID)
+                        .is_none()
+                {
+                    self.personnel.assign_to_line(id, MAIN_PRODUCTION_LINE_ID)?;
+                    self.main_line_state_mut().assigned_lead_id = Some(id);
+                }
+                let name = self
+                    .personnel
+                    .employee(id)
+                    .map(|employee| employee.name.clone())
+                    .unwrap_or_else(|| format!("#{id}"));
+                Ok(format!("{} recrute: {}", role.label(), name))
+            }
+            SimCommand::FireEmployee { employee_id } => {
+                let role = self
+                    .personnel
+                    .employee(employee_id)
+                    .map(|employee| employee.role)
+                    .ok_or_else(|| format!("employe introuvable: {employee_id}"))?;
+                self.personnel.fire(employee_id)?;
+                if role == EmployeeRole::ChefEquipe
+                    && self.main_line_state().assigned_lead_id == Some(employee_id)
+                {
+                    let line = self.main_line_state_mut();
+                    line.assigned_lead_id = None;
+                    line.set_blocked("aucun chef d'equipe assigne");
+                }
+                Ok(format!("Employe licencie: #{employee_id}"))
+            }
+            SimCommand::AssignEmployeeToLine {
+                employee_id,
+                line_id,
+            } => {
+                if line_id != MAIN_PRODUCTION_LINE_ID {
+                    return Err(format!("ligne inconnue: {line_id}"));
+                }
+                self.personnel.assign_to_line(employee_id, line_id)?;
+                self.main_line_state_mut().assigned_lead_id = Some(employee_id);
+                Ok(format!("Chef #{employee_id} assigne a la ligne {line_id}"))
+            }
+            SimCommand::SetLineTempPolicy {
+                line_id,
+                enabled,
+                max_temps,
+            } => {
+                if line_id != MAIN_PRODUCTION_LINE_ID {
+                    return Err(format!("ligne inconnue: {line_id}"));
+                }
+                let lead_id = self
+                    .personnel
+                    .team_lead_for_line(line_id)
+                    .map(|employee| employee.id)
+                    .ok_or_else(|| "aucun chef assigne a la ligne".to_string())?;
+                self.personnel
+                    .set_temp_policy(lead_id, enabled, max_temps.min(3))?;
+                Ok(format!(
+                    "Interim ligne {line_id}: {} max {}",
+                    if enabled { "ON" } else { "OFF" },
+                    max_temps.min(3)
+                ))
+            }
+            SimCommand::BuyRawStock { qty } => {
+                let (order_id, cost) = self.stock.place_raw_order(qty, self.economy.cash)?;
+                self.economy.spend(cost);
+                Ok(format!(
+                    "Commande matiere #{order_id}: {qty} unites ({cost:.0} EUR)"
+                ))
+            }
         }
     }
 
@@ -1600,7 +1979,7 @@ impl FactorySim {
             .map(|block| zone_rules(self.zones.get(block.origin_tile)).speed_multiplier)
             .unwrap_or(1.0)
             .max(0.1);
-        (base_cycle_s / speed).max(0.001)
+        (base_cycle_s / (speed * self.production_staffing_factor())).max(0.001)
     }
 
     fn modern_sorted_units_total(&self) -> u64 {
@@ -1695,6 +2074,10 @@ impl FactorySim {
             return false;
         }
         true
+    }
+
+    pub fn modern_line_ready_cached_for_render(&self) -> bool {
+        !self.modern_line_cache.dirty && self.modern_line_cache.reason.is_none()
     }
 
     pub fn modern_lavage_busy(&self) -> bool {
@@ -2271,6 +2654,56 @@ impl FactorySim {
         Ok(())
     }
 
+    pub(crate) fn to_save_asset(&self) -> FactorySimSaveAsset {
+        FactorySimSaveAsset {
+            schema_version: FACTORY_SIM_SAVE_SCHEMA_VERSION,
+            clock: self.clock,
+            economy: self.economy.clone(),
+            personnel: self.personnel.clone(),
+            stock: self.stock.clone(),
+            sales: self.sales.clone(),
+            production_lines: self.production_lines.clone(),
+            line: self.line.clone(),
+            layout: FactoryLayoutAsset {
+                schema_version: FACTORY_LAYOUT_SCHEMA_VERSION,
+                map_w: self.map_w,
+                map_h: self.map_h,
+                zones: self.zones.clone(),
+                blocks: self.blocks.clone(),
+                agent_tile: self.agent.tile,
+            },
+        }
+    }
+
+    pub(crate) fn from_save_asset(
+        config: StarterSimConfig,
+        asset: FactorySimSaveAsset,
+    ) -> Result<Self, String> {
+        if asset.schema_version > FACTORY_SIM_SAVE_SCHEMA_VERSION {
+            return Err(format!(
+                "schema simulation futur non supporte ({} > {})",
+                asset.schema_version, FACTORY_SIM_SAVE_SCHEMA_VERSION
+            ));
+        }
+        asset.layout.validate()?;
+        let mut sim = Self::from_layout(config, asset.layout);
+        sim.clock = asset.clock;
+        sim.economy = asset.economy;
+        sim.personnel = asset.personnel;
+        sim.stock = asset.stock;
+        sim.sales = asset.sales;
+        sim.production_lines = if asset.production_lines.is_empty() {
+            vec![ProductionLineState::main_line()]
+        } else {
+            asset.production_lines
+        };
+        sim.line = asset.line;
+        sim.line.raw = sim.stock.raw_line_input;
+        sim.refresh_static_capabilities();
+        sim.mark_modern_line_cache_dirty();
+        Ok(sim)
+    }
+
     pub fn zone_kind_at_tile(&self, tile: (i32, i32)) -> ZoneKind {
         self.zones.get(tile)
     }
@@ -2279,8 +2712,16 @@ impl FactorySim {
         self.block_debug_views_with_options(true)
     }
 
-    pub fn block_debug_views_minimal(&self) -> Vec<BlockDebugView> {
-        self.block_debug_views_with_options(false)
+    pub fn block_render_views(&self) -> impl Iterator<Item = BlockRenderView> + '_ {
+        self.blocks.iter().map(|block| BlockRenderView {
+            raw_qty: block.inventory.total_of(ItemKind::Raw),
+            id: block.id,
+            kind: block.kind,
+            tile: block.origin_tile,
+            footprint: block.footprint,
+            orientation: block.orientation,
+            rack_levels: block.rack_palettes,
+        })
     }
 
     fn block_debug_views_with_options(
@@ -2920,7 +3361,10 @@ impl FactorySim {
             .map(|block| zone_rules(self.zones.get(block.origin_tile)).speed_multiplier)
             .unwrap_or(1.0);
 
-        let cycle_a = (self.config.machine_a_cycle_s / machine_a_zone_speed.max(0.1)).max(0.001);
+        let staffing_speed = self.production_staffing_factor();
+        let cycle_a = (self.config.machine_a_cycle_s
+            / (machine_a_zone_speed.max(0.1) * staffing_speed))
+            .max(0.001);
         if !self.line.machine_a_busy && self.line.raw > 0 {
             self.line.raw -= 1;
             self.line.machine_a_busy = true;
@@ -2939,7 +3383,9 @@ impl FactorySim {
             }
         }
 
-        let cycle_b = (self.config.machine_b_cycle_s / machine_b_zone_speed.max(0.1)).max(0.001);
+        let cycle_b = (self.config.machine_b_cycle_s
+            / (machine_b_zone_speed.max(0.1) * staffing_speed))
+            .max(0.001);
         if !self.line.machine_b_busy && self.line.wip > 0 {
             self.line.wip -= 1;
             self.line.machine_b_busy = true;
@@ -2957,14 +3403,6 @@ impl FactorySim {
                     kpi.produced_total = kpi.produced_total.saturating_add(1);
                 }
             }
-        }
-
-        if self.line.finished > 0 && self.sales_operational() {
-            let sold = self.line.finished;
-            self.line.finished = 0;
-            self.line.sold_total = self.line.sold_total.saturating_add(sold);
-            self.economy
-                .earn(sold as f64 * self.config.sale_price.max(0.0));
         }
 
         let _ = dt_hours;
@@ -3075,14 +3513,6 @@ impl FactorySim {
         }
 
         self.sync_modern_finished_boxes();
-
-        if self.line.finished > 0 && self.sales_operational() {
-            let sold = self.line.finished;
-            self.line.finished = 0;
-            self.line.sold_total = self.line.sold_total.saturating_add(sold);
-            self.economy
-                .earn(sold as f64 * self.config.sale_price.max(0.0));
-        }
 
         self.line.wip = self
             .line
@@ -3845,7 +4275,7 @@ mod tests {
         };
 
         let mut sim = FactorySim::new(cfg, 25, 15);
-        for _ in 0..120 {
+        for _ in 0..4_000 {
             sim.step(1.0 / 60.0);
         }
 
@@ -3891,14 +4321,136 @@ mod tests {
     #[test]
     fn sales_blocked_status_is_visible_after_tick() {
         let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
-        sim.sales_manager_assigned = false;
+        let admin_id = sim
+            .personnel()
+            .employees
+            .iter()
+            .find(|employee| employee.role == EmployeeRole::AdministrateurVente)
+            .map(|employee| employee.id)
+            .expect("sandbox admin should exist");
+        sim.apply_command(SimCommand::FireEmployee {
+            employee_id: admin_id,
+        })
+        .expect("admin should be fireable");
         sim.line.finished = 2;
 
         sim.step(1.0 / 60.0);
 
         assert!(sim.status_line().contains("Vente en attente"));
-        assert!(sim.status_line().contains("Responsable"));
+        assert!(sim.status_line().contains("administrateur"));
         assert_eq!(sim.line.finished, 2);
+    }
+
+    #[test]
+    fn production_requires_assigned_team_lead() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let lead_id = sim
+            .personnel
+            .team_lead_for_line(MAIN_PRODUCTION_LINE_ID)
+            .map(|lead| lead.id)
+            .expect("sandbox lead should exist");
+        sim.apply_command(SimCommand::FireEmployee {
+            employee_id: lead_id,
+        })
+        .expect("lead should be fireable");
+        sim.stock.raw_line_input = 20;
+        sim.line.raw = 20;
+
+        for _ in 0..300 {
+            sim.step(1.0 / 60.0);
+        }
+
+        assert_eq!(sim.line.produced_wip_total, 0);
+        assert!(sim.status_line().contains("chef"));
+    }
+
+    #[test]
+    fn cariste_is_required_to_feed_line_from_receiving_stock() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let cariste_id = sim
+            .personnel
+            .employees
+            .iter()
+            .find(|employee| employee.role == EmployeeRole::Cariste)
+            .map(|employee| employee.id)
+            .expect("sandbox cariste should exist");
+        sim.apply_command(SimCommand::FireEmployee {
+            employee_id: cariste_id,
+        })
+        .expect("cariste should be fireable");
+        sim.stock.raw_receiving = 500;
+        sim.stock.raw_line_input = 0;
+        sim.line.raw = 0;
+
+        sim.step(60.0);
+
+        assert_eq!(sim.stock.raw_line_input, 0);
+        assert!(sim.status_line().contains("caristes"));
+    }
+
+    #[test]
+    fn bought_raw_stock_is_paid_delivered_and_moved_by_cariste() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        sim.stock.raw_receiving = 0;
+        sim.stock.raw_line_input = 0;
+        sim.line.raw = 0;
+        let cash_before = sim.cash();
+
+        sim.apply_command(SimCommand::BuyRawStock { qty: 500 })
+            .expect("raw stock purchase should succeed");
+        assert!(sim.cash() < cash_before);
+        assert_eq!(sim.stock.pending_raw_qty(), 500);
+
+        sim.step((crate::gestion::stock::RAW_DELIVERY_DELAY_S / sim.config.time_scale) as f32);
+
+        assert_eq!(sim.stock.pending_raw_qty(), 0);
+        assert!(sim.stock.raw_receiving > 0 || sim.stock.raw_line_input > 0);
+        assert!(sim.stock.raw_line_input <= crate::gestion::stock::RAW_LINE_INPUT_CAPACITY);
+    }
+
+    #[test]
+    fn finished_goods_are_sold_progressively_by_admins() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let seller_tile = sim
+            .blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::Seller)
+            .map(|block| block.origin_tile)
+            .expect("default seller should exist");
+        sim.zones.set(seller_tile, ZoneKind::Support);
+        sim.line.finished = 10;
+
+        sim.step(1.0 / 60.0);
+        assert_eq!(
+            sim.line.finished, 10,
+            "one second should not sell a full box"
+        );
+
+        for _ in 0..1_200 {
+            sim.step(1.0 / 60.0);
+        }
+        assert!(sim.line.sold_total > 0);
+    }
+
+    #[test]
+    fn team_lead_never_creates_more_than_three_temps() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let lead_id = sim
+            .personnel
+            .team_lead_for_line(MAIN_PRODUCTION_LINE_ID)
+            .map(|lead| lead.id)
+            .expect("sandbox lead should exist");
+        sim.personnel
+            .set_temp_policy(lead_id, true, 99)
+            .expect("temp policy should clamp");
+        sim.stock.raw_receiving = 2_000;
+        sim.stock.raw_line_input = 120;
+
+        for _ in 0..60 {
+            sim.step(1.0 / 60.0);
+        }
+
+        assert!(sim.personnel.active_temps_for_lead(lead_id) <= 3);
     }
 
     #[test]
@@ -3950,6 +4502,21 @@ mod tests {
 
         sim.apply_build_click(&mut world, (20, 20), true);
         assert!(sim.modern_line_cache.dirty);
+    }
+
+    #[test]
+    fn render_ready_read_uses_cached_modern_line_state_only() {
+        let mut sim = FactorySim::new(StarterSimConfig::default(), 80, 60);
+        sim.blocks.clear();
+        sim.mark_modern_line_cache_dirty();
+
+        assert!(!sim.modern_line_ready_cached_for_render());
+
+        let reason = sim.cached_modern_line_readiness_reason();
+        assert_eq!(sim.modern_line_ready_cached_for_render(), reason.is_none());
+
+        sim.mark_modern_line_cache_dirty();
+        assert!(!sim.modern_line_ready_cached_for_render());
     }
 
     #[test]
@@ -4041,7 +4608,7 @@ mod tests {
     fn minimal_block_debug_views_keep_structure_without_inventory_strings() {
         let sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
         let full = sim.block_debug_views();
-        let minimal = sim.block_debug_views_minimal();
+        let minimal = sim.block_debug_views_with_options(false);
 
         assert_eq!(full.len(), minimal.len());
         for (lhs, rhs) in full.iter().zip(minimal.iter()) {
@@ -4053,6 +4620,18 @@ mod tests {
             assert_eq!(lhs.raw_qty, rhs.raw_qty);
             assert_eq!(lhs.rack_levels, rhs.rack_levels);
             assert!(rhs.inventory_summary.is_empty());
+        }
+    }
+
+    #[test]
+    fn block_render_views_match_debug_structure_without_inventory_strings() {
+        let sim = FactorySim::new(StarterSimConfig::default(), 25, 15);
+        let full = sim.block_debug_views();
+        let render: Vec<BlockRenderView> = sim.block_render_views().collect();
+
+        assert_eq!(full.len(), render.len());
+        for (lhs, rhs) in full.iter().zip(render.iter()) {
+            assert_eq!(lhs.render_view(), *rhs);
         }
     }
 
@@ -4227,7 +4806,7 @@ mod tests {
         assert!(sim.sales_operational());
         sim.toggle_sales_manager_assigned();
         assert!(!sim.sales_operational());
-        assert!(sim.sales_block_reason().contains("Responsable"));
+        assert!(sim.sales_block_reason().contains("administrateur"));
     }
 
     #[test]
@@ -4665,6 +5244,12 @@ mod tests {
     #[test]
     fn modern_sortex_counts_red_outputs_as_scrap() {
         let mut sim = FactorySim::new(StarterSimConfig::default(), 80, 60);
+        let lead_id = sim
+            .personnel
+            .team_lead_for_line(MAIN_PRODUCTION_LINE_ID)
+            .map(|lead| lead.id)
+            .expect("sandbox lead should exist");
+        sim.main_line_state_mut().set_active(lead_id, 2);
         sim.line.flakes = 5;
 
         for _ in 0..5 {
@@ -4697,8 +5282,15 @@ mod tests {
         .expect("cutter should be placeable");
         sim.line.washed = 1;
 
-        let boosted_cycle_s =
-            MODERN_CYCLE_COUPE_S / zone_rules(ZoneKind::Processing).speed_multiplier;
+        let lead_id = sim
+            .personnel
+            .team_lead_for_line(MAIN_PRODUCTION_LINE_ID)
+            .map(|lead| lead.id)
+            .expect("sandbox lead should exist");
+        sim.main_line_state_mut().set_active(lead_id, 2);
+        let boosted_cycle_s = MODERN_CYCLE_COUPE_S
+            / (zone_rules(ZoneKind::Processing).speed_multiplier
+                * sim.production_staffing_factor());
         assert!(boosted_cycle_s < MODERN_CYCLE_COUPE_S);
         sim.tick_modern_line(boosted_cycle_s + 0.01);
 

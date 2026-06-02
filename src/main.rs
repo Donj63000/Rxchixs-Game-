@@ -4,6 +4,7 @@ mod deplacement;
 mod edition;
 mod editor_tools;
 mod four_texture;
+mod gestion;
 mod historique;
 mod interactions;
 mod modes;
@@ -174,6 +175,8 @@ struct World {
     w: i32,
     h: i32,
     tiles: Vec<Tile>,
+    #[serde(skip)]
+    revision: u64,
 }
 
 impl World {
@@ -182,6 +185,7 @@ impl World {
             w,
             h,
             tiles: vec![Tile::Floor; (w * h) as usize],
+            revision: 0,
         };
 
         for x in 0..w {
@@ -223,7 +227,10 @@ impl World {
     fn set(&mut self, x: i32, y: i32, tile: Tile) {
         if self.in_bounds(x, y) {
             let i = self.idx(x, y);
-            self.tiles[i] = tile;
+            if self.tiles[i] != tile {
+                self.tiles[i] = tile;
+                self.revision = self.revision.wrapping_add(1);
+            }
         }
     }
 
@@ -517,7 +524,26 @@ struct GameState {
     pause_selected_sauvegarde: Option<usize>,
     show_character_inspector: bool,
     debug: bool,
+    perf_stats: FramePerfStats,
+    minimap_cache: MinimapTextureCache,
     last_input: Vec2,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct FramePerfStats {
+    frame_ms: f64,
+    sim_ms: f64,
+    world_ms: f64,
+    ui_ms: f64,
+}
+
+#[derive(Default)]
+struct MinimapTextureCache {
+    dirty: bool,
+    texture: Option<Texture2D>,
+    world_revision: u64,
+    width_px: u16,
+    height_px: u16,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -1026,13 +1052,14 @@ async fn main() {
                         AppMode::MainMenu
                     }
                     MainMenuAction::StartFromSave(file_name) => {
-                        match charger_sauvegarde(&file_name) {
-                            Ok(mut loaded_map) => {
-                                sanitize_map_asset(&mut loaded_map);
-                                map = loaded_map;
+                        match charger_sauvegarde_complete(&file_name) {
+                            Ok(mut loaded) => {
+                                sanitize_map_asset(&mut loaded.map);
+                                map = loaded.map;
                                 lineage_seed = advance_seed(lineage_seed);
-                                game_state = build_game_state_from_map(
+                                game_state = build_game_state_from_map_with_sim(
                                     &map,
+                                    loaded.sim,
                                     &character_catalog,
                                     lineage_seed,
                                 );
@@ -1232,11 +1259,31 @@ mod tests {
     }
 
     #[test]
+    fn world_revision_changes_only_when_tile_changes() {
+        let mut world = World {
+            w: 3,
+            h: 3,
+            tiles: vec![Tile::Floor; 9],
+            revision: 0,
+        };
+
+        world.set(1, 1, Tile::Floor);
+        assert_eq!(world.revision, 0);
+
+        world.set(1, 1, Tile::Wall);
+        assert_eq!(world.revision, 1);
+
+        world.set(1, 1, Tile::Wall);
+        assert_eq!(world.revision, 1);
+    }
+
+    #[test]
     fn wall_mask_bits_match_neighbors() {
         let mut world = World {
             w: 3,
             h: 3,
             tiles: vec![Tile::Floor; 9],
+            revision: 0,
         };
         world.set(1, 1, Tile::Wall);
         world.set(1, 0, Tile::Wall);

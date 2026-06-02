@@ -1,4 +1,5 @@
 use super::*;
+use crate::gestion::{EmployeeRole, SimCommand};
 use crate::rendu::theme::{feedback_theme, ui_panel_fill, ui_panel_header_fill, ui_theme};
 use crate::sim::{BlockKind, BuildFloorKind, ZoneKind};
 use std::cell::RefCell;
@@ -7,11 +8,13 @@ thread_local! {
     static INITIAL_RAW_MATERIAL_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
 }
 
+const MINIMAP_CACHE_STRIDE: i32 = 2;
+
 pub(crate) fn set_initial_raw_material_texture(texture: Option<Texture2D>) {
     INITIAL_RAW_MATERIAL_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -345,10 +348,10 @@ pub fn build_hud_layout(_state: &GameState) -> HudLayout {
     let sh = screen_height();
     let scale = ((sw / 1600.0).min(sh / 900.0)).clamp(0.85, 1.2);
 
-    let top_strip_h = (78.0 * scale).clamp(68.0, 94.0);
+    let top_strip_h = (58.0 * scale).clamp(52.0, 70.0);
     let top_strip_rect = Rect::new(0.0, 0.0, sw, top_strip_h);
 
-    let bar_h = (300.0 * scale).clamp(250.0, 360.0);
+    let bar_h = (220.0 * scale).clamp(185.0, 260.0);
     let bar_rect = Rect::new(0.0, (sh - bar_h).max(0.0), sw, bar_h);
 
     let outer_gap = (8.0 * scale).clamp(6.0, 10.0);
@@ -584,7 +587,7 @@ pub fn process_hud_input(
 }
 
 pub fn draw_hud(
-    state: &GameState,
+    state: &mut GameState,
     layout: &HudLayout,
     mouse: Vec2,
     map_view: Rect,
@@ -744,7 +747,6 @@ fn ui_text_and_shadow_for_bg(bg: Color) -> (Color, Color) {
 }
 
 fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: Color, off: Vec2) {
-    crate::render_safety::begin_ui_pass();
     let ox = off.x.max(0.75);
     let oy = off.y.max(0.75);
     let soft_shadow = with_alpha(shadow, (shadow.a * 0.65).clamp(0.0, 0.12));
@@ -1080,6 +1082,16 @@ enum HeaderIcon {
     Clock,
     Calendar,
     Result,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GestionQuickAction {
+    HireLead,
+    HireCariste,
+    HireAdmin,
+    BuyRaw500,
+    BuyRaw1000,
+    ToggleInterim,
 }
 
 fn draw_brand_header(rect: Rect, scale: f32) {
@@ -2144,6 +2156,51 @@ fn process_build_panel_input(state: &mut GameState, panel: Rect, mouse: Vec2) ->
         }
         return true;
     }
+    for (action, rect) in gestion_quick_button_rects(panel) {
+        if point_in_rect(mouse, rect) {
+            let result = match action {
+                GestionQuickAction::HireLead => state.sim.apply_command(SimCommand::HireEmployee {
+                    role: EmployeeRole::ChefEquipe,
+                }),
+                GestionQuickAction::HireCariste => {
+                    state.sim.apply_command(SimCommand::HireEmployee {
+                        role: EmployeeRole::Cariste,
+                    })
+                }
+                GestionQuickAction::HireAdmin => {
+                    state.sim.apply_command(SimCommand::HireEmployee {
+                        role: EmployeeRole::AdministrateurVente,
+                    })
+                }
+                GestionQuickAction::BuyRaw500 => state
+                    .sim
+                    .apply_command(SimCommand::BuyRawStock { qty: 500 }),
+                GestionQuickAction::BuyRaw1000 => state
+                    .sim
+                    .apply_command(SimCommand::BuyRawStock { qty: 1000 }),
+                GestionQuickAction::ToggleInterim => {
+                    let (line_id, enabled) = {
+                        let line = state.sim.main_production_line();
+                        let enabled = line
+                            .assigned_lead_id
+                            .and_then(|lead_id| state.sim.personnel().employee(lead_id))
+                            .and_then(|lead| lead.temp_policy.as_ref())
+                            .is_none_or(|policy| !policy.enabled);
+                        (line.id, enabled)
+                    };
+                    state.sim.apply_command(SimCommand::SetLineTempPolicy {
+                        line_id,
+                        enabled,
+                        max_temps: 3,
+                    })
+                }
+            };
+            match result {
+                Ok(msg) | Err(msg) => state.sim.set_status_line(msg),
+            }
+            return true;
+        }
+    }
     false
 }
 
@@ -2224,7 +2281,130 @@ fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         y += 18.0;
     }
 
+    draw_gestion_quick_actions(state, panel, mouse, bg, shadow);
+
     draw_build_footer(panel, state, mouse);
+}
+
+fn gestion_quick_button_rects(panel: Rect) -> [(GestionQuickAction, Rect); 6] {
+    let summary = build_panel_summary_rect(panel);
+    let pad = 8.0;
+    let gap = 6.0;
+    let button_h = 24.0;
+    let col_w = ((summary.w - pad * 2.0 - gap) * 0.5).max(54.0);
+    let x0 = summary.x + pad;
+    let x1 = x0 + col_w + gap;
+    let y0 = summary.y + summary.h - pad - button_h * 3.0 - gap * 2.0;
+    [
+        (
+            GestionQuickAction::HireLead,
+            Rect::new(x0, y0, col_w, button_h),
+        ),
+        (
+            GestionQuickAction::HireCariste,
+            Rect::new(x1, y0, col_w, button_h),
+        ),
+        (
+            GestionQuickAction::HireAdmin,
+            Rect::new(x0, y0 + button_h + gap, col_w, button_h),
+        ),
+        (
+            GestionQuickAction::BuyRaw500,
+            Rect::new(x1, y0 + button_h + gap, col_w, button_h),
+        ),
+        (
+            GestionQuickAction::BuyRaw1000,
+            Rect::new(x0, y0 + (button_h + gap) * 2.0, col_w, button_h),
+        ),
+        (
+            GestionQuickAction::ToggleInterim,
+            Rect::new(x1, y0 + (button_h + gap) * 2.0, col_w, button_h),
+        ),
+    ]
+}
+
+fn gestion_quick_action_label(action: GestionQuickAction) -> &'static str {
+    match action {
+        GestionQuickAction::HireLead => "Chef +",
+        GestionQuickAction::HireCariste => "Cariste +",
+        GestionQuickAction::HireAdmin => "Admin +",
+        GestionQuickAction::BuyRaw500 => "Stock 500",
+        GestionQuickAction::BuyRaw1000 => "Stock 1000",
+        GestionQuickAction::ToggleInterim => "Interim",
+    }
+}
+
+fn draw_gestion_quick_actions(
+    state: &GameState,
+    panel: Rect,
+    mouse: Vec2,
+    bg: Color,
+    shadow: Color,
+) {
+    let buttons = gestion_quick_button_rects(panel);
+    let title_y = buttons[0].1.y - 9.0;
+    draw_text_shadowed(
+        "Gestion entreprise",
+        buttons[0].1.x,
+        title_y,
+        13.0,
+        ui_col_text_secondary(),
+        shadow,
+        ui_shadow_offset(13.0),
+    );
+    for (action, rect) in buttons {
+        draw_small_button(
+            rect,
+            gestion_quick_action_label(action),
+            point_in_rect(mouse, rect),
+            false,
+        );
+    }
+
+    let stock = state.sim.stock();
+    let line = state.sim.main_production_line();
+    let kpi = format!(
+        "Mat rec {} | entree {} | paie {}/h",
+        stock.raw_receiving,
+        stock.raw_line_input,
+        format_money(state.sim.payroll_per_hour())
+    );
+    let kpi_y = buttons[4].1.y + buttons[4].1.h + 14.0;
+    draw_text_shadowed(
+        &kpi,
+        buttons[4].1.x,
+        kpi_y,
+        12.0,
+        ui_col_text_secondary(),
+        ui_shadow_color_for_text(ui_col_text_secondary()),
+        ui_shadow_offset(12.0),
+    );
+    let line_text = format!("Ligne: {}", line.block_reason);
+    draw_text_shadowed(
+        &line_text,
+        buttons[4].1.x,
+        kpi_y + 14.0,
+        12.0,
+        ui_col_text_secondary(),
+        ui_shadow_color_for_text(ui_col_text_secondary()),
+        ui_shadow_offset(12.0),
+    );
+    let sales = state.sim.sales_state();
+    let sales_text = format!(
+        "Vente cap {:.1}/h | revenu {}/h",
+        state.sim.sales_capacity_per_hour(),
+        format_money(sales.last_revenue_per_hour)
+    );
+    draw_text_shadowed(
+        &sales_text,
+        buttons[4].1.x,
+        kpi_y + 28.0,
+        12.0,
+        ui_col_text_secondary(),
+        ui_shadow_color_for_text(ui_col_text_secondary()),
+        ui_shadow_offset(12.0),
+    );
+    let _ = bg;
 }
 
 fn build_footer_rect(panel: Rect) -> Rect {
@@ -3664,7 +3844,7 @@ fn process_minimap_panel_input(state: &mut GameState, panel: Rect, mouse: Vec2) 
 }
 
 fn draw_minimap_panel(
-    state: &GameState,
+    state: &mut GameState,
     panel: Rect,
     mouse: Vec2,
     map_view: Rect,
@@ -3705,28 +3885,26 @@ fn draw_minimap_panel(
         return;
     }
 
-    let stride = 2;
-    for ty in (0..state.world.h).step_by(stride) {
-        for tx in (0..state.world.w).step_by(stride) {
-            let kind = state.world.get(tx, ty);
-            let col = if tile_is_wall(kind) {
-                rgba(120, 150, 180, 180)
-            } else if matches!(kind, Tile::FloorMetal) {
-                rgba(86, 112, 128, 140)
-            } else if matches!(kind, Tile::FloorWood) {
-                rgba(128, 78, 42, 158)
-            } else if matches!(kind, Tile::FloorMoss) {
-                rgba(58, 120, 62, 154)
-            } else if matches!(kind, Tile::FloorSand) {
-                rgba(118, 98, 58, 142)
-            } else {
-                rgba(56, 106, 54, 138)
-            };
-            let x = inner.x + (tx as f32 / state.world.w as f32) * inner.w;
-            let y = inner.y + (ty as f32 / state.world.h as f32) * inner.h;
-            let w = inner.w / state.world.w as f32 * stride as f32;
-            let h = inner.h / state.world.h as f32 * stride as f32;
-            draw_rectangle(x, y, w + 0.5, h + 0.5, col);
+    if let Some((cache_w, cache_h)) = minimap_cache_dimensions(&state.world) {
+        let cache_invalid = state.minimap_cache.texture.is_none()
+            || state.minimap_cache.dirty
+            || state.minimap_cache.world_revision != state.world.revision
+            || state.minimap_cache.width_px != cache_w
+            || state.minimap_cache.height_px != cache_h;
+        if cache_invalid {
+            rebuild_minimap_texture_cache(&state.world, &mut state.minimap_cache, cache_w, cache_h);
+        }
+        if let Some(texture) = state.minimap_cache.texture.as_ref() {
+            draw_texture_ex(
+                texture,
+                inner.x,
+                inner.y,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(inner.w, inner.h)),
+                    ..Default::default()
+                },
+            );
         }
     }
 
@@ -3809,6 +3987,57 @@ fn minimap_inner_rect(panel: Rect) -> Rect {
     )
 }
 
+fn minimap_cache_dimensions(world: &World) -> Option<(u16, u16)> {
+    if world.w <= 0 || world.h <= 0 {
+        return None;
+    }
+    let width = ((world.w + MINIMAP_CACHE_STRIDE - 1) / MINIMAP_CACHE_STRIDE)
+        .clamp(1, u16::MAX as i32) as u16;
+    let height = ((world.h + MINIMAP_CACHE_STRIDE - 1) / MINIMAP_CACHE_STRIDE)
+        .clamp(1, u16::MAX as i32) as u16;
+    Some((width, height))
+}
+
+fn minimap_tile_color(kind: Tile) -> Color {
+    if tile_is_wall(kind) {
+        rgba(120, 150, 180, 180)
+    } else if matches!(kind, Tile::FloorMetal) {
+        rgba(86, 112, 128, 140)
+    } else if matches!(kind, Tile::FloorWood) {
+        rgba(128, 78, 42, 158)
+    } else if matches!(kind, Tile::FloorMoss) {
+        rgba(58, 120, 62, 154)
+    } else if matches!(kind, Tile::FloorSand) {
+        rgba(118, 98, 58, 142)
+    } else {
+        rgba(56, 106, 54, 138)
+    }
+}
+
+fn rebuild_minimap_texture_cache(
+    world: &World,
+    cache: &mut MinimapTextureCache,
+    width: u16,
+    height: u16,
+) {
+    let mut image = Image::gen_image_color(width, height, rgba(10, 14, 18, 240));
+    for py in 0..height {
+        for px in 0..width {
+            let tx = ((px as i32) * MINIMAP_CACHE_STRIDE).min(world.w - 1);
+            let ty = ((py as i32) * MINIMAP_CACHE_STRIDE).min(world.h - 1);
+            image.set_pixel(px as u32, py as u32, minimap_tile_color(world.get(tx, ty)));
+        }
+    }
+
+    let texture = Texture2D::from_image(&image);
+    texture.set_filter(FilterMode::Nearest);
+    cache.texture = Some(texture);
+    cache.dirty = false;
+    cache.world_revision = world.revision;
+    cache.width_px = width;
+    cache.height_px = height;
+}
+
 fn format_money(amount: f64) -> String {
     let rounded = amount.round() as i64;
     format_int_fr(rounded)
@@ -3844,6 +4073,13 @@ fn format_int_fr(v: i64) -> String {
 mod tests {
     use super::*;
 
+    fn assert_color_close(actual: Color, expected: Color) {
+        assert!((actual.r - expected.r).abs() < 0.0001);
+        assert!((actual.g - expected.g).abs() < 0.0001);
+        assert!((actual.b - expected.b).abs() < 0.0001);
+        assert!((actual.a - expected.a).abs() < 0.0001);
+    }
+
     #[test]
     fn mix_color_clamps_factor_to_bounds() {
         let a = rgba(10, 20, 30, 40);
@@ -3872,6 +4108,42 @@ mod tests {
         assert!((mid.g - (a.g + b.g) * 0.5).abs() < 0.0001);
         assert!((mid.b - (a.b + b.b) * 0.5).abs() < 0.0001);
         assert!((mid.a - (a.a + b.a) * 0.5).abs() < 0.0001);
+    }
+
+    #[test]
+    fn minimap_cache_dimensions_follow_sampling_stride() {
+        let world = World {
+            w: 7,
+            h: 5,
+            tiles: vec![Tile::Floor; 35],
+            revision: 0,
+        };
+
+        assert_eq!(minimap_cache_dimensions(&world), Some((4, 3)));
+    }
+
+    #[test]
+    fn minimap_cache_invalidates_when_world_revision_changes() {
+        let mut world = World {
+            w: 6,
+            h: 4,
+            tiles: vec![Tile::Floor; 24],
+            revision: 0,
+        };
+        let before = world.revision;
+
+        world.set(2, 0, Tile::WallSteel);
+
+        assert_ne!(world.revision, before);
+    }
+
+    #[test]
+    fn minimap_tile_color_groups_wall_tiles() {
+        assert_color_close(
+            minimap_tile_color(Tile::WallSteel),
+            rgba(120, 150, 180, 180),
+        );
+        assert_color_close(minimap_tile_color(Tile::FloorMoss), rgba(58, 120, 62, 154));
     }
 
     #[test]

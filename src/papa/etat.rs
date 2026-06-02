@@ -13,6 +13,7 @@ pub struct PapaPnjEtat {
     pub walk_cycle: f32,
     pub ancre: (i32, i32),
     pub prochaine_etape: usize,
+    pub sol_prepare: bool,
     pub timer_etape_s: f32,
     pub termine: bool,
     pub blocage: Option<String>,
@@ -87,6 +88,7 @@ impl PapaEtat {
             walk_cycle: 0.0,
             ancre,
             prochaine_etape: 0,
+            sol_prepare: false,
             timer_etape_s: 0.0,
             termine: false,
             blocage: None,
@@ -98,7 +100,7 @@ impl PapaEtat {
     pub fn tick(
         &mut self,
         dt: f32,
-        world: &crate::World,
+        world: &mut crate::World,
         sim: &mut crate::sim::FactorySim,
     ) -> Option<String> {
         let plan = self.plan.as_ref()?;
@@ -113,7 +115,7 @@ impl PapaEtat {
 
 #[cfg(test)]
 mod tests {
-    use super::super::plan::{PapaPlanAsset, PapaPlanBloc};
+    use super::super::plan::{PapaPlanAsset, PapaPlanBloc, PapaPlanSol, PapaPlanSolKind};
     use super::*;
     use crate::sim::{BlockKind, BlockOrientation, StarterSimConfig};
 
@@ -122,6 +124,11 @@ mod tests {
             schema_version: super::super::plan::PAPA_PLAN_SCHEMA_VERSION,
             label: "Plan test".to_string(),
             delai_etape_s: 0.01,
+            sols: vec![PapaPlanSol {
+                kind: PapaPlanSolKind::FloorMetal,
+                offset: (-2, -5),
+                size: (67, 14),
+            }],
             blocs: vec![
                 PapaPlanBloc {
                     kind: BlockKind::InputHopper,
@@ -218,14 +225,28 @@ mod tests {
             ..StarterSimConfig::default()
         };
         let mut sim = crate::sim::FactorySim::new(cfg, 140, 90);
-        let world = crate::World::new_room(140, 90);
+        let mut world = crate::World::new_room(140, 90);
         let mut etat = PapaEtat::depuis_plan(plan_complet_test());
 
         etat.declencher_appel(&world, &sim, crate::tile_center((24, 24)))
             .expect("call should succeed");
 
+        let ancre = etat.pnj().expect("papa should exist").ancre;
+        let dalle_tile = (ancre.0 - 2, ancre.1 - 5);
+        assert_eq!(world.get(dalle_tile.0, dalle_tile.1), crate::Tile::Floor);
+
+        let _ = etat.tick(0.0, &mut world, &mut sim);
+        assert_eq!(
+            world.get(dalle_tile.0, dalle_tile.1),
+            crate::Tile::FloorMetal
+        );
+        assert!(
+            etat.pnj().map(|p| p.sol_prepare).unwrap_or(false),
+            "la dalle Papa doit etre preparee avant la premiere pose"
+        );
+
         for _ in 0..3000 {
-            let _ = etat.tick(1.0 / 60.0, &world, &mut sim);
+            let _ = etat.tick(1.0 / 60.0, &mut world, &mut sim);
             if etat.pnj().map(|p| p.termine).unwrap_or(false) {
                 break;
             }

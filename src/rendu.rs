@@ -68,7 +68,20 @@ thread_local! {
 
 const PROP_TEXTURE_VISUAL_SCALE: f32 = 1.15;
 const CHARIOT_VISUAL_SCALE: f32 = 2.44;
-const GRASS_TEXTURE_SOURCE_TILE_PX: f32 = 128.0;
+const GRASS_TEXTURE_SOURCE_TILE_PX: f32 = TILE_SIZE;
+const EXTERIOR_GROUND_PATCH_TILES: i32 = 9;
+const INDUSTRIAL_SLAB_MARGIN_PX: f32 = TILE_SIZE * 0.42;
+const INTERIOR_WOOD_PLANK_H_PX: f32 = 8.0;
+const INTERIOR_CONCRETE_PLATE_TILES: i32 = 4;
+const INTERIOR_METAL_PLATE_TILES: i32 = 3;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ExteriorGroundPatchKind {
+    Prairie,
+    Mousse,
+    TerreTassee,
+    SolSec,
+}
 
 fn scaled_prop_texture_placement(
     base_x: f32,
@@ -107,10 +120,6 @@ fn draw_prop_texture_scaled(
     );
 }
 
-fn draw_texture_in_rect(texture: &Texture2D, rect: Rect, tint: Color) {
-    draw_texture_in_rect_source(texture, rect, tint, None);
-}
-
 fn draw_texture_in_rect_source(texture: &Texture2D, rect: Rect, tint: Color, source: Option<Rect>) {
     draw_texture_ex(
         texture,
@@ -132,21 +141,297 @@ fn grass_texture_source_rect(texture_w: f32, texture_h: f32, x: i32, y: i32) -> 
 
     let sample_w = texture_w.clamp(1.0, GRASS_TEXTURE_SOURCE_TILE_PX);
     let sample_h = texture_h.clamp(1.0, GRASS_TEXTURE_SOURCE_TILE_PX);
-    let max_x = (texture_w - sample_w).max(0.0).floor() as u32;
-    let max_y = (texture_h - sample_h).max(0.0).floor() as u32;
-    let h = hash_with_salt(x, y, 0x6EAF);
-    let sx = if max_x == 0 {
-        0.0
-    } else {
-        (h % (max_x + 1)) as f32
-    };
-    let sy = if max_y == 0 {
-        0.0
-    } else {
-        ((h >> 11) % (max_y + 1)) as f32
-    };
+    let tiles_x = (texture_w / sample_w).floor().max(1.0) as i32;
+    let tiles_y = (texture_h / sample_h).floor().max(1.0) as i32;
+    let sx = x.rem_euclid(tiles_x) as f32 * sample_w;
+    let sy = y.rem_euclid(tiles_y) as f32 * sample_h;
 
     Some(Rect::new(sx, sy, sample_w, sample_h))
+}
+
+fn exterior_ground_patch_cell(x: i32, y: i32) -> (i32, i32) {
+    (
+        x.div_euclid(EXTERIOR_GROUND_PATCH_TILES),
+        y.div_euclid(EXTERIOR_GROUND_PATCH_TILES),
+    )
+}
+
+fn exterior_ground_patch_kind(x: i32, y: i32) -> ExteriorGroundPatchKind {
+    let (cell_x, cell_y) = exterior_ground_patch_cell(x, y);
+    match hash_with_salt(cell_x, cell_y, 0xA61D) % 100 {
+        0..=58 => ExteriorGroundPatchKind::Prairie,
+        59..=74 => ExteriorGroundPatchKind::Mousse,
+        75..=89 => ExteriorGroundPatchKind::TerreTassee,
+        _ => ExteriorGroundPatchKind::SolSec,
+    }
+}
+
+fn exterior_ground_micro_light(x: i32, y: i32) -> f32 {
+    let raw = (hash_with_salt(x, y, 0xB51) & 0x0F) as f32;
+    (raw - 7.5) / 7.5 * 0.018
+}
+
+fn global_ground_light_delta(x: i32, y: i32, world_size: (i32, i32)) -> f32 {
+    let (world_w, world_h) = world_size;
+    if world_w <= 1 || world_h <= 1 {
+        return 0.0;
+    }
+
+    let nx = x as f32 / (world_w - 1) as f32;
+    let ny = y as f32 / (world_h - 1) as f32;
+    (0.5 - (nx + ny) * 0.5) * 0.10
+}
+
+fn apply_ground_light(color: Color, delta: f32) -> Color {
+    if delta >= 0.0 {
+        color_lerp(color, WHITE, delta)
+    } else {
+        color_lerp(color, rgba(12, 18, 12, 255), -delta)
+    }
+}
+
+fn exterior_ground_tone(x: i32, y: i32, palette: &Palette) -> monde::FloorTone {
+    let world = &palette.world;
+    match exterior_ground_patch_kind(x, y) {
+        ExteriorGroundPatchKind::Prairie => monde::FloorTone {
+            base_a: theme::mix_color(world.exterior_grass, rgba(70, 108, 62, 255), 0.26),
+            base_b: theme::mix_color(world.exterior_grass, rgba(82, 118, 68, 255), 0.24),
+            accent: rgba(112, 138, 76, 255),
+        },
+        ExteriorGroundPatchKind::Mousse => monde::FloorTone {
+            base_a: theme::mix_color(world.exterior_grass, world.concrete_moss, 0.30),
+            base_b: theme::mix_color(world.exterior_grass, rgba(58, 96, 62, 255), 0.28),
+            accent: rgba(94, 132, 78, 255),
+        },
+        ExteriorGroundPatchKind::TerreTassee => monde::FloorTone {
+            base_a: theme::mix_color(world.exterior_grass, rgba(108, 92, 58, 255), 0.34),
+            base_b: theme::mix_color(world.exterior_grass, rgba(96, 84, 56, 255), 0.30),
+            accent: rgba(130, 104, 62, 255),
+        },
+        ExteriorGroundPatchKind::SolSec => monde::FloorTone {
+            base_a: theme::mix_color(world.exterior_grass, rgba(126, 116, 78, 255), 0.30),
+            base_b: theme::mix_color(world.exterior_grass, rgba(106, 100, 72, 255), 0.28),
+            accent: rgba(150, 132, 82, 255),
+        },
+    }
+}
+
+fn exterior_ground_base_color(x: i32, y: i32, tone: monde::FloorTone) -> Color {
+    let patch_hash = {
+        let (cell_x, cell_y) = exterior_ground_patch_cell(x, y);
+        hash_with_salt(cell_x, cell_y, 0x7B29)
+    };
+    let patch_mix = 0.44 + (patch_hash % 17) as f32 / 100.0;
+    let base = color_lerp(tone.base_a, tone.base_b, patch_mix);
+    apply_ground_light(base, exterior_ground_micro_light(x, y))
+}
+
+fn interior_floor_tile_edge_alpha(tile: Tile) -> f32 {
+    match tile {
+        Tile::FloorWood | Tile::FloorMetal | Tile::Floor => 0.0,
+        Tile::FloorMoss | Tile::FloorSand => 0.018,
+        _ => 0.0,
+    }
+}
+
+fn interior_plate_size_tiles(tile: Tile) -> i32 {
+    match tile {
+        Tile::FloorMetal => INTERIOR_METAL_PLATE_TILES,
+        _ => INTERIOR_CONCRETE_PLATE_TILES,
+    }
+}
+
+fn interior_plate_cell(tile: Tile, x: i32, y: i32) -> (i32, i32) {
+    let size = interior_plate_size_tiles(tile).max(1);
+    (x.div_euclid(size), y.div_euclid(size))
+}
+
+fn interior_plate_starts(tile: Tile, x: i32, y: i32) -> (bool, bool) {
+    let size = interior_plate_size_tiles(tile).max(1);
+    (x.rem_euclid(size) == 0, y.rem_euclid(size) == 0)
+}
+
+fn wood_plank_row_for_world_y(world_y: f32) -> i32 {
+    (world_y / INTERIOR_WOOD_PLANK_H_PX).floor() as i32
+}
+
+fn wood_board_length_tiles(row: i32) -> i32 {
+    4 + (hash_with_salt(row, 0, 0x57A1) % 3) as i32
+}
+
+fn wood_board_offset_px(row: i32) -> f32 {
+    let length_px = wood_board_length_tiles(row) as f32 * TILE_SIZE;
+    let offset_bucket = (hash_with_salt(row, 0, 0xB04D) % 11) as f32 / 11.0;
+    offset_bucket * length_px
+}
+
+fn wood_butt_joint_local_x(tile_x: i32, row: i32) -> Option<f32> {
+    let length_px = wood_board_length_tiles(row) as f32 * TILE_SIZE;
+    let offset_px = wood_board_offset_px(row);
+    let tile_left = tile_x as f32 * TILE_SIZE;
+    let tile_right = tile_left + TILE_SIZE;
+    let first_joint = ((tile_left - offset_px) / length_px).ceil() as i32;
+    let joint_x = offset_px + first_joint as f32 * length_px;
+    if joint_x > tile_left + 1.5 && joint_x < tile_right - 1.5 {
+        Some(joint_x - tile_left)
+    } else {
+        None
+    }
+}
+
+fn interior_floor_macro_color(tile: Tile, x: i32, y: i32, tone: monde::FloorTone) -> Color {
+    let (cell_x, cell_y) = match tile {
+        Tile::FloorWood => (x.div_euclid(6), y.div_euclid(4)),
+        _ => interior_plate_cell(tile, x, y),
+    };
+    let h = hash_with_salt(cell_x, cell_y, 0xD314);
+    let mix = 0.28 + (h % 28) as f32 / 100.0;
+    color_lerp(tone.base_a, tone.base_b, mix)
+}
+
+fn draw_interior_wood_floor_tile(rect: Rect, x: i32, y: i32, tone: monde::FloorTone) {
+    let macro_base = interior_floor_macro_color(Tile::FloorWood, x, y, tone);
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, macro_base);
+
+    let world_top = y as f32 * TILE_SIZE;
+    let mut local_y = 0.0;
+    while local_y < TILE_SIZE {
+        let world_y = world_top + local_y;
+        let row = wood_plank_row_for_world_y(world_y);
+        let next_world_y = (row + 1) as f32 * INTERIOR_WOOD_PLANK_H_PX;
+        let plank_h = (next_world_y - world_y).clamp(1.0, TILE_SIZE - local_y);
+        let h = hash_with_salt(x.div_euclid(2), row, 0xA771);
+        let t = 0.22 + (h % 31) as f32 / 100.0;
+        let plank = color_lerp(tone.base_a, tone.base_b, t);
+        let plank = if h & 1 == 0 {
+            color_lerp(plank, tone.accent, 0.08)
+        } else {
+            plank
+        };
+        draw_rectangle(rect.x, rect.y + local_y, rect.w, plank_h + 0.4, plank);
+
+        if local_y > 0.0 {
+            draw_line(
+                rect.x,
+                rect.y + local_y,
+                rect.x + rect.w,
+                rect.y + local_y,
+                0.8,
+                with_alpha(Color::from_rgba(28, 17, 10, 255), 0.22),
+            );
+        }
+
+        if let Some(joint_x) = wood_butt_joint_local_x(x, row) {
+            draw_line(
+                rect.x + joint_x,
+                rect.y + local_y + 1.0,
+                rect.x + joint_x,
+                rect.y + local_y + plank_h - 1.0,
+                0.9,
+                with_alpha(Color::from_rgba(30, 18, 10, 255), 0.24),
+            );
+        }
+
+        let vein_y = rect.y + local_y + plank_h * (0.38 + (h & 3) as f32 * 0.05);
+        draw_line(
+            rect.x + 3.0,
+            vein_y,
+            rect.x + rect.w - 3.0,
+            vein_y + ((h >> 4) & 1) as f32 * 0.35,
+            0.55,
+            with_alpha(Color::from_rgba(244, 184, 112, 255), 0.10),
+        );
+
+        local_y += plank_h;
+    }
+
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        with_alpha(Color::from_rgba(20, 12, 8, 255), 0.035),
+    );
+}
+
+fn draw_interior_plate_floor_tile(rect: Rect, x: i32, y: i32, tile: Tile, tone: monde::FloorTone) {
+    let base = interior_floor_macro_color(tile, x, y, tone);
+    let (plate_x, plate_y) = interior_plate_cell(tile, x, y);
+    let h = hash_with_salt(plate_x, plate_y, 0x9E91);
+    let plate = color_lerp(base, tone.accent, 0.04 + (h % 17) as f32 / 240.0);
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, plate);
+
+    let (starts_x, starts_y) = interior_plate_starts(tile, x, y);
+    let seam = with_alpha(Color::from_rgba(18, 24, 28, 255), 0.16);
+    let hi = with_alpha(Color::from_rgba(220, 232, 226, 255), 0.045);
+    if starts_x {
+        draw_line(rect.x, rect.y, rect.x, rect.y + rect.h, 1.0, seam);
+        draw_line(rect.x + 1.0, rect.y, rect.x + 1.0, rect.y + rect.h, 0.5, hi);
+    }
+    if starts_y {
+        draw_line(rect.x, rect.y, rect.x + rect.w, rect.y, 1.0, seam);
+        draw_line(rect.x, rect.y + 1.0, rect.x + rect.w, rect.y + 1.0, 0.5, hi);
+    }
+
+    let grime = 0.018 + (hash_with_salt(x, y, 0x5A3) & 0x07) as f32 / 900.0;
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        with_alpha(Color::from_rgba(12, 14, 13, 255), grime),
+    );
+
+    if matches!(tile, Tile::FloorMetal) && h.is_multiple_of(5) {
+        let mark = with_alpha(Color::from_rgba(220, 176, 74, 255), 0.13);
+        let y0 = rect.y + rect.h * 0.28;
+        draw_line(rect.x + 5.0, y0, rect.x + rect.w - 5.0, y0 + 4.0, 1.1, mark);
+        draw_line(
+            rect.x + 5.0,
+            y0 + 6.0,
+            rect.x + rect.w - 5.0,
+            y0 + 10.0,
+            1.1,
+            with_alpha(mark, 0.78),
+        );
+    }
+}
+
+fn draw_soft_interior_floor_detail(rect: Rect, h: u32, tone: monde::FloorTone, tile: Tile) {
+    let soft_a = with_alpha(color_lerp(tone.accent, tone.base_b, 0.72), 0.08);
+    let soft_b = with_alpha(color_lerp(tone.base_b, tone.accent, 0.34), 0.06);
+    draw_circle(
+        rect.x + 8.0 + (h & 3) as f32,
+        rect.y + 10.0 + ((h >> 2) & 3) as f32,
+        2.4,
+        soft_a,
+    );
+    if h.is_multiple_of(4) {
+        draw_circle(
+            rect.x + 20.0 - ((h >> 3) & 3) as f32,
+            rect.y + 21.0 - ((h >> 5) & 2) as f32,
+            1.8,
+            soft_b,
+        );
+    }
+    if matches!(tile, Tile::FloorMoss | Tile::FloorSand) {
+        draw_circle(
+            rect.x + 13.0 + ((h >> 1) & 2) as f32,
+            rect.y + 15.0 + ((h >> 4) & 2) as f32,
+            1.0,
+            with_alpha(tone.accent, 0.18),
+        );
+    }
+}
+
+fn industrial_slab_rect(tile: (i32, i32), footprint: (i32, i32)) -> Rect {
+    let base = sim_block_rect(tile, footprint);
+    Rect::new(
+        base.x - INDUSTRIAL_SLAB_MARGIN_PX,
+        base.y - INDUSTRIAL_SLAB_MARGIN_PX,
+        base.w + INDUSTRIAL_SLAB_MARGIN_PX * 2.0,
+        base.h + INDUSTRIAL_SLAB_MARGIN_PX * 2.0,
+    )
 }
 
 fn chariot_basis_vectors(heading_rad: f32) -> (Vec2, Vec2) {
@@ -962,7 +1247,7 @@ pub(crate) fn set_pot_de_fleur_texture(texture: Option<Texture2D>) {
     POT_DE_FLEUR_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -976,7 +1261,7 @@ pub(crate) fn set_storage_raw_texture(texture: Option<Texture2D>) {
     STORAGE_RAW_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -990,7 +1275,7 @@ pub(crate) fn set_broken_garlic_crate_texture(texture: Option<Texture2D>) {
     BROKEN_GARLIC_CRATE_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1004,7 +1289,7 @@ pub(crate) fn set_box_carton_vide_texture(texture: Option<Texture2D>) {
     BOX_CARTON_VIDE_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1018,7 +1303,7 @@ pub(crate) fn set_box_sac_bleu_texture(texture: Option<Texture2D>) {
     BOX_SAC_BLEU_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1032,7 +1317,7 @@ pub(crate) fn set_box_sac_rouge_texture(texture: Option<Texture2D>) {
     BOX_SAC_ROUGE_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1046,7 +1331,7 @@ pub(crate) fn set_box_sac_vert_texture(texture: Option<Texture2D>) {
     BOX_SAC_VERT_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1060,7 +1345,7 @@ pub(crate) fn set_palette_logistique_texture(texture: Option<Texture2D>) {
     PALETTE_LOGISTIQUE_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1074,7 +1359,7 @@ pub(crate) fn set_bureau_pc_on_texture(texture: Option<Texture2D>) {
     BUREAU_PC_ON_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1088,7 +1373,7 @@ pub(crate) fn set_bureau_pc_off_texture(texture: Option<Texture2D>) {
     BUREAU_PC_OFF_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1102,7 +1387,7 @@ pub(crate) fn set_lavabo_texture(texture: Option<Texture2D>) {
     LAVABO_TEXTURE.with(|slot| {
         let prepared = texture;
         if let Some(tex) = prepared.as_ref() {
-            tex.set_filter(FilterMode::Nearest);
+            tex.set_filter(FilterMode::Linear);
         }
         *slot.borrow_mut() = prepared;
     });
@@ -1456,6 +1741,59 @@ fn model_tree_texture_dest_size(kind: TypeArbreExterieur, scale: f32) -> Vec2 {
     }
 }
 
+fn draw_exterior_ground_detail(
+    rect: Rect,
+    h: u32,
+    tone: monde::FloorTone,
+    patch_kind: ExteriorGroundPatchKind,
+) {
+    let roll = h % 100;
+    if roll < 8 {
+        let patch = match patch_kind {
+            ExteriorGroundPatchKind::Prairie | ExteriorGroundPatchKind::Mousse => {
+                color_lerp(tone.accent, rgba(54, 92, 54, 255), 0.36)
+            }
+            ExteriorGroundPatchKind::TerreTassee | ExteriorGroundPatchKind::SolSec => {
+                color_lerp(tone.accent, rgba(114, 86, 52, 255), 0.30)
+            }
+        };
+        draw_circle(
+            rect.x + 10.0 + ((h >> 4) & 7) as f32,
+            rect.y + 12.0 + ((h >> 7) & 7) as f32,
+            3.1 + ((h >> 10) & 3) as f32 * 0.4,
+            with_alpha(patch, 0.12),
+        );
+    }
+
+    if (92..=95).contains(&roll) {
+        let stone = with_alpha(rgba(108, 112, 96, 255), 0.24);
+        draw_circle(
+            rect.x + 8.0 + ((h >> 3) & 11) as f32,
+            rect.y + 8.0 + ((h >> 8) & 11) as f32,
+            1.2,
+            stone,
+        );
+        draw_circle(
+            rect.x + 17.0 + ((h >> 5) & 5) as f32,
+            rect.y + 18.0 + ((h >> 11) & 5) as f32,
+            0.8,
+            with_alpha(stone, 0.70),
+        );
+    } else if roll >= 98 {
+        let flower = if h & 1 == 0 {
+            rgba(220, 188, 84, 255)
+        } else {
+            rgba(214, 204, 226, 255)
+        };
+        draw_circle(
+            rect.x + 11.0 + ((h >> 1) & 9) as f32,
+            rect.y + 10.0 + ((h >> 6) & 9) as f32,
+            0.95,
+            with_alpha(flower, 0.64),
+        );
+    }
+}
+
 fn draw_floor_tile(
     x: i32,
     y: i32,
@@ -1463,195 +1801,103 @@ fn draw_floor_tile(
     palette: &Palette,
     textures: FloorTextureRefs<'_>,
     exterior_hint: bool,
+    world_size: (i32, i32),
 ) {
     let rect = World::tile_rect(x, y);
     let h = tile_hash(x, y);
 
     let variant = monde::floor_material_variant(x, y);
-    let tone = monde::floor_tones(tile, exterior_hint, palette);
+    let tone = if exterior_hint {
+        exterior_ground_tone(x, y, palette)
+    } else {
+        monde::floor_tones(tile, false, palette)
+    };
     let base_a = tone.base_a;
     let base_b = tone.base_b;
 
-    let base = match variant % 4 {
-        0 => base_a,
-        1 => base_b,
-        2 => color_lerp(base_a, base_b, 0.55),
-        _ => color_lerp(base_a, tone.accent, 0.12),
-    };
-    let texture = if exterior_hint {
-        textures.exterior
+    let mut base = if exterior_hint {
+        exterior_ground_base_color(x, y, tone)
     } else {
-        match tile {
-            Tile::FloorWood | Tile::FloorMetal => textures.wood.or(textures.interior),
-            Tile::Floor | Tile::FloorMoss | Tile::FloorSand => textures.interior,
-            _ => None,
+        match variant % 4 {
+            0 => base_a,
+            1 => base_b,
+            2 => color_lerp(base_a, base_b, 0.55),
+            _ => color_lerp(base_a, tone.accent, 0.12),
         }
     };
-    let uses_model_texture = texture.is_some();
-    if let Some(texture) = texture {
-        let tint = if exterior_hint {
-            color_lerp(WHITE, base, 0.16)
-        } else if matches!(tile, Tile::FloorWood | Tile::FloorMetal) {
-            WHITE
-        } else {
-            color_lerp(WHITE, base, 0.10)
-        };
-        let source = if exterior_hint {
-            grass_texture_source_rect(texture.width(), texture.height(), x, y)
-        } else {
-            None
-        };
+    base = apply_ground_light(base, global_ground_light_delta(x, y, world_size));
+    let _interior_texture_available = if exterior_hint {
+        false
+    } else {
+        match tile {
+            Tile::FloorWood => textures.wood.is_some(),
+            Tile::Floor | Tile::FloorMetal | Tile::FloorMoss | Tile::FloorSand => {
+                textures.interior.is_some()
+            }
+            _ => false,
+        }
+    };
+    if let Some(texture) = textures.exterior.filter(|_| exterior_hint) {
+        let tint = color_lerp(WHITE, base, 0.10);
+        let source = grass_texture_source_rect(texture.width(), texture.height(), x, y);
         draw_texture_in_rect_source(texture, rect, tint, source);
     } else {
-        draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+        match tile {
+            Tile::FloorWood => draw_interior_wood_floor_tile(rect, x, y, tone),
+            Tile::Floor | Tile::FloorMetal => {
+                draw_interior_plate_floor_tile(rect, x, y, tile, tone)
+            }
+            _ => {
+                draw_rectangle(rect.x, rect.y, rect.w, rect.h, base);
+                draw_soft_interior_floor_detail(rect, h, tone, tile);
+            }
+        }
     }
 
     if exterior_hint {
-        let patch = match h % 9 {
-            0 | 1 => rgba(98, 74, 45, 255),
-            2 | 3 => rgba(50, 104, 54, 255),
-            4 => rgba(116, 88, 54, 255),
-            _ => base,
-        };
-        if h % 9 <= 4 {
-            draw_rectangle(
-                rect.x + 1.0,
-                rect.y + 1.0,
-                rect.w - 2.0,
-                rect.h - 2.0,
-                with_alpha(patch, 0.12),
-            );
-        }
+        draw_exterior_ground_detail(rect, h, tone, exterior_ground_patch_kind(x, y));
+        let grime_strength = 0.012 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 900.0);
         draw_rectangle(
             rect.x,
-            rect.y + rect.h * 0.56,
+            rect.y,
             rect.w,
-            rect.h * 0.44,
-            with_alpha(rgba(18, 54, 28, 255), 0.08),
+            rect.h,
+            with_alpha(palette.floor_grime, grime_strength),
         );
+        return;
     }
 
-    let tile_edge = if exterior_hint {
-        rgba(8, 32, 18, 210)
-    } else {
-        palette.floor_edge
-    };
-    let edge_width = if exterior_hint { 1.25 } else { 1.0 };
-    draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        edge_width,
-        tile_edge,
-    );
-
     // Variation douce et homogène, sans symboles ni traits marqués.
-    let soft_a = with_alpha(color_lerp(tone.accent, base_b, 0.72), 0.10);
-    let soft_b = with_alpha(color_lerp(base_b, tone.accent, 0.34), 0.08);
+    let soft_a = with_alpha(color_lerp(tone.accent, base_b, 0.72), 0.035);
+    let soft_b = with_alpha(color_lerp(base_b, tone.accent, 0.34), 0.025);
     draw_circle(
         rect.x + 8.0 + (h & 3) as f32,
         rect.y + 10.0 + ((h >> 2) & 3) as f32,
-        2.6,
+        1.8,
         soft_a,
     );
     if h.is_multiple_of(3) {
         draw_circle(
             rect.x + 20.0 - ((h >> 3) & 3) as f32,
             rect.y + 21.0 - ((h >> 5) & 2) as f32,
-            2.0,
+            1.4,
             soft_b,
         );
     }
 
-    match tile {
-        Tile::FloorSand => {
-            draw_circle(
-                rect.x + 13.0 + ((h >> 1) & 2) as f32,
-                rect.y + 15.0 + ((h >> 4) & 2) as f32,
-                1.0,
-                with_alpha(rgba(124, 136, 98, 255), 0.26),
-            );
-            draw_circle(
-                rect.x + 18.0 - ((h >> 2) & 2) as f32,
-                rect.y + 9.0 + ((h >> 5) & 2) as f32,
-                0.9,
-                with_alpha(rgba(116, 128, 92, 255), 0.22),
-            );
-        }
-        Tile::FloorMoss => {
-            let moss = with_alpha(rgba(100, 154, 104, 255), 0.22);
-            draw_circle(
-                rect.x + 9.0 + (h & 3) as f32,
-                rect.y + 10.0 + ((h >> 2) & 3) as f32,
-                3.0,
-                moss,
-            );
-            if h.is_multiple_of(4) {
-                draw_circle(
-                    rect.x + 20.0 - (h & 2) as f32,
-                    rect.y + 18.0 - ((h >> 3) & 2) as f32,
-                    2.2,
-                    with_alpha(rgba(82, 132, 92, 255), 0.22),
-                );
-            }
-        }
-        Tile::FloorWood => {
-            let warm = with_alpha(rgba(214, 154, 86, 255), 0.13);
-            let seam = with_alpha(rgba(24, 14, 8, 255), 0.42);
-            draw_rectangle(rect.x + 2.0, rect.y + 6.0, rect.w - 4.0, 7.0, warm);
-            draw_rectangle(
-                rect.x + 2.0,
-                rect.y + 19.0,
-                rect.w - 4.0,
-                7.0,
-                with_alpha(warm, 0.7),
-            );
-            draw_line(
-                rect.x + 1.0,
-                rect.y + 10.5,
-                rect.x + rect.w - 1.0,
-                rect.y + 10.5,
-                1.0,
-                seam,
-            );
-            draw_line(
-                rect.x + 1.0,
-                rect.y + 22.5,
-                rect.x + rect.w - 1.0,
-                rect.y + 22.5,
-                1.0,
-                seam,
-            );
-            if h.is_multiple_of(2) {
-                draw_line(
-                    rect.x + rect.w * 0.50,
-                    rect.y + 1.0,
-                    rect.x + rect.w * 0.50,
-                    rect.y + rect.h - 1.0,
-                    1.0,
-                    with_alpha(seam, 0.74),
-                );
-            }
-        }
-        _ => {}
+    let edge_alpha = interior_floor_tile_edge_alpha(tile);
+    if edge_alpha > 0.0 {
+        draw_rectangle_lines(
+            rect.x + 0.5,
+            rect.y + 0.5,
+            rect.w - 1.0,
+            rect.h - 1.0,
+            0.8,
+            with_alpha(palette.world.floor_edge, edge_alpha),
+        );
     }
 
-    if matches!(tile, Tile::FloorMetal) && variant <= 1 && !uses_model_texture {
-        for stripe in 0..3 {
-            let sx = rect.x - 6.0 + stripe as f32 * 12.0 + (variant as f32 * 1.4);
-            draw_line(
-                sx,
-                rect.y + rect.h,
-                sx + 10.0,
-                rect.y + 2.0,
-                1.4,
-                with_alpha(palette.world.safety_amber, 0.16),
-            );
-        }
-    }
-
-    let grime_strength = 0.03 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 320.0);
+    let grime_strength = 0.012 + ((hash_with_salt(x, y, 13) & 0x0F) as f32 / 880.0);
     draw_rectangle(
         rect.x,
         rect.y,
@@ -1684,6 +1930,7 @@ pub(crate) fn draw_floor_layer_region(
                         wood: model_textures.floor_wood.as_ref(),
                     },
                     exterior_hint,
+                    (world.w, world.h),
                 );
             }
         }
@@ -1705,7 +1952,7 @@ pub(crate) fn draw_exterior_ground_ambiance_region(
 
             let rect = World::tile_rect(x, y);
             let h = hash_with_salt(x, y, 0x8F51);
-            if h % 100 < 56 {
+            if h % 100 < 18 {
                 let sway = (time * 0.9 + h as f32 * 0.021).sin() * 0.9;
                 let blade_a = with_alpha(rgba(128, 184, 104, 255), 0.34);
                 let blade_b = with_alpha(rgba(82, 142, 78, 255), 0.32);
@@ -1736,7 +1983,7 @@ pub(crate) fn draw_exterior_ground_ambiance_region(
                     );
                 }
             }
-            if h % 100 < 20 {
+            if h % 100 < 4 {
                 let flower = if h & 1 == 0 {
                     rgba(232, 190, 80, 255)
                 } else {
@@ -1749,7 +1996,7 @@ pub(crate) fn draw_exterior_ground_ambiance_region(
                     with_alpha(flower, 0.66),
                 );
             }
-            if h % 100 >= 90 {
+            if h % 100 >= 98 {
                 let clover = with_alpha(rgba(62, 132, 54, 255), 0.55);
                 draw_circle(
                     rect.x + 9.0 + ((h >> 2) & 6) as f32,
@@ -1827,16 +2074,43 @@ pub(crate) fn draw_wall_cast_shadows_region(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WallExposedEdges {
+    north: bool,
+    south: bool,
+    east: bool,
+    west: bool,
+}
+
+fn wall_exposed_edges(mask: u8) -> WallExposedEdges {
+    WallExposedEdges {
+        north: mask & MASK_N == 0,
+        south: mask & MASK_S == 0,
+        east: mask & MASK_E == 0,
+        west: mask & MASK_W == 0,
+    }
+}
+
+fn wall_detail_alpha(tile: Tile) -> f32 {
+    match tile {
+        Tile::WallBrick => 0.20,
+        Tile::WallSteel => 0.16,
+        Tile::WallNeon => 0.14,
+        _ => 0.10,
+    }
+}
+
 pub(crate) fn draw_wall_tile(
     world: &World,
     x: i32,
     y: i32,
     tile: Tile,
     palette: &Palette,
-    wall_texture: Option<&Texture2D>,
+    _wall_texture: Option<&Texture2D>,
 ) {
     let rect = World::tile_rect(x, y);
     let mask = wall_mask_4(world, x, y);
+    let edges = wall_exposed_edges(mask);
     let h = tile_hash(x, y);
     let tone = monde::wall_tones(tile, palette);
     let wall_top = tone.top;
@@ -1844,21 +2118,18 @@ pub(crate) fn draw_wall_tile(
     let wall_dark = tone.dark;
     let wall_outline = tone.outline;
 
-    if let Some(texture) = wall_texture {
-        draw_texture_in_rect(texture, rect, color_lerp(WHITE, wall_mid, 0.08));
-    } else {
-        for band in 0..4 {
-            let t0 = band as f32 / 4.0;
-            let t1 = (band + 1) as f32 / 4.0;
-            let top = color_lerp(wall_top, wall_mid, t0);
-            let bottom = color_lerp(wall_top, wall_mid, t1);
-            let band_y = rect.y + rect.h * t0;
-            let band_h = rect.h * (t1 - t0) + 0.5;
-            draw_rectangle(rect.x, band_y, rect.w, band_h, color_lerp(top, bottom, 0.5));
-        }
+    for band in 0..5 {
+        let t0 = band as f32 / 5.0;
+        let t1 = (band + 1) as f32 / 5.0;
+        let top = color_lerp(wall_top, wall_mid, t0);
+        let bottom = color_lerp(wall_top, wall_mid, t1);
+        let band_y = rect.y + rect.h * t0;
+        let band_h = rect.h * (t1 - t0) + 0.5;
+        draw_rectangle(rect.x, band_y, rect.w, band_h, color_lerp(top, bottom, 0.5));
     }
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, with_alpha(wall_dark, 0.035));
 
-    if mask & MASK_N == 0 {
+    if edges.north {
         draw_rectangle(rect.x, rect.y, rect.w, 4.0, wall_top);
         draw_rectangle(
             rect.x,
@@ -1868,13 +2139,13 @@ pub(crate) fn draw_wall_tile(
             with_alpha(wall_dark, 0.7),
         );
     }
-    if mask & MASK_S == 0 {
+    if edges.south {
         draw_rectangle(rect.x, rect.y + rect.h - 4.0, rect.w, 4.0, wall_dark);
     }
-    if mask & MASK_W == 0 {
+    if edges.west {
         draw_rectangle(rect.x, rect.y, 3.0, rect.h, with_alpha(wall_dark, 0.9));
     }
-    if mask & MASK_E == 0 {
+    if edges.east {
         draw_rectangle(
             rect.x + rect.w - 3.0,
             rect.y,
@@ -1884,10 +2155,10 @@ pub(crate) fn draw_wall_tile(
         );
     }
 
-    if mask & MASK_N == 0 && mask & MASK_W == 0 {
+    if edges.north && edges.west {
         draw_rectangle(rect.x, rect.y, 5.0, 5.0, with_alpha(wall_top, 0.95));
     }
-    if mask & MASK_N == 0 && mask & MASK_E == 0 {
+    if edges.north && edges.east {
         draw_rectangle(
             rect.x + rect.w - 5.0,
             rect.y,
@@ -1897,24 +2168,25 @@ pub(crate) fn draw_wall_tile(
         );
     }
 
-    if h & 1 == 0 {
+    let detail_alpha = wall_detail_alpha(tile);
+    if h & 1 == 0 && (edges.north || edges.south) {
         draw_line(
             rect.x + 6.0,
             rect.y + 10.0,
             rect.x + rect.w - 7.0,
             rect.y + 10.0,
             1.0,
-            with_alpha(wall_outline, 0.30),
+            with_alpha(wall_outline, detail_alpha),
         );
     }
-    if h.is_multiple_of(4) {
+    if h.is_multiple_of(4) && (edges.west || edges.east) {
         draw_line(
             rect.x + 8.0,
             rect.y + 18.0,
             rect.x + rect.w - 8.0,
             rect.y + 18.0,
             1.0,
-            with_alpha(wall_outline, 0.25),
+            with_alpha(wall_outline, detail_alpha * 0.8),
         );
     }
 
@@ -1927,18 +2199,20 @@ pub(crate) fn draw_wall_tile(
                     rect.x + rect.w - 2.0,
                     rect.y + by as f32,
                     1.0,
-                    with_alpha(wall_outline, 0.32),
+                    with_alpha(wall_outline, 0.18),
                 );
             }
         }
-        draw_line(
-            rect.x + rect.w * 0.5,
-            rect.y + 6.0,
-            rect.x + rect.w * 0.5,
-            rect.y + rect.h - 6.0,
-            1.0,
-            with_alpha(wall_outline, 0.25),
-        );
+        if h.is_multiple_of(3) {
+            draw_line(
+                rect.x + rect.w * 0.52,
+                rect.y + 8.0,
+                rect.x + rect.w * 0.52,
+                rect.y + rect.h - 8.0,
+                0.8,
+                with_alpha(wall_outline, 0.13),
+            );
+        }
     } else if matches!(tile, Tile::WallSteel) {
         draw_rectangle(
             rect.x + 5.0,
@@ -1986,14 +2260,32 @@ pub(crate) fn draw_wall_tile(
         );
     }
 
-    draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        1.0,
-        wall_outline,
-    );
+    if edges.north {
+        draw_line(rect.x, rect.y, rect.x + rect.w, rect.y, 1.2, wall_outline);
+    }
+    if edges.south {
+        draw_line(
+            rect.x,
+            rect.y + rect.h,
+            rect.x + rect.w,
+            rect.y + rect.h,
+            1.2,
+            with_alpha(wall_outline, 0.78),
+        );
+    }
+    if edges.west {
+        draw_line(rect.x, rect.y, rect.x, rect.y + rect.h, 1.1, wall_outline);
+    }
+    if edges.east {
+        draw_line(
+            rect.x + rect.w,
+            rect.y,
+            rect.x + rect.w,
+            rect.y + rect.h,
+            1.1,
+            with_alpha(wall_outline, 0.82),
+        );
+    }
 }
 
 pub(crate) fn draw_wall_layer_region(
@@ -2511,6 +2803,31 @@ pub(crate) fn draw_npc_wander_overlay(npc: &NpcWanderer) {
 }
 
 pub(crate) fn draw_editor_grid_region(bounds: (i32, i32, i32, i32)) {
+    draw_grid_lines(bounds, 0.27);
+}
+
+pub(crate) fn draw_world_grid_region(world: &World, bounds: (i32, i32, i32, i32), alpha: f32) {
+    if world.w <= 0 || world.h <= 0 {
+        return;
+    }
+    let clamped = (
+        bounds.0.clamp(0, world.w - 1),
+        bounds.1.clamp(0, world.w - 1),
+        bounds.2.clamp(0, world.h - 1),
+        bounds.3.clamp(0, world.h - 1),
+    );
+    if clamped.0 > clamped.1 || clamped.2 > clamped.3 {
+        return;
+    }
+    draw_grid_lines(clamped, alpha);
+}
+
+fn draw_grid_lines(bounds: (i32, i32, i32, i32), alpha: f32) {
+    let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if alpha_u8 == 0 {
+        return;
+    }
+    let color = Color::from_rgba(126, 150, 166, alpha_u8);
     for x in bounds.0..=bounds.1 + 1 {
         let px = x as f32 * TILE_SIZE;
         draw_line(
@@ -2519,7 +2836,7 @@ pub(crate) fn draw_editor_grid_region(bounds: (i32, i32, i32, i32)) {
             px,
             (bounds.3 + 1) as f32 * TILE_SIZE,
             1.0,
-            Color::from_rgba(110, 140, 165, 70),
+            color,
         );
     }
     for y in bounds.2..=bounds.3 + 1 {
@@ -2530,7 +2847,7 @@ pub(crate) fn draw_editor_grid_region(bounds: (i32, i32, i32, i32)) {
             (bounds.1 + 1) as f32 * TILE_SIZE,
             py,
             1.0,
-            Color::from_rgba(110, 140, 165, 70),
+            color,
         );
     }
 }
@@ -2557,11 +2874,112 @@ fn block_intersects_bounds(
     !(x1 < bounds.0 || x0 > bounds.1 || y1 < bounds.2 || y0 > bounds.3)
 }
 
-fn block_occupies_tile(block: &sim::BlockDebugView, tile: (i32, i32)) -> bool {
-    tile.0 >= block.tile.0
-        && tile.0 < block.tile.0 + block.footprint.0.max(1)
-        && tile.1 >= block.tile.1
-        && tile.1 < block.tile.1 + block.footprint.1.max(1)
+fn block_instance_occupies_tile(block: &sim::BlockInstance, tile: (i32, i32)) -> bool {
+    tile.0 >= block.origin_tile.0
+        && tile.0 < block.origin_tile.0 + block.footprint.0.max(1)
+        && tile.1 >= block.origin_tile.1
+        && tile.1 < block.origin_tile.1 + block.footprint.1.max(1)
+}
+
+fn draw_industrial_slab(block: sim::BlockRenderView, palette: &Palette) {
+    let rect = industrial_slab_rect(block.tile, block.footprint);
+    let world = palette.world;
+    let concrete = theme::mix_color(world.floor_a, world.steel_deep, 0.18);
+    let concrete_hi = theme::mix_color(world.floor_b, world.steel_cool, 0.14);
+    let edge = with_alpha(
+        theme::mix_color(world.floor_edge, world.steel_deep, 0.28),
+        0.50,
+    );
+    let shadow = with_alpha(world.shadow_hard, 0.18);
+
+    draw_rectangle(rect.x + 3.0, rect.y + 4.0, rect.w, rect.h, shadow);
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, with_alpha(concrete, 0.90));
+    draw_rectangle(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h * 0.36,
+        with_alpha(concrete_hi, 0.18),
+    );
+    draw_rectangle(
+        rect.x,
+        rect.y + rect.h * 0.72,
+        rect.w,
+        rect.h * 0.28,
+        with_alpha(world.floor_grime, 0.10),
+    );
+
+    let seam_step = TILE_SIZE * 3.0;
+    let first_x = ((rect.x / seam_step).floor() as i32 - 1).max(-1);
+    let last_x = ((rect.x + rect.w) / seam_step).ceil() as i32 + 1;
+    for ix in first_x..=last_x {
+        let x = ix as f32 * seam_step;
+        if x > rect.x + 8.0 && x < rect.x + rect.w - 8.0 {
+            draw_line(
+                x,
+                rect.y + 5.0,
+                x,
+                rect.y + rect.h - 5.0,
+                1.0,
+                with_alpha(world.floor_edge, 0.10),
+            );
+        }
+    }
+    let first_y = ((rect.y / seam_step).floor() as i32 - 1).max(-1);
+    let last_y = ((rect.y + rect.h) / seam_step).ceil() as i32 + 1;
+    for iy in first_y..=last_y {
+        let y = iy as f32 * seam_step;
+        if y > rect.y + 8.0 && y < rect.y + rect.h - 8.0 {
+            draw_line(
+                rect.x + 5.0,
+                y,
+                rect.x + rect.w - 5.0,
+                y,
+                1.0,
+                with_alpha(world.floor_edge, 0.10),
+            );
+        }
+    }
+
+    if block.kind.is_modern_line_component() {
+        let mark = with_alpha(world.floor_marking, 0.13);
+        let count = (rect.w / 34.0).ceil().clamp(2.0, 10.0) as i32;
+        for i in 0..count {
+            let sx = rect.x + 10.0 + i as f32 * 34.0;
+            draw_line(
+                sx,
+                rect.y + rect.h - 7.0,
+                sx + 14.0,
+                rect.y + rect.h - 7.0,
+                2.0,
+                mark,
+            );
+        }
+    }
+
+    draw_rectangle_lines(
+        rect.x + 0.5,
+        rect.y + 0.5,
+        (rect.w - 1.0).max(1.0),
+        (rect.h - 1.0).max(1.0),
+        1.4,
+        edge,
+    );
+}
+
+pub(crate) fn draw_sim_industrial_floor_region(
+    sim: &sim::FactorySim,
+    palette: &Palette,
+    bounds: Option<(i32, i32, i32, i32)>,
+) {
+    for block in sim.block_render_views() {
+        if let Some(tile_bounds) = bounds
+            && !block_intersects_bounds(block.tile, block.footprint, tile_bounds)
+        {
+            continue;
+        }
+        draw_industrial_slab(block, palette);
+    }
 }
 
 fn orientation_axis(orientation: sim::BlockOrientation) -> Vec2 {
@@ -3691,15 +4109,15 @@ fn suction_pipe_connectable(kind: sim::BlockKind) -> bool {
 }
 
 fn suction_pipe_connections(
-    block: &sim::BlockDebugView,
-    blocks: &[sim::BlockDebugView],
+    block: sim::BlockRenderView,
+    blocks: &[sim::BlockInstance],
 ) -> PipeConnections {
     let origin = block.tile;
     let has_block_at = |tile: (i32, i32)| {
         blocks.iter().any(|other| {
             other.id != block.id
                 && suction_pipe_connectable(other.kind)
-                && block_occupies_tile(other, tile)
+                && block_instance_occupies_tile(other, tile)
         })
     };
 
@@ -4093,7 +4511,77 @@ fn draw_bag_chute_visual(
     );
 }
 
+fn draw_storage_block_visual(rect: Rect, raw_qty: u32) {
+    let world = theme::world_theme();
+    let base = production::sim_block_overlay_color(sim::BlockKind::Storage);
+    draw_soft_shadow_rect(rect, vec2(2.8, 3.2), 4.2, 0.18);
+    draw_panel(
+        rect,
+        with_alpha(theme::mix_color(world.steel_deep, base, 0.50), 0.88),
+        with_alpha(
+            theme::mix_color(base, world.prop_pipe_highlight, 0.34),
+            0.72,
+        ),
+        0.055,
+    );
+
+    let inner = rect_inset(rect, rect.w.min(rect.h) * 0.10);
+    let shelf_col = with_alpha(theme::mix_color(world.prop_crate_light, base, 0.28), 0.58);
+    for row in 0..3 {
+        let y = inner.y + inner.h * (row as f32 + 0.5) / 3.0;
+        draw_line(inner.x, y, inner.x + inner.w, y, 1.2, shelf_col);
+    }
+    for col in 1..3 {
+        let x = inner.x + inner.w * col as f32 / 3.0;
+        draw_line(
+            x,
+            inner.y + 2.0,
+            x,
+            inner.y + inner.h - 2.0,
+            0.9,
+            with_alpha(shelf_col, 0.72),
+        );
+    }
+
+    let fill_slots = raw_qty.min(6);
+    for slot in 0..fill_slots {
+        let col = slot % 3;
+        let row = slot / 3;
+        let bay_w = inner.w / 3.0;
+        let bay_h = inner.h / 2.0;
+        let crate_rect = Rect::new(
+            inner.x + col as f32 * bay_w + bay_w * 0.18,
+            inner.y + row as f32 * bay_h + bay_h * 0.20,
+            bay_w * 0.64,
+            bay_h * 0.54,
+        );
+        draw_rectangle(
+            crate_rect.x,
+            crate_rect.y,
+            crate_rect.w,
+            crate_rect.h,
+            with_alpha(Color::from_rgba(168, 120, 78, 255), 0.78),
+        );
+        draw_rectangle_lines(
+            crate_rect.x + 0.5,
+            crate_rect.y + 0.5,
+            (crate_rect.w - 1.0).max(1.0),
+            (crate_rect.h - 1.0).max(1.0),
+            0.8,
+            with_alpha(Color::from_rgba(238, 212, 178, 255), 0.30),
+        );
+    }
+
+    draw_led(
+        vec2(rect.x + rect.w * 0.84, rect.y + rect.h * 0.18),
+        rect.w.min(rect.h) * 0.045,
+        Color::from_rgba(112, 214, 255, 255),
+        if raw_qty > 0 { 0.62 } else { 0.24 },
+    );
+}
+
 fn draw_buffer_rack_visual(rect: Rect, rack_levels: &[bool]) {
+    draw_soft_shadow_rect(rect, vec2(2.2, 2.8), 3.8, 0.18);
     let frame = Color::from_rgba(196, 172, 146, 188);
     draw_rectangle(
         rect.x,
@@ -4117,6 +4605,15 @@ fn draw_buffer_rack_visual(rect: Rect, rack_levels: &[bool]) {
         (rect.h - 3.2).max(1.0),
         with_alpha(Color::from_rgba(98, 84, 68, 80), 0.9),
     );
+    for x in [rect.x + rect.w * 0.18, rect.x + rect.w * 0.82] {
+        draw_rectangle(
+            x - 1.0,
+            rect.y + 2.0,
+            2.0,
+            (rect.h - 4.0).max(1.0),
+            with_alpha(Color::from_rgba(220, 188, 146, 255), 0.42),
+        );
+    }
     let levels = rack_levels.len().max(1);
     for i in 0..levels {
         let t = i as f32 / levels as f32;
@@ -4163,20 +4660,12 @@ fn draw_buffer_rack_visual(rect: Rect, rack_levels: &[bool]) {
 }
 
 fn draw_seller_visual(rect: Rect, time: f32) {
-    draw_rectangle(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
+    draw_soft_shadow_rect(rect, vec2(2.4, 2.8), 3.8, 0.18);
+    draw_panel(
+        rect,
         Color::from_rgba(66, 96, 76, 222),
-    );
-    draw_rectangle_lines(
-        rect.x + 0.5,
-        rect.y + 0.5,
-        rect.w - 1.0,
-        rect.h - 1.0,
-        1.2,
         Color::from_rgba(184, 230, 198, 184),
+        0.06,
     );
     draw_rectangle(
         rect.x + rect.w * 0.16,
@@ -4185,6 +4674,14 @@ fn draw_seller_visual(rect: Rect, time: f32) {
         rect.h * 0.28,
         Color::from_rgba(112, 84, 62, 220),
     );
+    draw_rectangle_lines(
+        rect.x + rect.w * 0.16 + 0.5,
+        rect.y + rect.h * 0.54 + 0.5,
+        rect.w * 0.68 - 1.0,
+        rect.h * 0.28 - 1.0,
+        0.9,
+        with_alpha(Color::from_rgba(242, 218, 180, 255), 0.24),
+    );
     let pulse = 0.28 + ((time * 2.1).sin() * 0.5 + 0.5) * 0.52;
     draw_rectangle(
         rect.x + rect.w * 0.34,
@@ -4192,6 +4689,14 @@ fn draw_seller_visual(rect: Rect, time: f32) {
         rect.w * 0.32,
         rect.h * 0.25,
         with_alpha(Color::from_rgba(112, 196, 148, 255), pulse),
+    );
+    draw_rectangle_lines(
+        rect.x + rect.w * 0.34 + 0.5,
+        rect.y + rect.h * 0.2 + 0.5,
+        rect.w * 0.32 - 1.0,
+        rect.h * 0.25 - 1.0,
+        0.8,
+        with_alpha(Color::from_rgba(218, 252, 226, 255), 0.22 + pulse * 0.22),
     );
     draw_rectangle(
         rect.x + rect.w * 0.18,
@@ -4220,6 +4725,7 @@ fn draw_machine_cluster_visual(
     rotor_speed: f32,
     time: f32,
 ) {
+    draw_soft_shadow_rect(rect, vec2(2.4, 2.8), 4.0, 0.18);
     let shell = with_alpha(Color::from_rgba(188, 204, 216, 248), 0.94);
     let shell_dark = with_alpha(Color::from_rgba(130, 146, 162, 248), 0.95);
     let chrome = with_alpha(Color::from_rgba(230, 242, 250, 170), 0.7);
@@ -4354,10 +4860,10 @@ fn blink_ratio(time: f32) -> f32 {
 }
 
 fn draw_modern_block_visual(
-    block: &sim::BlockDebugView,
+    block: sim::BlockRenderView,
     rect: Rect,
     sim: &sim::FactorySim,
-    blocks: &[sim::BlockDebugView],
+    blocks: &[sim::BlockInstance],
     time: f32,
     modern_ready: bool,
 ) {
@@ -4498,28 +5004,7 @@ fn draw_modern_block_visual(
             sim.descente_rouge_beacon_active(),
             time,
         ),
-        sim::BlockKind::Storage => {
-            let base = production::sim_block_overlay_color(sim::BlockKind::Storage);
-            let world = theme::world_theme();
-            draw_rectangle(
-                rect.x,
-                rect.y,
-                rect.w,
-                rect.h,
-                with_alpha(theme::mix_color(world.steel_deep, base, 0.58), 0.88),
-            );
-            draw_rectangle_lines(
-                rect.x + 0.5,
-                rect.y + 0.5,
-                rect.w - 1.0,
-                rect.h - 1.0,
-                1.2,
-                with_alpha(
-                    theme::mix_color(base, world.prop_pipe_highlight, 0.42),
-                    0.78,
-                ),
-            );
-        }
+        sim::BlockKind::Storage => draw_storage_block_visual(rect, block.raw_qty),
         sim::BlockKind::MachineA => {
             let activity = (time * 1.2 + block.id as f32 * 0.11).sin() * 0.5 + 0.5;
             let base = production::sim_block_overlay_color(sim::BlockKind::MachineA);
@@ -4584,33 +5069,36 @@ pub(crate) fn draw_sim_blocks_overlay(
 ) {
     let storage_texture = storage_raw_texture();
     let time = get_time() as f32;
-    let modern_ready = sim.modern_line_ready();
-    let blocks = if show_labels {
-        sim.block_debug_views()
-    } else {
-        sim.block_debug_views_minimal()
-    };
-    for block in &blocks {
-        if let Some(tile_bounds) = bounds
-            && !block_intersects_bounds(block.tile, block.footprint, tile_bounds)
-        {
-            continue;
-        }
-        let rect = sim_block_rect(block.tile, block.footprint);
-        let color = production::sim_block_overlay_color(block.kind);
-        draw_modern_block_visual(block, rect, sim, &blocks, time, modern_ready);
-        draw_rectangle_lines(
-            rect.x + 1.5,
-            rect.y + 1.5,
-            (rect.w - 3.0).max(1.0),
-            (rect.h - 3.0).max(1.0),
-            1.7,
-            with_alpha(color, 0.74),
-        );
-        if block.kind == sim::BlockKind::Storage && block.raw_qty > 0 {
-            draw_storage_raw_stack(rect, block.raw_qty, storage_texture.as_ref());
-        }
-        if show_labels {
+    let modern_ready = sim.modern_line_ready_cached_for_render();
+    if show_labels {
+        let blocks = sim.block_debug_views();
+        for block in &blocks {
+            if let Some(tile_bounds) = bounds
+                && !block_intersects_bounds(block.tile, block.footprint, tile_bounds)
+            {
+                continue;
+            }
+            let rect = sim_block_rect(block.tile, block.footprint);
+            let color = production::sim_block_overlay_color(block.kind);
+            draw_modern_block_visual(
+                block.render_view(),
+                rect,
+                sim,
+                sim.blocks(),
+                time,
+                modern_ready,
+            );
+            draw_rectangle_lines(
+                rect.x + 1.5,
+                rect.y + 1.5,
+                (rect.w - 3.0).max(1.0),
+                (rect.h - 3.0).max(1.0),
+                1.7,
+                with_alpha(color, 0.74),
+            );
+            if block.kind == sim::BlockKind::Storage && block.raw_qty > 0 {
+                draw_storage_raw_stack(rect, block.raw_qty, storage_texture.as_ref());
+            }
             let kind_label = if block.kind.is_player_buyable() {
                 block.kind.buyable_label()
             } else {
@@ -4636,6 +5124,28 @@ pub(crate) fn draw_sim_blocks_overlay(
                 Color::from_rgba(92, 138, 170, 168),
             );
         }
+    } else {
+        for block in sim.block_render_views() {
+            if let Some(tile_bounds) = bounds
+                && !block_intersects_bounds(block.tile, block.footprint, tile_bounds)
+            {
+                continue;
+            }
+            let rect = sim_block_rect(block.tile, block.footprint);
+            let color = production::sim_block_overlay_color(block.kind);
+            draw_modern_block_visual(block, rect, sim, sim.blocks(), time, modern_ready);
+            draw_rectangle_lines(
+                rect.x + 1.5,
+                rect.y + 1.5,
+                (rect.w - 3.0).max(1.0),
+                (rect.h - 3.0).max(1.0),
+                1.7,
+                with_alpha(color, 0.74),
+            );
+            if block.kind == sim::BlockKind::Storage && block.raw_qty > 0 {
+                draw_storage_raw_stack(rect, block.raw_qty, storage_texture.as_ref());
+            }
+        }
     }
 }
 
@@ -4653,20 +5163,18 @@ pub(crate) fn draw_build_block_preview(
 
     let rect = sim_block_rect(preview.tile, preview.footprint);
     let time = get_time() as f32;
-    let existing_blocks = sim.block_debug_views_minimal();
-    let ghost = sim::BlockDebugView {
+    let ghost = sim::BlockRenderView {
         id: 0,
         kind: preview.kind,
         tile: preview.tile,
         footprint: preview.footprint,
         orientation: preview.orientation,
         raw_qty: 0,
-        inventory_summary: String::new(),
         rack_levels: [false; 6],
     };
 
-    let modern_ready = sim.modern_line_ready();
-    draw_modern_block_visual(&ghost, rect, sim, &existing_blocks, time, modern_ready);
+    let modern_ready = sim.modern_line_ready_cached_for_render();
+    draw_modern_block_visual(ghost, rect, sim, sim.blocks(), time, modern_ready);
     draw_rectangle(
         rect.x,
         rect.y,
@@ -4843,15 +5351,122 @@ mod tests {
             .expect("large grass texture should be sampled");
         let second = grass_texture_source_rect(1024.0, 1024.0, 12, 7)
             .expect("large grass texture should be sampled");
-        let other = grass_texture_source_rect(1024.0, 1024.0, 13, 7)
+        let neighbor = grass_texture_source_rect(1024.0, 1024.0, 13, 7)
             .expect("large grass texture should be sampled");
 
         assert_eq!(first, second);
-        assert_ne!(first, other);
         assert_close(first.w, GRASS_TEXTURE_SOURCE_TILE_PX);
         assert_close(first.h, GRASS_TEXTURE_SOURCE_TILE_PX);
+        assert_close(neighbor.x, first.x + GRASS_TEXTURE_SOURCE_TILE_PX);
+        assert_close(neighbor.y, first.y);
         assert!(first.x >= 0.0 && first.x + first.w <= 1024.0);
         assert!(first.y >= 0.0 && first.y + first.h <= 1024.0);
+    }
+
+    #[test]
+    fn grass_texture_source_rect_wraps_on_texture_tile_boundary() {
+        let first_column = grass_texture_source_rect(1024.0, 1024.0, 0, 3)
+            .expect("large grass texture should be sampled");
+        let wrapped_column = grass_texture_source_rect(1024.0, 1024.0, 32, 3)
+            .expect("large grass texture should be sampled");
+
+        assert_eq!(first_column, wrapped_column);
+    }
+
+    #[test]
+    fn interior_wood_floor_has_no_tile_contour_alpha() {
+        assert_close(interior_floor_tile_edge_alpha(Tile::FloorWood), 0.0);
+    }
+
+    #[test]
+    fn wood_butt_joints_are_sparse_and_not_tile_aligned() {
+        let row = wood_plank_row_for_world_y(18.0);
+        let mut joint_count = 0;
+        for tile_x in 0..18 {
+            if let Some(local_x) = wood_butt_joint_local_x(tile_x, row) {
+                joint_count += 1;
+                assert!(local_x > 1.5 && local_x < TILE_SIZE - 1.5);
+            }
+        }
+
+        assert!(joint_count > 0);
+        assert!(joint_count < 8);
+    }
+
+    #[test]
+    fn interior_plate_cells_are_wider_than_single_tiles() {
+        assert_eq!(interior_plate_cell(Tile::FloorMetal, 0, 0), (0, 0));
+        assert_eq!(interior_plate_cell(Tile::FloorMetal, 2, 2), (0, 0));
+        assert_ne!(interior_plate_cell(Tile::FloorMetal, 3, 0), (0, 0));
+        assert_eq!(interior_plate_cell(Tile::Floor, 3, 3), (0, 0));
+        assert_ne!(interior_plate_cell(Tile::Floor, 4, 3), (0, 0));
+    }
+
+    #[test]
+    fn wall_exposed_edges_are_derived_from_neighbor_mask() {
+        let edges = wall_exposed_edges(MASK_N | MASK_E);
+
+        assert!(!edges.north);
+        assert!(edges.south);
+        assert!(!edges.east);
+        assert!(edges.west);
+    }
+
+    #[test]
+    fn exterior_ground_patch_kind_is_macro_cell_based() {
+        assert_eq!(
+            exterior_ground_patch_cell(18, 27),
+            exterior_ground_patch_cell(20, 29)
+        );
+        assert_eq!(
+            exterior_ground_patch_kind(18, 27),
+            exterior_ground_patch_kind(20, 29)
+        );
+    }
+
+    #[test]
+    fn exterior_ground_patch_kind_varies_across_large_area() {
+        let first = exterior_ground_patch_kind(0, 0);
+        let mut found_other = false;
+        for y in (0..120).step_by(EXTERIOR_GROUND_PATCH_TILES as usize) {
+            for x in (0..120).step_by(EXTERIOR_GROUND_PATCH_TILES as usize) {
+                if exterior_ground_patch_kind(x, y) != first {
+                    found_other = true;
+                }
+            }
+        }
+        assert!(found_other);
+    }
+
+    #[test]
+    fn exterior_ground_micro_light_stays_subtle() {
+        for y in 0..32 {
+            for x in 0..32 {
+                assert!(exterior_ground_micro_light(x, y).abs() <= 0.019);
+            }
+        }
+    }
+
+    #[test]
+    fn global_ground_light_is_bright_top_left_and_dark_bottom_right() {
+        let world_size = (168, 108);
+        assert!(global_ground_light_delta(0, 0, world_size) > 0.0);
+        assert!(global_ground_light_delta(167, 107, world_size) < 0.0);
+        assert!(global_ground_light_delta(84, 54, world_size).abs() < 0.01);
+    }
+
+    #[test]
+    fn industrial_slab_rect_expands_block_footprint() {
+        let footprint = (5, 3);
+        let base = sim_block_rect((10, 20), footprint);
+        let slab = industrial_slab_rect((10, 20), footprint);
+
+        assert!(slab.x < base.x);
+        assert!(slab.y < base.y);
+        assert!(slab.x + slab.w > base.x + base.w);
+        assert!(slab.y + slab.h > base.y + base.h);
+        assert_close(slab.w, base.w + INDUSTRIAL_SLAB_MARGIN_PX * 2.0);
+        assert_close(slab.h, base.h + INDUSTRIAL_SLAB_MARGIN_PX * 2.0);
     }
 
     #[test]

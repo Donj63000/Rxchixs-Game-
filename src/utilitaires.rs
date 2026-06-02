@@ -996,6 +996,7 @@ mod tests {
             w: 100,
             h: 100,
             tiles: vec![Tile::Floor; 10_000],
+            revision: 0,
         };
         let camera = Camera2D {
             target: vec2(50.0 * TILE_SIZE, 40.0 * TILE_SIZE),

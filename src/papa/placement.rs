@@ -18,6 +18,10 @@ pub fn plan_peut_etre_pose(
     sim: &sim::FactorySim,
     ancre: (i32, i32),
 ) -> bool {
+    if !sols_peuvent_etre_prepares(plan, world, ancre) {
+        return false;
+    }
+
     let mut poses_locales: Vec<((i32, i32), (i32, i32))> = Vec::with_capacity(plan.blocs.len());
 
     for bloc in &plan.blocs {
@@ -36,6 +40,27 @@ pub fn plan_peut_etre_pose(
         poses_locales.push((tile, footprint));
     }
 
+    true
+}
+
+fn sols_peuvent_etre_prepares(
+    plan: &PapaPlanAsset,
+    world: &crate::World,
+    ancre: (i32, i32),
+) -> bool {
+    for sol in &plan.sols {
+        if sol.size.0 <= 0 || sol.size.1 <= 0 {
+            return false;
+        }
+        for dy in 0..sol.size.1 {
+            for dx in 0..sol.size.0 {
+                let tile = (ancre.0 + sol.offset.0 + dx, ancre.1 + sol.offset.1 + dy);
+                if !world.in_bounds(tile.0, tile.1) || world.is_solid(tile.0, tile.1) {
+                    return false;
+                }
+            }
+        }
+    }
     true
 }
 

@@ -12,6 +12,7 @@ pub struct PapaPlanAsset {
     pub schema_version: u32,
     pub label: String,
     pub delai_etape_s: f32,
+    pub sols: Vec<PapaPlanSol>,
     pub blocs: Vec<PapaPlanBloc>,
 }
 
@@ -21,7 +22,33 @@ impl Default for PapaPlanAsset {
             schema_version: PAPA_PLAN_SCHEMA_VERSION,
             label: "Ligne moderne Papa".to_string(),
             delai_etape_s: 0.42,
+            sols: Vec::new(),
             blocs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PapaPlanSol {
+    pub kind: PapaPlanSolKind,
+    pub offset: (i32, i32),
+    pub size: (i32, i32),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PapaPlanSolKind {
+    FloorMetal,
+    FloorWood,
+    Floor,
+}
+
+impl PapaPlanSolKind {
+    pub fn to_tile(self) -> crate::Tile {
+        match self {
+            Self::FloorMetal => crate::Tile::FloorMetal,
+            Self::FloorWood => crate::Tile::FloorWood,
+            Self::Floor => crate::Tile::Floor,
         }
     }
 }
@@ -50,11 +77,12 @@ impl PapaPlanAsset {
                 PAPA_PLAN_SCHEMA_VERSION, self.schema_version
             ));
         }
-        if self.blocs.is_empty() {
-            return Err("plan Papa vide: aucun bloc a poser".to_string());
-        }
         if self.delai_etape_s <= 0.0 || !self.delai_etape_s.is_finite() {
             return Err("delai_etape_s doit etre > 0".to_string());
+        }
+        self.valider_sols()?;
+        if self.blocs.is_empty() {
+            return Err("plan Papa vide: aucun bloc a poser".to_string());
         }
 
         let mut kinds = BTreeSet::new();
@@ -96,10 +124,46 @@ impl PapaPlanAsset {
         Ok(())
     }
 
+    fn valider_sols(&self) -> Result<(), String> {
+        for sol in &self.sols {
+            if sol.size.0 <= 0 || sol.size.1 <= 0 {
+                return Err(format!(
+                    "plan Papa sol invalide: taille {:?} pour offset {:?}",
+                    sol.size, sol.offset
+                ));
+            }
+            let Some(area) = sol.size.0.checked_mul(sol.size.1) else {
+                return Err(format!(
+                    "plan Papa sol invalide: surface deborde pour offset {:?} taille {:?}",
+                    sol.offset, sol.size
+                ));
+            };
+            if area > 50_000 {
+                return Err(format!(
+                    "plan Papa sol invalide: surface trop grande {} pour offset {:?}",
+                    area, sol.offset
+                ));
+            }
+            let Some(_max_x) = sol.offset.0.checked_add(sol.size.0 - 1) else {
+                return Err(format!(
+                    "plan Papa sol invalide: debordement x pour offset {:?} taille {:?}",
+                    sol.offset, sol.size
+                ));
+            };
+            let Some(_max_y) = sol.offset.1.checked_add(sol.size.1 - 1) else {
+                return Err(format!(
+                    "plan Papa sol invalide: debordement y pour offset {:?} taille {:?}",
+                    sol.offset, sol.size
+                ));
+            };
+        }
+        Ok(())
+    }
+
     fn valider_connectivite_fonctionnelle(&self) -> Result<(), String> {
         let map_w = 220;
         let map_h = 220;
-        let world = crate::World::new_room(map_w, map_h);
+        let mut world = crate::World::new_room(map_w, map_h);
         let mut sim = sim::FactorySim::new(sim::StarterSimConfig::default(), map_w, map_h);
 
         let mut min_x = i32::MAX;
@@ -112,6 +176,22 @@ impl PapaPlanAsset {
         // pour que la validation de plan teste bien la connectivite metier.
         let anchor_x = 30 - min_x;
         let anchor_y = 30 - min_y;
+
+        for sol in &self.sols {
+            let tile_kind = sol.kind.to_tile();
+            for dy in 0..sol.size.1 {
+                for dx in 0..sol.size.0 {
+                    let tile = (anchor_x + sol.offset.0 + dx, anchor_y + sol.offset.1 + dy);
+                    if !world.in_bounds(tile.0, tile.1) || world.is_solid(tile.0, tile.1) {
+                        return Err(format!(
+                            "plan Papa invalide: dalle impossible en {:?}",
+                            tile
+                        ));
+                    }
+                    world.set(tile.0, tile.1, tile_kind);
+                }
+            }
+        }
 
         for bloc in &self.blocs {
             let tile = (anchor_x + bloc.offset.0, anchor_y + bloc.offset.1);
@@ -140,6 +220,7 @@ mod tests {
             schema_version: PAPA_PLAN_SCHEMA_VERSION,
             label: "test".to_string(),
             delai_etape_s: 0.2,
+            sols: Vec::new(),
             blocs: vec![PapaPlanBloc {
                 kind: sim::BlockKind::InputHopper,
                 orientation: sim::BlockOrientation::East,
@@ -152,11 +233,67 @@ mod tests {
     }
 
     #[test]
+    fn plan_deserializes_optional_sols_with_default_empty_list() {
+        let payload = r#"
+        (
+            schema_version: 1,
+            label: "ancien plan",
+            delai_etape_s: 0.2,
+            blocs: [],
+        )
+        "#;
+
+        let plan: PapaPlanAsset = ron_from_str(payload).expect("old plan should deserialize");
+        assert!(plan.sols.is_empty());
+    }
+
+    #[test]
+    fn plan_deserializes_industrial_slab_floor() {
+        let payload = r#"
+        (
+            schema_version: 1,
+            label: "plan avec dalle",
+            delai_etape_s: 0.2,
+            sols: [
+                (kind: floor_metal, offset: (-2, -5), size: (67, 14)),
+            ],
+            blocs: [],
+        )
+        "#;
+
+        let plan: PapaPlanAsset = ron_from_str(payload).expect("slab plan should deserialize");
+        assert_eq!(plan.sols.len(), 1);
+        assert_eq!(plan.sols[0].kind, PapaPlanSolKind::FloorMetal);
+        assert_eq!(plan.sols[0].kind.to_tile(), crate::Tile::FloorMetal);
+    }
+
+    #[test]
+    fn plan_validation_rejects_invalid_floor_rectangles() {
+        let plan = PapaPlanAsset {
+            schema_version: PAPA_PLAN_SCHEMA_VERSION,
+            label: "test-invalid-sol".to_string(),
+            delai_etape_s: 0.2,
+            sols: vec![PapaPlanSol {
+                kind: PapaPlanSolKind::FloorMetal,
+                offset: (0, 0),
+                size: (0, 14),
+            }],
+            blocs: Vec::new(),
+        };
+
+        let err = plan
+            .valider()
+            .expect_err("invalid floor should be rejected");
+        assert!(err.contains("sol invalide"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn plan_validation_rejects_disconnected_layout_even_with_required_kinds() {
         let plan = PapaPlanAsset {
             schema_version: PAPA_PLAN_SCHEMA_VERSION,
             label: "test-broken-connectivity".to_string(),
             delai_etape_s: 0.2,
+            sols: Vec::new(),
             blocs: vec![
                 PapaPlanBloc {
                     kind: sim::BlockKind::InputHopper,

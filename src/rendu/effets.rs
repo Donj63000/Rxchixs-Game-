@@ -1,22 +1,61 @@
 use super::theme::mix_color;
 use super::*;
+use std::cell::RefCell;
+
+const BACKGROUND_GRADIENT_W: u16 = 4;
+const BACKGROUND_GRADIENT_H: u16 = 256;
+
+thread_local! {
+    static BACKGROUND_GRADIENT_TEXTURE: RefCell<Option<Texture2D>> = const { RefCell::new(None) };
+}
+
+fn background_gradient_color_at(world: theme::WorldTheme, y: u16) -> Color {
+    let denom = (BACKGROUND_GRADIENT_H - 1).max(1) as f32;
+    let t = y as f32 / denom;
+    if t < 0.38 {
+        mix_color(world.bg_top, world.bg_mid, t / 0.38)
+    } else {
+        mix_color(world.bg_mid, world.bg_bottom, (t - 0.38) / 0.62)
+    }
+}
+
+fn build_background_gradient_texture(world: theme::WorldTheme) -> Texture2D {
+    let mut image = Image::gen_image_color(BACKGROUND_GRADIENT_W, BACKGROUND_GRADIENT_H, BLACK);
+    for y in 0..BACKGROUND_GRADIENT_H {
+        let color = background_gradient_color_at(world, y);
+        for x in 0..BACKGROUND_GRADIENT_W {
+            image.set_pixel(x as u32, y as u32, color);
+        }
+    }
+    let texture = Texture2D::from_image(&image);
+    texture.set_filter(FilterMode::Linear);
+    texture
+}
 
 pub(crate) fn draw_background(palette: &Palette, time: f32) {
     let sw = screen_width();
     let sh = screen_height();
-    let lines = sh.max(1.0) as i32;
     let world = palette.world;
     let pulse = (time * 0.18).sin() * 0.5 + 0.5;
 
-    for y in 0..lines {
-        let t = y as f32 / (lines - 1).max(1) as f32;
-        let band = if t < 0.38 {
-            mix_color(world.bg_top, world.bg_mid, t / 0.38)
-        } else {
-            mix_color(world.bg_mid, world.bg_bottom, (t - 0.38) / 0.62)
-        };
-        draw_line(0.0, y as f32, sw, y as f32, 1.0, band);
-    }
+    BACKGROUND_GRADIENT_TEXTURE.with(|slot| {
+        let mut texture = slot.borrow_mut();
+        if texture.is_none() {
+            *texture = Some(build_background_gradient_texture(world));
+        }
+        if let Some(texture) = texture.as_ref() {
+            draw_texture_ex(
+                texture,
+                0.0,
+                0.0,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(sw.max(1.0), sh.max(1.0))),
+                    ..Default::default()
+                },
+            );
+        }
+    });
 
     let haze_alpha = 0.05 + pulse * 0.04;
     draw_circle(
@@ -75,5 +114,31 @@ pub(crate) fn draw_vignette(palette: &Palette) {
             10.0,
             with_alpha(palette.vignette, alpha),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_gradient_color_uses_top_mid_bottom_anchors() {
+        let world = theme::world_theme();
+        let top = background_gradient_color_at(world, 0);
+        let middle =
+            background_gradient_color_at(world, (BACKGROUND_GRADIENT_H as f32 * 0.38) as u16);
+        let bottom = background_gradient_color_at(world, BACKGROUND_GRADIENT_H - 1);
+
+        assert_eq!(top, world.bg_top);
+        assert!((middle.r - world.bg_mid.r).abs() < 0.01);
+        assert!((middle.g - world.bg_mid.g).abs() < 0.01);
+        assert!((middle.b - world.bg_mid.b).abs() < 0.01);
+        assert_eq!(bottom, world.bg_bottom);
+    }
+
+    #[test]
+    fn background_gradient_texture_budget_is_constant() {
+        assert_eq!(BACKGROUND_GRADIENT_W, 4);
+        assert_eq!(BACKGROUND_GRADIENT_H, 256);
     }
 }

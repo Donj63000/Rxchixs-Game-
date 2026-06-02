@@ -11,6 +11,8 @@ struct SauvegardeDocument {
     save_name: String,
     saved_at_unix_s: i64,
     map: MapAsset,
+    #[serde(default)]
+    sim: Option<sim::FactorySimSaveAsset>,
 }
 
 fn default_save_schema_version() -> u32 {
@@ -29,6 +31,12 @@ pub(crate) struct SauvegardeInfo {
 pub(crate) struct ListeSauvegardes {
     pub slots: Vec<SauvegardeInfo>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SauvegardeChargee {
+    pub map: MapAsset,
+    pub sim: Option<sim::FactorySimSaveAsset>,
 }
 
 pub(crate) fn now_unix_seconds() -> i64 {
@@ -253,6 +261,7 @@ pub(crate) fn lister_sauvegardes() -> Result<ListeSauvegardes, String> {
 fn enregistrer_sauvegarde_dans(
     dir: &Path,
     map: &MapAsset,
+    sim_asset: Option<sim::FactorySimSaveAsset>,
     save_name: &str,
     unix_s: i64,
 ) -> Result<SauvegardeInfo, String> {
@@ -271,6 +280,7 @@ fn enregistrer_sauvegarde_dans(
         save_name: clean_name,
         saved_at_unix_s: unix_s,
         map: map_copy,
+        sim: sim_asset,
     };
     let pretty = PrettyConfig::new()
         .depth_limit(5)
@@ -282,22 +292,53 @@ fn enregistrer_sauvegarde_dans(
     Ok(save_slot_from_doc(file_name, &document))
 }
 
+#[allow(dead_code)]
 pub(crate) fn enregistrer_sauvegarde(
     map: &MapAsset,
     save_name: &str,
 ) -> Result<SauvegardeInfo, String> {
     let unix_s = now_unix_seconds();
-    enregistrer_sauvegarde_dans(Path::new(SAVE_DIR_PATH), map, save_name, unix_s)
+    enregistrer_sauvegarde_dans(Path::new(SAVE_DIR_PATH), map, None, save_name, unix_s)
+}
+
+pub(crate) fn enregistrer_sauvegarde_avec_sim(
+    map: &MapAsset,
+    sim: &sim::FactorySim,
+    save_name: &str,
+) -> Result<SauvegardeInfo, String> {
+    let unix_s = now_unix_seconds();
+    enregistrer_sauvegarde_dans(
+        Path::new(SAVE_DIR_PATH),
+        map,
+        Some(sim.to_save_asset()),
+        save_name,
+        unix_s,
+    )
+}
+
+fn charger_sauvegarde_complete_depuis(
+    dir: &Path,
+    file_name: &str,
+) -> Result<SauvegardeChargee, String> {
+    let path = save_file_path(dir, file_name)?;
+    let document = read_save_doc(&path)?;
+    Ok(SauvegardeChargee {
+        map: document.map,
+        sim: document.sim,
+    })
 }
 
 fn charger_sauvegarde_depuis(dir: &Path, file_name: &str) -> Result<MapAsset, String> {
-    let path = save_file_path(dir, file_name)?;
-    let document = read_save_doc(&path)?;
-    Ok(document.map)
+    Ok(charger_sauvegarde_complete_depuis(dir, file_name)?.map)
 }
 
+#[allow(dead_code)]
 pub(crate) fn charger_sauvegarde(file_name: &str) -> Result<MapAsset, String> {
     charger_sauvegarde_depuis(Path::new(SAVE_DIR_PATH), file_name)
+}
+
+pub(crate) fn charger_sauvegarde_complete(file_name: &str) -> Result<SauvegardeChargee, String> {
+    charger_sauvegarde_complete_depuis(Path::new(SAVE_DIR_PATH), file_name)
 }
 
 #[cfg(test)]
@@ -333,7 +374,7 @@ mod tests {
         let dir = test_save_dir("roundtrip");
         let map = MapAsset::new_default();
 
-        let slot = enregistrer_sauvegarde_dans(&dir, &map, "Test Save", 1_700_000_000)
+        let slot = enregistrer_sauvegarde_dans(&dir, &map, None, "Test Save", 1_700_000_000)
             .expect("save should succeed");
         let listing = lister_sauvegardes_dans(&dir).expect("listing should succeed");
         assert_eq!(listing.warnings.len(), 0);
@@ -345,6 +386,61 @@ mod tests {
         assert_eq!(loaded.world.w, map.world.w);
         assert_eq!(loaded.world.h, map.world.h);
         assert_eq!(loaded.player_spawn, map.player_spawn);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_with_sim_roundtrip_preserves_management_state() {
+        let dir = test_save_dir("sim_roundtrip");
+        let map = MapAsset::new_default();
+        let mut sim = sim::FactorySim::new(sim::StarterSimConfig::default(), 25, 15);
+        sim.apply_command(crate::gestion::SimCommand::BuyRawStock { qty: 500 })
+            .expect("stock purchase should be saved");
+        let cash_after_order = sim.cash();
+
+        let slot = enregistrer_sauvegarde_dans(
+            &dir,
+            &map,
+            Some(sim.to_save_asset()),
+            "Sim Save",
+            1_700_000_300,
+        )
+        .expect("save with sim should succeed");
+        let loaded = charger_sauvegarde_complete_depuis(&dir, &slot.file_name)
+            .expect("complete save should load");
+
+        let sim_asset = loaded.sim.expect("sim asset should be present");
+        assert_eq!(sim_asset.stock.pending_raw_qty(), 500);
+        assert_eq!(sim_asset.economy.cash, cash_after_order);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_save_without_sim_field_still_loads() {
+        #[derive(Serialize)]
+        struct LegacyDoc {
+            schema_version: u32,
+            save_name: String,
+            saved_at_unix_s: i64,
+            map: MapAsset,
+        }
+
+        let dir = test_save_dir("legacy_without_sim");
+        let doc = LegacyDoc {
+            schema_version: SAVE_SCHEMA_VERSION,
+            save_name: "legacy".to_string(),
+            saved_at_unix_s: 1_700_000_400,
+            map: MapAsset::new_default(),
+        };
+        let payload = ron_to_string_pretty(&doc, PrettyConfig::new()).expect("legacy serialize");
+        let path = dir.join("legacy.ron");
+        fs::write(&path, payload).expect("legacy save should be written");
+
+        let loaded = charger_sauvegarde_complete_depuis(&dir, "legacy.ron")
+            .expect("legacy save should load");
+        assert!(loaded.sim.is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -371,6 +467,7 @@ mod tests {
             save_name: "future".to_string(),
             saved_at_unix_s: 1_700_000_100,
             map,
+            sim: None,
         };
         let payload = ron_to_string_pretty(&bad_doc, PrettyConfig::new())
             .expect("future doc should serialize");
@@ -396,6 +493,7 @@ mod tests {
             save_name: "future map".to_string(),
             saved_at_unix_s: 1_700_000_200,
             map,
+            sim: None,
         };
         let payload = ron_to_string_pretty(&bad_doc, PrettyConfig::new())
             .expect("future map doc should serialize");

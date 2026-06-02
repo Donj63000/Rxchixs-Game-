@@ -166,6 +166,28 @@ fn draw_overlay_line(text: &str, x: f32, y: f32, font_size: f32, color: Color) {
     );
 }
 
+fn perf_overlay_text(stats: FramePerfStats) -> String {
+    format!(
+        "perf frame {:.2} ms | sim {:.2} | monde {:.2} | ui {:.2}",
+        stats.frame_ms, stats.sim_ms, stats.world_ms, stats.ui_ms
+    )
+}
+
+fn draw_perf_overlay(stats: FramePerfStats) {
+    let text = perf_overlay_text(stats);
+    let fs = 15.0;
+    let w = measure_text(&text, None, fs as u16, 1.0).width + 22.0;
+    let rect = Rect::new(12.0, (screen_height() - 52.0).max(12.0), w, 34.0);
+    draw_overlay_panel(rect);
+    draw_overlay_line(
+        &text,
+        rect.x + 10.0,
+        rect.y + 22.0,
+        fs,
+        Color::from_rgba(232, 246, 255, 245),
+    );
+}
+
 fn draw_overlay_multiline(
     text: &str,
     x: f32,
@@ -354,10 +376,15 @@ fn snapshot_map_from_state(state: &GameState) -> MapAsset {
     }
 }
 
-fn rebuild_state_from_map(state: &mut GameState, mut map: MapAsset, lineage_seed: u64) {
+fn rebuild_state_from_map(
+    state: &mut GameState,
+    mut map: MapAsset,
+    sim_save: Option<sim::FactorySimSaveAsset>,
+    lineage_seed: u64,
+) {
     sanitize_map_asset(&mut map);
     let catalog = state.character_catalog.clone();
-    let mut rebuilt = build_game_state_from_map(&map, &catalog, lineage_seed);
+    let mut rebuilt = build_game_state_from_map_with_sim(&map, sim_save, &catalog, lineage_seed);
     rebuilt.pause_menu_open = false;
     rebuilt.pause_panel = PausePanel::Aucun;
     rebuilt.pause_status_text = None;
@@ -657,7 +684,8 @@ fn draw_pause_panel_details(
                     || is_key_pressed(KeyCode::Enter);
             if save_requested {
                 let snapshot = snapshot_map_from_state(state);
-                match enregistrer_sauvegarde(&snapshot, &state.pause_save_name) {
+                match enregistrer_sauvegarde_avec_sim(&snapshot, &state.sim, &state.pause_save_name)
+                {
                     Ok(slot) => {
                         set_pause_status(
                             state,
@@ -722,10 +750,10 @@ fn draw_pause_panel_details(
             ) {
                 if let Some(selected) = state.pause_selected_sauvegarde {
                     if let Some(slot) = state.pause_sauvegardes.get(selected) {
-                        match charger_sauvegarde(&slot.file_name) {
-                            Ok(map) => {
+                        match charger_sauvegarde_complete(&slot.file_name) {
+                            Ok(loaded) => {
                                 let seed = state.lineage_seed;
-                                rebuild_state_from_map(state, map, seed);
+                                rebuild_state_from_map(state, loaded.map, loaded.sim, seed);
                                 return PlayAction::None;
                             }
                             Err(err) => {
@@ -831,7 +859,7 @@ fn draw_pause_menu_overlay(state: &mut GameState, mouse: Vec2, left_click: bool)
 
     if draw_ui_button_sized(new_rect, "Nouvelle partie", mouse, left_click, false, 16.0) {
         let next_seed = advance_seed(state.lineage_seed);
-        rebuild_state_from_map(state, MapAsset::new_default(), next_seed);
+        rebuild_state_from_map(state, MapAsset::new_default(), None, next_seed);
         return PlayAction::None;
     }
 
@@ -946,7 +974,15 @@ fn run_play_pause_frame(state: &mut GameState, frame_dt: f32, accumulator: &mut 
     effets::draw_background(&state.palette, time);
     set_camera(&world_camera);
     draw_floor_layer_region(&state.world, &state.palette, visible_bounds);
+    if state.sim.build_mode_enabled() || state.debug {
+        draw_world_grid_region(
+            &state.world,
+            visible_bounds,
+            if state.debug { 0.22 } else { 0.11 },
+        );
+    }
     draw_exterior_ground_ambiance_region(&state.world, &state.palette, time, visible_bounds);
+    draw_sim_industrial_floor_region(&state.sim, &state.palette, Some(visible_bounds));
     draw_sim_zone_overlay_region(&state.sim, visible_bounds);
     draw_wall_cast_shadows_region(&state.world, &state.palette, visible_bounds);
     draw_wall_layer_region(&state.world, &state.palette, visible_bounds);
@@ -1057,6 +1093,7 @@ pub(crate) fn run_play_frame(
     accumulator: &mut f32,
 ) -> PlayAction {
     begin_ui_pass();
+    let frame_profile_start = get_time();
     if is_key_pressed(KeyCode::Escape) {
         match resolve_escape_intent(
             state.pause_menu_open,
@@ -1631,6 +1668,7 @@ pub(crate) fn run_play_frame(
     }
 
     // --- Fixed-step simulation ---
+    let sim_profile_start = get_time();
     let sim_factor = state.hud_ui.sim_speed.factor();
     if sim_factor <= 0.0 {
         *accumulator = 0.0;
@@ -1695,7 +1733,7 @@ pub(crate) fn run_play_frame(
             state.player.pos = state.chariot.pos;
         }
         update_npc_wanderer(&mut state.npc, &state.world, FIXED_DT);
-        if let Some(event) = state.papa.tick(FIXED_DT, &state.world, &mut state.sim) {
+        if let Some(event) = state.papa.tick(FIXED_DT, &mut state.world, &mut state.sim) {
             state.telephone.definir_statut(event.clone());
             push_player_history(
                 state,
@@ -1713,16 +1751,26 @@ pub(crate) fn run_play_frame(
 
     // Sync again after sim tick so UI reflects latest fatigue/stress.
     ui_pawns::sync_dynamic_pawn_metrics(state);
+    let sim_ms = (get_time() - sim_profile_start) * 1000.0;
 
     // --- Render ---
     let time = time_now;
     let visible_bounds = tile_bounds_from_camera(&state.world, &world_camera, map_view_rect, 2);
 
+    let world_profile_start = get_time();
     clear_background(state.palette.bg_bottom);
     effets::draw_background(&state.palette, time);
     set_camera(&world_camera);
     draw_floor_layer_region(&state.world, &state.palette, visible_bounds);
+    if state.sim.build_mode_enabled() || state.debug {
+        draw_world_grid_region(
+            &state.world,
+            visible_bounds,
+            if state.debug { 0.22 } else { 0.11 },
+        );
+    }
     draw_exterior_ground_ambiance_region(&state.world, &state.palette, time, visible_bounds);
+    draw_sim_industrial_floor_region(&state.sim, &state.palette, Some(visible_bounds));
     draw_sim_zone_overlay_region(&state.sim, visible_bounds);
     draw_wall_cast_shadows_region(&state.world, &state.palette, visible_bounds);
     draw_wall_layer_region(&state.world, &state.palette, visible_bounds);
@@ -1996,7 +2044,10 @@ pub(crate) fn run_play_frame(
         draw_sim_agent_overlay(&state.sim, true);
     }
     draw_lighting_region(&state.props, &state.palette, time, visible_bounds);
+    let world_ms = (get_time() - world_profile_start) * 1000.0;
+
     begin_ui_pass();
+    let ui_profile_start = get_time();
 
     if state.debug {
         draw_clark_status_panel(state);
@@ -2132,6 +2183,16 @@ pub(crate) fn run_play_frame(
         &world_camera,
         time,
     );
+    let ui_ms = (get_time() - ui_profile_start) * 1000.0;
+    state.perf_stats = FramePerfStats {
+        frame_ms: (get_time() - frame_profile_start) * 1000.0,
+        sim_ms,
+        world_ms,
+        ui_ms,
+    };
+    if state.debug {
+        draw_perf_overlay(state.perf_stats);
+    }
 
     PlayAction::None
 }
@@ -2733,6 +2794,21 @@ mod tests {
         assert_eq!(second, EscapeIntent::ExitBuildMode);
         let third = resolve_escape_intent(false, false, false);
         assert_eq!(third, EscapeIntent::OpenPause);
+    }
+
+    #[test]
+    fn perf_overlay_text_exposes_frame_sim_world_and_ui_timings() {
+        let text = perf_overlay_text(FramePerfStats {
+            frame_ms: 16.25,
+            sim_ms: 2.5,
+            world_ms: 8.0,
+            ui_ms: 1.75,
+        });
+
+        assert!(text.contains("frame 16.25 ms"));
+        assert!(text.contains("sim 2.50"));
+        assert!(text.contains("monde 8.00"));
+        assert!(text.contains("ui 1.75"));
     }
 
     #[test]

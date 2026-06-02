@@ -2,6 +2,9 @@
     schema_version: 1,
     label: "Ligne moderne Papa",
     delai_etape_s: 0.35,
+    sols: [
+        (kind: floor_metal, offset: (-2, -5), size: (67, 14)),
+    ],
     blocs: [
         (kind: input_hopper, orientation: east, offset: (0, 0)),
         (kind: conveyor, orientation: east, offset: (8, 2)),

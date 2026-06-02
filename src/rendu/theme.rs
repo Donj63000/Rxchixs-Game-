@@ -131,12 +131,12 @@ pub(crate) fn world_theme() -> WorldTheme {
         bg_mid: rgba(8, 24, 38, 255),
         bg_bottom: rgba(10, 20, 32, 255),
         bg_haze: rgba(72, 132, 154, 255),
-        floor_a: rgba(78, 92, 94, 255),
-        floor_b: rgba(96, 110, 112, 255),
-        floor_c: rgba(58, 72, 76, 255),
-        floor_edge: rgba(18, 42, 34, 220),
-        floor_grime: rgba(6, 12, 10, 255),
-        floor_marking: rgba(212, 170, 76, 255),
+        floor_a: rgba(100, 104, 98, 255),
+        floor_b: rgba(112, 116, 108, 255),
+        floor_c: rgba(82, 88, 84, 255),
+        floor_edge: rgba(38, 48, 42, 180),
+        floor_grime: rgba(16, 18, 16, 255),
+        floor_marking: rgba(194, 158, 74, 255),
         wall_top: rgba(148, 162, 174, 255),
         wall_mid: rgba(96, 112, 128, 255),
         wall_dark: rgba(58, 71, 84, 255),
@@ -148,15 +148,15 @@ pub(crate) fn world_theme() -> WorldTheme {
         lamp_hot: rgba(255, 228, 176, 255),
         prop_crate_light: rgba(164, 128, 92, 255),
         prop_crate_dark: rgba(112, 82, 58, 255),
-        prop_pipe: rgba(88, 112, 132, 255),
-        prop_pipe_highlight: rgba(172, 194, 212, 255),
-        steel_cool: rgba(120, 142, 162, 255),
-        steel_deep: rgba(52, 66, 82, 255),
-        safety_amber: rgba(228, 184, 84, 255),
+        prop_pipe: rgba(92, 110, 122, 255),
+        prop_pipe_highlight: rgba(160, 176, 184, 255),
+        steel_cool: rgba(122, 133, 139, 255),
+        steel_deep: rgba(62, 72, 78, 255),
+        safety_amber: rgba(198, 154, 62, 255),
         safety_red: rgba(214, 98, 86, 255),
-        concrete_moss: rgba(64, 118, 70, 255),
-        exterior_grass: rgba(72, 128, 64, 255),
-        dust: rgba(182, 202, 214, 255),
+        concrete_moss: rgba(76, 92, 70, 255),
+        exterior_grass: rgba(79, 110, 63, 255),
+        dust: rgba(170, 184, 188, 255),
     }
 }
 
@@ -323,5 +323,13 @@ mod tests {
         assert_ne!(world.safety_amber, world.safety_red);
         assert_ne!(world.steel_cool, world.steel_deep);
         assert!(world.shadow_hard.a >= world.shadow_soft.a);
+    }
+
+    #[test]
+    fn world_theme_keeps_ground_desaturated_under_industrial_assets() {
+        let world = world_theme();
+        assert!(world.exterior_grass.g <= 112.0 / 255.0);
+        assert!(world.concrete_moss.g <= 96.0 / 255.0);
+        assert!(world.safety_amber.g <= 170.0 / 255.0);
     }
 }

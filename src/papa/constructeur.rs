@@ -13,11 +13,29 @@ pub fn tick_construction(
     pnj: &mut PapaPnjEtat,
     plan: &PapaPlanAsset,
     dt: f32,
-    world: &crate::World,
+    world: &mut crate::World,
     sim: &mut crate::sim::FactorySim,
 ) -> Option<String> {
     if pnj.termine || pnj.blocage.is_some() {
         return None;
+    }
+
+    if !pnj.sol_prepare {
+        match preparer_sols_chantier(pnj, plan, world) {
+            Ok(count) => {
+                pnj.sol_prepare = true;
+                if count > 0 {
+                    pnj.derniere_action =
+                        format!("Preparation dalle industrielle ({count} tuiles)");
+                }
+            }
+            Err(err) => {
+                let message = format!("Papa bloque: {err}");
+                pnj.blocage = Some(message.clone());
+                pnj.derniere_action = "Preparation chantier interrompue".to_string();
+                return Some(message);
+            }
+        }
     }
 
     pnj.timer_etape_s += dt.max(0.0);
@@ -65,4 +83,51 @@ pub fn tick_construction(
             Some(message)
         }
     }
+}
+
+fn preparer_sols_chantier(
+    pnj: &PapaPnjEtat,
+    plan: &PapaPlanAsset,
+    world: &mut crate::World,
+) -> Result<usize, String> {
+    let mut count = 0usize;
+
+    for sol in &plan.sols {
+        if sol.size.0 <= 0 || sol.size.1 <= 0 {
+            return Err(format!(
+                "dalle invalide taille {:?} pour offset {:?}",
+                sol.size, sol.offset
+            ));
+        }
+        for dy in 0..sol.size.1 {
+            for dx in 0..sol.size.0 {
+                let tile = (
+                    pnj.ancre.0 + sol.offset.0 + dx,
+                    pnj.ancre.1 + sol.offset.1 + dy,
+                );
+                if !world.in_bounds(tile.0, tile.1) {
+                    return Err(format!("dalle hors carte en {:?}", tile));
+                }
+                if world.is_solid(tile.0, tile.1) {
+                    return Err(format!("dalle bloquee par un mur en {:?}", tile));
+                }
+            }
+        }
+    }
+
+    for sol in &plan.sols {
+        let tile_kind = sol.kind.to_tile();
+        for dy in 0..sol.size.1 {
+            for dx in 0..sol.size.0 {
+                let tile = (
+                    pnj.ancre.0 + sol.offset.0 + dx,
+                    pnj.ancre.1 + sol.offset.1 + dy,
+                );
+                world.set(tile.0, tile.1, tile_kind);
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
 }

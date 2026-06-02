@@ -453,6 +453,7 @@ mod tests {
             w,
             h,
             tiles: vec![Tile::Floor; (w * h) as usize],
+            revision: 0,
         };
         enforce_world_border(&mut world);
         MapAsset {

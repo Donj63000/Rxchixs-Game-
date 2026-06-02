@@ -1025,6 +1025,15 @@ pub(crate) fn build_game_state_from_map(
     character_catalog: &CharacterCatalog,
     lineage_seed: u64,
 ) -> GameState {
+    build_game_state_from_map_with_sim(map, None, character_catalog, lineage_seed)
+}
+
+pub(crate) fn build_game_state_from_map_with_sim(
+    map: &MapAsset,
+    sim_save: Option<sim::FactorySimSaveAsset>,
+    character_catalog: &CharacterCatalog,
+    lineage_seed: u64,
+) -> GameState {
     let mut map_copy = map.clone();
     sanitize_map_asset(&mut map_copy);
     let player = Player::new(tile_center(map_copy.player_spawn));
@@ -1039,7 +1048,15 @@ pub(crate) fn build_game_state_from_map(
         character_catalog.spawn_founder("Employe-01", lineage_seed ^ 0xCC11_22DD_33EE_44FF);
     let papa_character = character_catalog.spawn_founder("Papa", lineage_seed ^ 0xA114_5A2A);
 
-    let sim = sim::FactorySim::load_or_default(SIM_CONFIG_PATH, map_copy.world.w, map_copy.world.h);
+    let sim = if let Some(sim_save) = sim_save {
+        let config = sim::StarterSimConfig::load_or_create(SIM_CONFIG_PATH);
+        sim::FactorySim::from_save_asset(config, sim_save).unwrap_or_else(|err| {
+            eprintln!("Etat simulation sauvegarde ignore: {err}");
+            sim::FactorySim::load_or_default(SIM_CONFIG_PATH, map_copy.world.w, map_copy.world.h)
+        })
+    } else {
+        sim::FactorySim::load_or_default(SIM_CONFIG_PATH, map_copy.world.w, map_copy.world.h)
+    };
 
     let mut pawns = vec![
         PawnCard {
@@ -1115,6 +1132,8 @@ pub(crate) fn build_game_state_from_map(
         pause_selected_sauvegarde: None,
         show_character_inspector: false,
         debug: false,
+        perf_stats: FramePerfStats::default(),
+        minimap_cache: MinimapTextureCache::default(),
         last_input: Vec2::ZERO,
     }
 }
@@ -1141,6 +1160,7 @@ mod tests {
             w,
             h,
             tiles: vec![Tile::Floor; (w * h) as usize],
+            revision: 0,
         };
         enforce_world_border(&mut world);
         MapAsset {
@@ -1178,6 +1198,7 @@ mod tests {
             w: 6,
             h: 5,
             tiles: vec![Tile::Floor; 30],
+            revision: 0,
         };
         enforce_world_border(&mut world);
 
