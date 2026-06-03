@@ -666,6 +666,33 @@ fn should_autostart_play_from_env() -> bool {
     std::env::var("RXCHIXS_AUTOSTART_PLAY").is_ok_and(|value| parse_bool_env_flag(&value))
 }
 
+fn capture_frame_path_from_env() -> Option<String> {
+    std::env::var("RXCHIXS_CAPTURE_FRAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_capture_after_frames(value: &str) -> u64 {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|frames| *frames <= 600)
+        .unwrap_or(6)
+}
+
+fn capture_after_frames_from_env() -> u64 {
+    std::env::var("RXCHIXS_CAPTURE_AFTER_FRAMES")
+        .ok()
+        .map(|value| parse_capture_after_frames(&value))
+        .unwrap_or(6)
+}
+
+fn should_exit_after_capture_from_env() -> bool {
+    std::env::var("RXCHIXS_EXIT_AFTER_CAPTURE").is_ok_and(|value| parse_bool_env_flag(&value))
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct MapAsset {
     #[serde(default = "default_map_schema_version")]
@@ -1008,6 +1035,10 @@ async fn main() {
     };
     let mut accumulator = 0.0;
     let mut is_fullscreen_mode = false;
+    let mut capture_frame_path = capture_frame_path_from_env();
+    let capture_after_frames = capture_after_frames_from_env();
+    let capture_exit = should_exit_after_capture_from_env();
+    let mut rendered_frames = 0_u64;
 
     loop {
         if handle_fullscreen_hotkey(&mut is_fullscreen_mode) {
@@ -1126,6 +1157,17 @@ async fn main() {
             editor_set_status(&mut editor_state, status);
         }
 
+        if capture_frame_path.is_some() && rendered_frames >= capture_after_frames {
+            if let Some(path) = capture_frame_path.take() {
+                // Là je capture le framebuffer complet pour les vérifications visuelles automatisées.
+                get_screen_data().export_png(&path);
+            }
+            if capture_exit {
+                std::process::exit(0);
+            }
+        }
+
+        rendered_frames = rendered_frames.saturating_add(1);
         next_frame().await;
     }
 }
@@ -1166,6 +1208,14 @@ mod tests {
         assert!(!parse_bool_env_flag("0"));
         assert!(!parse_bool_env_flag("false"));
         assert!(!parse_bool_env_flag("non"));
+    }
+
+    #[test]
+    fn capture_after_frames_parser_keeps_safe_bounds() {
+        assert_eq!(parse_capture_after_frames("0"), 0);
+        assert_eq!(parse_capture_after_frames("12"), 12);
+        assert_eq!(parse_capture_after_frames("601"), 6);
+        assert_eq!(parse_capture_after_frames("abc"), 6);
     }
 
     #[test]

@@ -732,3 +732,247 @@ Portee: finaliser l'upgrade procedural/vectoriel des personnages avec modes mond
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
   - `cargo run` smoke.
+
+# ExecPlan - Nettoyage visuel immediat monde, Papa et HUD
+
+Date: 2026-06-02
+Portee: appliquer la premiere passe graphique ciblee sans toucher a la logique metier de simulation: grille conditionnelle, dalle industrielle Papa data-driven, palette monde moins saturee, filtrage texture coherent et HUD permanent plus compact.
+
+## Objectifs observables
+- En mode jeu normal, le sol ne dessine plus une grille permanente tuile par tuile.
+- En mode build/debug, une grille monde legere reste disponible comme aide de placement.
+- La ligne Papa prepare une dalle industrielle sous son chantier avant la pose des machines.
+- Les gros assets PNG affiches petits sont filtres en lineaire pour reduire l'aliasing.
+- Le HUD permanent laisse davantage de hauteur au monde.
+
+## Invariants
+- Tick simulation fixe inchange.
+- Separation simulation/rendu conservee.
+- Papa reste data-driven via `data/papa/plan_ligne.ron`.
+- Aucune dependance production ajoutee.
+- Aucune logique metier dependante du framerate ou du temps OS.
+
+## Milestones
+1. Extraire la grille hors `draw_floor_tile` et l'appeler seulement dans les modes autorises.
+2. Etendre le plan Papa avec des sols optionnels validates et appliques une seule fois.
+3. Faire passer `World` en mutable uniquement sur le chemin de tick Papa.
+4. Ajuster la palette monde et le filtrage des gros assets.
+5. Reduire les dimensions permanentes du HUD.
+6. Ajouter les tests de plan sol et de preparation Papa.
+7. Executer `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`, puis un smoke `cargo run`.
+
+## Fichiers impactes
+- `docs/PLANS.md`
+- `src/rendu.rs`
+- `src/rendu/theme.rs`
+- `src/modes.rs`
+- `src/papa/plan.rs`
+- `src/papa/constructeur.rs`
+- `src/papa/etat.rs`
+- `src/ui_hud.rs`
+- `data/papa/plan_ligne.ron`
+
+## Risques
+- Grille trop faible en build mode si l'alpha est mal calibre.
+- Papa pourrait poser des sols hors carte si la validation ne borne pas les rectangles.
+- Le changement `&mut World` doit rester local au tick Papa pour ne pas brouiller les responsabilites.
+- Le HUD plus compact peut contraindre certains panneaux a basse resolution.
+
+## Strategie de test
+- Tests unitaires Papa:
+  - validation des sols RON optionnels;
+  - rejet des rectangles de sol invalides;
+  - preparation unique de la dalle avant construction.
+- Verification outillage complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke.
+
+# ExecPlan - Optimisations ressources et performances rapides
+
+Date: 2026-06-02
+Portee: appliquer les optimisations locales et testables demandees sans refondre encore tout le moteur en cache de chunks. Cette passe cible les draw calls inutiles, les flush UI, les allocations de rendu simulation et les profils Cargo.
+
+## Objectifs observables
+- `cargo run` profite de dependances optimisees en dev, et le build release a des reglages plus adaptes.
+- Le fond ecran ne dessine plus une ligne par pixel a chaque frame.
+- Les helpers texte HUD ne declenchent plus de `begin_ui_pass()` par label.
+- Le rendu normal des blocs simulation n'alloue plus une `Vec<BlockDebugView>` par frame.
+- Le rendu lit l'etat de ligne moderne via un cache O(1) quand possible.
+- Un overlay debug permet de lire les couts CPU de base: frame, simulation, monde, UI.
+
+## Invariants
+- Tick fixe conserve a 60 Hz.
+- Rendu et simulation restent separes.
+- Aucun `unsafe`.
+- Aucune dependance production ajoutee.
+- Les changements de schema de save ne sont pas necessaires.
+- Le mode debug peut allouer pour l'observabilite; le rendu normal doit eviter les allocations evitables.
+
+## Milestones
+1. Ajouter les profils Cargo demandes.
+2. Remplacer le gradient ligne-par-ligne par des bandes constantes peu nombreuses.
+3. Retirer le flush UI depuis `ui_hud::draw_text_shadowed`.
+4. Ajouter un profiler debug leger dans `GameState` et `run_play_frame`.
+5. Exposer une lecture cachee de readiness ligne moderne pour le rendu.
+6. Ajouter une vue de rendu bloc empruntee aux `BlockInstance`.
+7. Basculer les chemins de rendu normal vers cette vue sans `String`.
+8. Garder les `BlockDebugView` uniquement pour debug/labels.
+9. Ajouter/adapter les tests unitaires pour les invariants perf.
+10. Executer `fmt`, `clippy -D warnings`, `test`, smoke run, puis release smoke car le rendu par frame est touche.
+
+## Fichiers impactes
+- `Cargo.toml`
+- `docs/PLANS.md`
+- `src/main.rs`
+- `src/modes.rs`
+- `src/rendu.rs`
+- `src/rendu/effets.rs`
+- `src/sim.rs`
+- `src/ui_hud.rs`
+
+## Risques
+- Le profiler mesure surtout le CPU avant `next_frame`, pas tout le cout GPU.
+- Remplacer le fond par moins de primitives doit conserver une lecture visuelle equivalente.
+- La vue bloc empruntee doit rester compatible avec les labels debug existants.
+- Le binaire debug peut etre verrouille si une fenetre de jeu est deja ouverte.
+
+## Strategie de test
+- Tests unitaires:
+  - profils Cargo presents;
+  - cache ligne moderne lisible sans recalcul;
+  - vue de rendu bloc sans resume inventaire;
+  - helpers de fond bornes.
+- Verification outillage complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke avec timeout controle.
+  - `cargo run --release` smoke avec timeout controle.
+
+# ExecPlan - Refonte visuelle interieurs, murs et blocs
+
+Date: 2026-06-02
+Portee: refaire le rendu procedural des interieurs visibles en jeu normal sans nouveaux PNG: bois continu sans quadrillage, sols metal/beton plus propres, murs industriels mieux finis et blocs simulation plus soignes.
+
+## Objectifs observables
+- Le parquet ne montre plus une grille 32x32 permanente.
+- Les sols metal/beton utilisent de grandes plaques et des marques discretes plutot que des contours par tuile.
+- Les murs ne dessinent plus un cadre complet autour de chaque bloc mural; seuls les bords exposes et details de matiere restent visibles.
+- Les blocs machine/stockage/service gagnent en volume, ombre de contact, panneaux et details lisibles.
+
+## Invariants
+- Rendu et simulation restent separes.
+- Aucun changement de schema de sauvegarde.
+- Aucun asset externe ni crate ajoutee.
+- Les overlays build/debug restent utilisables.
+- Les optimisations precedentes de rendu normal sans debug allocations restent conservees.
+
+## Milestones
+1. Ajouter des helpers purs pour joints de sol, plaques et bords de murs testables.
+2. Basculer les sols interieurs sur un rendu procedural sans texture repetee.
+3. Remplacer le parquet par des lames longues avec joints faibles et non alignes aux tuiles.
+4. Remplacer les sols metal/beton par des plaques larges et marques rares.
+5. Nettoyer les murs pour ne plus tracer le contour complet de chaque tuile.
+6. Reprendre les tons de murs pour une usine plus soignee.
+7. Enrichir les visuels Storage/Buffer/Seller/MachineA/MachineB et finitions communes.
+8. Ajouter les tests ciblant l'absence de quadrillage bois, les plaques et les bords exposes.
+9. Executer `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`.
+10. Executer des smoke runs debug et release controles.
+
+## Fichiers impactes
+- `docs/PLANS.md`
+- `src/rendu.rs`
+- `src/rendu/monde.rs`
+
+## Risques
+- Des details proceduraux trop nombreux peuvent recreer du bruit visuel.
+- Des joints trop faibles peuvent rendre les grandes surfaces trop plates.
+- Les blocs doivent rester lisibles a petite taille sans augmenter fortement les draw calls.
+
+## Strategie de test
+- Tests unitaires:
+  - parquet sans contour de tuile permanent;
+  - joints de parquet non alignes a toutes les tuiles;
+  - plaques metal/beton plus larges qu'une tuile;
+  - bords de murs exposes derives correctement du mask;
+  - tons bois/metal/murs distincts et controles.
+- Validation outillage complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke controle
+  - `cargo run --release` smoke controle
+
+# ExecPlan - MVP gestion patron, personnel, stock et ventes
+
+Date: 2026-06-02
+Portee: appliquer `plan.md` en priorisant la boucle jouable de gestion d'usine: vrais roles, achat de stock, logistique cariste, chef requis pour produire, interim automatique limite, vente progressive par administrateurs, UI minimale et sauvegarde versionnee.
+
+## Objectifs observables
+- Le joueur peut recruter chef d'equipe, cariste et administrateur de vente via commandes simulation.
+- Le stock brut est achete, paye, livre apres delai et distingue entre reception et entree de ligne.
+- Sans cariste, le stock reste en reception et la ligne ne se nourrit pas automatiquement.
+- Sans chef assigne a la ligne principale, la production reste bloquee avec raison explicite.
+- Les chefs peuvent gerer jusqu'a 3 interimaires maximum selon politique et conditions.
+- Les produits finis ne sont plus vendus instantanement; les admins vendent progressivement avec bureau en zone vente.
+- Les sauvegardes restent compatibles avec les anciennes saves et peuvent porter un etat simulation versionne.
+
+## Invariants
+- Tick fixe conserve; aucune logique metier ne depend du framerate ou du temps OS.
+- Pas de `unsafe`.
+- Aucune dependance production ajoutee.
+- Simulation et rendu restent separes; l'UI emet des commandes, elle ne contient pas les regles metier.
+- Les blocages sont explicites: stock absent, cariste absent, chef absent, bureau/admin vente absent.
+- Les tests restent deterministes.
+
+## Milestones
+1. Creer `src/gestion/` avec `personnel`, `stock`, `lignes`, `vente`, `commandes`.
+2. Brancher `FactorySim` sur ces etats et exposer des vues KPI lisibles.
+3. Remplacer les salaires abstraits par la masse salariale reelle du personnel.
+4. Remplacer la livraison automatique gameplay par commandes d'achat et livraison differee.
+5. Ajouter le transfert abstrait cariste reception -> entree de ligne.
+6. Bloquer la production sans chef assigne et alimenter la ligne uniquement via entree de ligne.
+7. Ajouter l'interim automatique borne a 3 par chef.
+8. Remplacer la vente instantanee par la vente progressive administrateur + bureau.
+9. Ajouter une UI minimale de gestion entreprise dans le HUD.
+10. Ajouter un DTO de sauvegarde simulation compatible anciennes saves.
+
+## Fichiers impactes
+- `docs/PLANS.md`
+- `src/main.rs`
+- `src/sim.rs`
+- `src/sauvegarde.rs`
+- `src/ui_hud.rs`
+- `src/gestion/mod.rs`
+- `src/gestion/personnel.rs`
+- `src/gestion/stock.rs`
+- `src/gestion/lignes.rs`
+- `src/gestion/vente.rs`
+- `src/gestion/commandes.rs`
+
+## Risques
+- Le plan complet est large; le MVP doit rester coherent sans attendre le rendu avance des employes.
+- Les tests existants qui supposent une livraison gratuite ou une vente instantanee devront etre adaptes au nouveau modele.
+- La sauvegarde simulation doit eviter de serialiser les caches internes.
+- L'equilibrage doit garder une usine sandbox de depart fonctionnelle sans micro-management.
+
+## Strategie de test
+- Tests unitaires `gestion`:
+  - recrutement, licenciement, assignation, cout horaire;
+  - achat/livraison stock et limites capacite/cash;
+  - staffing/interim borne;
+  - vente progressive et raisons de blocage.
+- Tests `sim`:
+  - aucune production sans chef;
+  - aucun transfert sans cariste;
+  - production demarre avec chef + cariste + stock entree;
+  - vente ne vide plus instantanement le stock;
+  - anciennes sauvegardes chargent sans champ `sim`.
+- Validation complete:
+  - `cargo fmt`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test`
+  - `cargo run` smoke controle
+  - `cargo run --release` si le chemin de tick/rendu est sensiblement touche

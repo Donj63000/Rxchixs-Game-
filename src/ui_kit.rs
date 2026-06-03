@@ -1,4 +1,4 @@
-quse super::*;
+use super::*;
 use crate::rendu::theme::{mix_color, ui_panel_fill, ui_theme};
 
 const TOOLTIP_DELAY_S: f64 = 0.5;

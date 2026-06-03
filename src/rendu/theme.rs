@@ -162,20 +162,25 @@ pub(crate) fn world_theme() -> WorldTheme {
 
 pub(crate) fn ui_theme() -> UiTheme {
     UiTheme {
-        panel_top: rgba(13, 42, 70, 248),
-        panel_mid: rgba(5, 24, 44, 246),
-        panel_bottom: rgba(2, 12, 26, 250),
-        panel_inset: rgba(2, 10, 22, 222),
-        border: rgba(58, 146, 216, 226),
-        border_hi: rgba(176, 232, 255, 250),
-        text_primary: rgba(238, 247, 252, 255),
-        text_secondary: rgba(178, 206, 224, 250),
-        accent_amber: rgba(238, 188, 92, 252),
-        accent_cyan: rgba(98, 206, 246, 252),
-        accent_teal: rgba(108, 224, 192, 252),
-        accent_green: rgba(118, 212, 136, 248),
-        accent_red: rgba(222, 112, 100, 248),
-        accent_steel: rgba(146, 172, 194, 248),
+        // Direction artistique : graphite industriel + ambre.
+        // On supprime l'effet prototype bleu néon trop marqué.
+        panel_top: rgba(34, 35, 34, 248),
+        panel_mid: rgba(22, 23, 23, 246),
+        panel_bottom: rgba(10, 11, 12, 250),
+        panel_inset: rgba(4, 5, 6, 230),
+
+        border: rgba(92, 90, 82, 184),
+        border_hi: rgba(232, 184, 104, 246),
+
+        text_primary: rgba(246, 240, 226, 255),
+        text_secondary: rgba(184, 176, 158, 248),
+
+        accent_amber: rgba(232, 168, 62, 252),
+        accent_cyan: rgba(98, 190, 184, 244),
+        accent_teal: rgba(88, 178, 140, 244),
+        accent_green: rgba(112, 212, 126, 248),
+        accent_red: rgba(226, 94, 76, 248),
+        accent_steel: rgba(142, 146, 140, 246),
     }
 }
 
@@ -186,8 +191,8 @@ pub(crate) fn feedback_theme() -> FeedbackTheme {
         positive: ui.accent_green,
         warning: ui.accent_amber,
         danger: ui.accent_red,
-        money: rgba(224, 198, 108, 252),
-        logistics: rgba(126, 178, 236, 250),
+        money: rgba(226, 190, 104, 252),
+        logistics: rgba(116, 190, 174, 250),
     }
 }
 
@@ -315,6 +320,15 @@ mod tests {
         assert_ne!(idle.top, hovered.top);
         assert_ne!(idle.border, hovered.border);
         assert_ne!(hovered.text, active.text);
+    }
+
+    #[test]
+    fn ui_theme_uses_graphite_amber_production_direction() {
+        let ui = ui_theme();
+        assert_eq!(ui.panel_top, rgba(34, 35, 34, 248));
+        assert_eq!(ui.panel_bottom, rgba(10, 11, 12, 250));
+        assert_eq!(ui.accent_amber, rgba(232, 168, 62, 252));
+        assert_eq!(feedback_theme().logistics, rgba(116, 190, 174, 250));
     }
 
     #[test]

@@ -59,6 +59,68 @@ fn draw_phone_text(text: &str, x: f32, y: f32, size: f32, color: Color) {
     draw_text(text, x, y, size, color);
 }
 
+fn phone_alpha(mut c: Color, alpha: f32) -> Color {
+    c.a = alpha.clamp(0.0, 1.0);
+    c
+}
+
+fn phone_round_rect(rect: Rect, radius: f32, color: Color) {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+
+    let r = radius.max(0.0).min(rect.w * 0.5).min(rect.h * 0.5);
+
+    if r <= 0.5 {
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, color);
+        return;
+    }
+
+    draw_rectangle(rect.x + r, rect.y, rect.w - r * 2.0, rect.h, color);
+    draw_rectangle(rect.x, rect.y + r, rect.w, rect.h - r * 2.0, color);
+
+    draw_circle(rect.x + r, rect.y + r, r, color);
+    draw_circle(rect.x + rect.w - r, rect.y + r, r, color);
+    draw_circle(rect.x + r, rect.y + rect.h - r, r, color);
+    draw_circle(rect.x + rect.w - r, rect.y + rect.h - r, r, color);
+}
+
+fn phone_panel(rect: Rect, hovered: bool) {
+    phone_round_rect(
+        Rect::new(rect.x + 2.0, rect.y + 4.0, rect.w, rect.h),
+        12.0,
+        Color::from_rgba(0, 0, 0, if hovered { 86 } else { 62 }),
+    );
+
+    phone_round_rect(
+        rect,
+        12.0,
+        Color::from_rgba(86, 78, 58, if hovered { 190 } else { 138 }),
+    );
+
+    phone_round_rect(
+        Rect::new(
+            rect.x + 1.0,
+            rect.y + 1.0,
+            (rect.w - 2.0).max(0.0),
+            (rect.h - 2.0).max(0.0),
+        ),
+        11.0,
+        Color::from_rgba(10, 11, 11, 236),
+    );
+
+    phone_round_rect(
+        Rect::new(
+            rect.x + 1.0,
+            rect.y + 1.0,
+            (rect.w - 2.0).max(0.0),
+            rect.h * 0.44,
+        ),
+        11.0,
+        Color::from_rgba(30, 29, 25, if hovered { 174 } else { 122 }),
+    );
+}
+
 pub fn telephone_panel_contains_mouse(state: &crate::GameState, panel: Rect, mouse: Vec2) -> bool {
     if crate::point_in_rect(mouse, panel) {
         return true;
@@ -104,226 +166,243 @@ pub fn process_telephone_panel_input(
 
 pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, time: f32) {
     let hovered = crate::point_in_rect(mouse, panel);
-    draw_rectangle(
-        panel.x,
-        panel.y,
-        panel.w,
-        panel.h,
-        Color::from_rgba(7, 14, 24, 236),
+    phone_panel(panel, hovered);
+
+    let accent = Color::from_rgba(232, 168, 62, 238);
+    let text = Color::from_rgba(246, 240, 226, 250);
+    let muted = Color::from_rgba(184, 176, 158, 228);
+    let green = Color::from_rgba(112, 212, 126, 238);
+
+    draw_line(
+        panel.x + 15.0,
+        panel.y + 14.0,
+        panel.x + 21.0,
+        panel.y + 20.0,
+        2.0,
+        accent,
     );
-    draw_rectangle(
-        panel.x + 1.0,
-        panel.y + 1.0,
-        (panel.w - 2.0).max(1.0),
-        24.0,
-        Color::from_rgba(18, 34, 50, 216),
+    draw_line(
+        panel.x + 21.0,
+        panel.y + 20.0,
+        panel.x + 29.0,
+        panel.y + 12.0,
+        2.0,
+        accent,
     );
-    draw_rectangle(
-        panel.x,
-        panel.y + panel.h * 0.54,
-        panel.w,
-        panel.h * 0.46,
-        Color::from_rgba(0, 0, 0, 52),
+
+    draw_phone_text(
+        "COMMS",
+        panel.x + 38.0,
+        panel.y + 20.0,
+        PANEL_TITLE_SIZE,
+        text,
     );
-    draw_rectangle_lines(
-        panel.x,
-        panel.y,
-        panel.w,
-        panel.h,
-        1.8,
-        if hovered {
-            Color::from_rgba(150, 196, 224, 214)
+
+    draw_rectangle(
+        panel.x + 14.0,
+        panel.y + 27.0,
+        (panel.w - 28.0).max(0.0),
+        1.0,
+        phone_alpha(accent, 0.32),
+    );
+
+    let screen_h = (panel.h * 0.34).clamp(42.0, 68.0);
+    let screen = Rect::new(panel.x + 12.0, panel.y + 38.0, panel.w - 24.0, screen_h);
+
+    phone_round_rect(screen, 8.0, Color::from_rgba(0, 0, 0, 164));
+
+    phone_round_rect(
+        Rect::new(
+            screen.x + 1.0,
+            screen.y + 1.0,
+            (screen.w - 2.0).max(0.0),
+            (screen.h - 2.0).max(0.0),
+        ),
+        7.0,
+        Color::from_rgba(13, 14, 13, 230),
+    );
+
+    let blink = (time * 2.4).sin().abs();
+    draw_circle(
+        screen.x + 10.0,
+        screen.y + 13.0,
+        2.0,
+        Color::from_rgba(112, 212, 126, 90 + (blink * 110.0) as u8),
+    );
+
+    draw_phone_text(
+        "Papa : ligne de prod",
+        screen.x + 20.0,
+        screen.y + 17.0,
+        11.5,
+        muted,
+    );
+
+    if let Some(statut) = state.telephone.dernier_statut.as_deref() {
+        let clipped = truncate_safe_text(statut, 22);
+        draw_phone_text(
+            clipped,
+            screen.x + 8.0,
+            screen.y + screen.h - 10.0,
+            12.5,
+            Color::from_rgba(226, 238, 214, 230),
+        );
+    } else {
+        draw_phone_text(
+            "Aucun appel actif",
+            screen.x + 8.0,
+            screen.y + screen.h - 10.0,
+            12.5,
+            Color::from_rgba(170, 164, 150, 210),
+        );
+    }
+
+    let bouton = bouton_telephone_rect(panel);
+    let button_active = state.telephone.ouvert;
+    let button_hovered = crate::point_in_rect(mouse, bouton);
+
+    phone_round_rect(
+        Rect::new(bouton.x + 1.5, bouton.y + 2.0, bouton.w, bouton.h),
+        8.0,
+        Color::from_rgba(0, 0, 0, 62),
+    );
+
+    phone_round_rect(
+        bouton,
+        8.0,
+        if button_active {
+            Color::from_rgba(232, 168, 62, 226)
+        } else if button_hovered {
+            Color::from_rgba(52, 50, 42, 242)
         } else {
-            Color::from_rgba(72, 122, 166, 154)
+            Color::from_rgba(30, 30, 27, 238)
         },
     );
 
-    draw_line(
-        panel.x + 16.0,
-        panel.y + 13.0,
-        panel.x + 23.0,
-        panel.y + 20.0,
-        2.2,
-        Color::from_rgba(150, 190, 220, 220),
-    );
-    draw_line(
-        panel.x + 23.0,
-        panel.y + 20.0,
-        panel.x + 31.0,
-        panel.y + 13.0,
-        2.2,
-        Color::from_rgba(150, 190, 220, 220),
-    );
-    draw_phone_text(
-        "TELEPHONE",
-        panel.x + 42.0,
-        panel.y + 22.0,
-        PANEL_TITLE_SIZE,
-        Color::from_rgba(224, 236, 244, 246),
+    phone_round_rect(
+        Rect::new(
+            bouton.x + 1.0,
+            bouton.y + 1.0,
+            (bouton.w - 2.0).max(0.0),
+            (bouton.h - 2.0).max(0.0),
+        ),
+        7.0,
+        if button_active {
+            Color::from_rgba(214, 146, 42, 228)
+        } else {
+            Color::from_rgba(17, 18, 18, 232)
+        },
     );
 
-    let screen_h = (panel.h * 0.34).clamp(46.0, 76.0);
-    let screen = Rect::new(panel.x + 18.0, panel.y + 44.0, panel.w - 36.0, screen_h);
-    draw_rectangle(
-        screen.x,
-        screen.y,
-        screen.w,
-        screen.h,
-        Color::from_rgba(4, 10, 18, 224),
-    );
-    draw_rectangle_lines(
-        screen.x + 0.6,
-        screen.y + 0.6,
-        (screen.w - 1.2).max(1.0),
-        (screen.h - 1.2).max(1.0),
-        1.0,
-        Color::from_rgba(72, 122, 166, 126),
-    );
-    let blink = (time * 2.4).sin().abs();
-    draw_circle(
-        screen.x + 11.0,
-        screen.y + 14.0,
-        1.4,
-        Color::from_rgba(70, 180, 170, 72 + (blink * 70.0) as u8),
-    );
-
-    let bouton = bouton_telephone_rect(panel);
-    draw_rectangle(
-        bouton.x,
-        bouton.y,
-        bouton.w,
-        bouton.h,
-        Color::from_rgba(18, 52, 72, 232),
-    );
-    draw_rectangle(
-        bouton.x,
-        bouton.y,
-        bouton.w,
-        bouton.h * 0.44,
-        Color::from_rgba(120, 160, 190, 34),
-    );
-    draw_rectangle_lines(
-        bouton.x + 0.6,
-        bouton.y + 0.6,
-        (bouton.w - 1.2).max(1.0),
-        (bouton.h - 1.2).max(1.0),
-        1.2,
-        Color::from_rgba(96, 156, 190, 198),
-    );
-
-    let pulse = if state.telephone.ouvert {
-        0.45 + 0.55 * (time * 4.0).sin().abs()
-    } else {
-        0.35
-    };
     let icon = Rect::new(
-        bouton.x + bouton.w * 0.30,
-        bouton.y + bouton.h * 0.24,
-        bouton.w * 0.40,
-        bouton.h * 0.52,
+        bouton.x + bouton.w * 0.32,
+        bouton.y + bouton.h * 0.23,
+        bouton.w * 0.36,
+        bouton.h * 0.40,
     );
-    let icon_col = Color::from_rgba(88, 186, 206, 168 + (pulse * 38.0) as u8);
+
+    let icon_col = if button_active {
+        Color::from_rgba(26, 18, 8, 244)
+    } else {
+        green
+    };
+
     draw_line(
-        icon.x + icon.w * 0.18,
-        icon.y + icon.h * 0.18,
-        icon.x + icon.w * 0.82,
-        icon.y + icon.h * 0.82,
-        5.0,
+        icon.x + icon.w * 0.16,
+        icon.y + icon.h * 0.20,
+        icon.x + icon.w * 0.84,
+        icon.y + icon.h * 0.80,
+        4.0,
         icon_col,
     );
     draw_circle(
-        icon.x + icon.w * 0.18,
-        icon.y + icon.h * 0.18,
-        5.0,
+        icon.x + icon.w * 0.16,
+        icon.y + icon.h * 0.20,
+        4.2,
         icon_col,
     );
     draw_circle(
-        icon.x + icon.w * 0.82,
-        icon.y + icon.h * 0.82,
-        5.0,
+        icon.x + icon.w * 0.84,
+        icon.y + icon.h * 0.80,
+        4.2,
         icon_col,
     );
+
     let label = if state.telephone.ouvert {
         "FERMER"
     } else {
         "CONTACTS"
     };
-    let label_size = 12.0;
+
+    let label_size = 10.5;
     let dims = measure_text(label, None, label_size as u16, 1.0);
+
     draw_phone_text(
         label,
         bouton.x + bouton.w * 0.5 - dims.width * 0.5,
-        bouton.y + bouton.h - 8.0,
+        bouton.y + bouton.h - 7.0,
         label_size,
-        Color::from_rgba(230, 240, 246, 238),
+        if button_active {
+            Color::from_rgba(26, 18, 8, 246)
+        } else {
+            text
+        },
     );
 
     if state.telephone.ouvert {
         let contacts_panel = contacts_panel_rect(panel);
-        draw_rectangle(
-            contacts_panel.x,
-            contacts_panel.y,
-            contacts_panel.w,
-            contacts_panel.h,
-            Color::from_rgba(8, 14, 24, 242),
-        );
-        draw_rectangle_lines(
-            contacts_panel.x,
-            contacts_panel.y,
-            contacts_panel.w,
-            contacts_panel.h,
-            1.6,
-            Color::from_rgba(96, 154, 196, 204),
-        );
+        phone_panel(contacts_panel, true);
+
         draw_phone_text(
             "Contacts",
             contacts_panel.x + 10.0,
             contacts_panel.y + 20.0,
-            17.0,
-            Color::from_rgba(226, 238, 246, 248),
+            16.0,
+            text,
+        );
+
+        draw_rectangle(
+            contacts_panel.x + 10.0,
+            contacts_panel.y + 27.0,
+            (contacts_panel.w - 20.0).max(0.0),
+            1.0,
+            phone_alpha(accent, 0.35),
         );
 
         for (idx, contact) in contacts_disponibles().iter().enumerate() {
             let row = contact_row_rect(contacts_panel, idx);
             let row_hovered = crate::point_in_rect(mouse, row);
-            draw_rectangle(
-                row.x,
-                row.y,
-                row.w,
-                row.h,
+
+            phone_round_rect(
+                row,
+                7.0,
                 if row_hovered {
-                    Color::from_rgba(34, 64, 92, 242)
+                    Color::from_rgba(58, 50, 36, 242)
                 } else {
-                    Color::from_rgba(18, 36, 56, 236)
+                    Color::from_rgba(18, 19, 18, 236)
                 },
             );
-            draw_rectangle_lines(
-                row.x + 0.6,
-                row.y + 0.6,
-                (row.w - 1.2).max(1.0),
-                (row.h - 1.2).max(1.0),
-                1.0,
-                Color::from_rgba(92, 146, 190, 162),
+
+            draw_rectangle(
+                row.x + 1.0,
+                row.y + 1.0,
+                3.0,
+                (row.h - 2.0).max(0.0),
+                if row_hovered {
+                    accent
+                } else {
+                    phone_alpha(accent, 0.34)
+                },
             );
+
             draw_phone_text(
                 contact_label(*contact),
-                row.x + 8.0,
+                row.x + 10.0,
                 row.y + 20.0,
                 CONTACT_TEXT_SIZE,
-                Color::from_rgba(232, 242, 248, 246),
+                text,
             );
         }
-    }
-
-    if let Some(statut) = state.telephone.dernier_statut.as_deref() {
-        let clipped = truncate_safe_text(statut, 20);
-        draw_phone_text(
-            clipped,
-            screen.x + 8.0,
-            screen.y + screen.h - 12.0,
-            14.0,
-            Color::from_rgba(182, 224, 244, 220),
-        );
     }
 }
 
