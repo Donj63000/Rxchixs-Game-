@@ -129,6 +129,7 @@ mod tests {
                 offset: (-2, -5),
                 size: (67, 14),
             }],
+            zones: Vec::new(),
             blocs: vec![
                 PapaPlanBloc {
                     kind: BlockKind::InputHopper,

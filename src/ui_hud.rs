@@ -1,5 +1,5 @@
 use super::*;
-use crate::gestion::{EmployeeRole, SimCommand};
+use crate::gestion::{EmployeeId, EmployeeRole, SimCommand};
 use crate::rendu::theme::{feedback_theme, ui_panel_fill, ui_panel_header_fill, ui_theme};
 use crate::sim::{BlockKind, BuildFloorKind, ZoneKind};
 use std::cell::RefCell;
@@ -9,6 +9,11 @@ thread_local! {
 }
 
 const MINIMAP_CACHE_STRIDE: i32 = 2;
+const HUD_PANEL_PAD: f32 = 10.0;
+const HUD_PANEL_HEADER_H: f32 = 24.0;
+const HUD_PANEL_GAP: f32 = 6.0;
+const HUD_MIN_BUTTON_H: f32 = 24.0;
+const HUD_TEXT_AVG_WIDTH: f32 = 0.58;
 
 pub(crate) fn set_initial_raw_material_texture(texture: Option<Texture2D>) {
     INITIAL_RAW_MATERIAL_TEXTURE.with(|slot| {
@@ -268,6 +273,25 @@ impl HudInfoTab {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GestionTab {
+    Personnel,
+    Stock,
+    Ligne,
+    Ventes,
+}
+
+impl GestionTab {
+    fn label(self) -> &'static str {
+        match self {
+            GestionTab::Personnel => "PERSONNEL",
+            GestionTab::Stock => "STOCKS",
+            GestionTab::Ligne => "LIGNE",
+            GestionTab::Ventes => "VENTES",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimSpeed {
     Pause,
     X1,
@@ -306,6 +330,8 @@ pub struct HudUiState {
     pub pawn_scroll_y: f32,
     pub info_scroll_y: f32,
     pub info_window_open: bool,
+    pub gestion_window_open: bool,
+    pub gestion_tab: GestionTab,
 }
 
 impl Default for HudUiState {
@@ -320,6 +346,8 @@ impl Default for HudUiState {
             pawn_scroll_y: 0.0,
             info_scroll_y: 0.0,
             info_window_open: false,
+            gestion_window_open: false,
+            gestion_tab: GestionTab::Personnel,
         }
     }
 }
@@ -344,19 +372,21 @@ pub struct HudInputResult {
 }
 
 pub fn build_hud_layout(_state: &GameState) -> HudLayout {
-    let sw = screen_width();
-    let sh = screen_height();
+    compute_hud_layout_for_viewport(screen_width(), screen_height())
+}
+
+fn compute_hud_layout_for_viewport(sw: f32, sh: f32) -> HudLayout {
     let scale = ((sw / 1600.0).min(sh / 900.0)).clamp(0.85, 1.2);
 
     let top_strip_h = (58.0 * scale).clamp(52.0, 70.0);
     let top_strip_rect = Rect::new(0.0, 0.0, sw, top_strip_h);
 
-    let bar_h = (220.0 * scale).clamp(185.0, 260.0);
+    let bar_h = (208.0 * scale).clamp(196.0, 238.0);
     let bar_rect = Rect::new(0.0, (sh - bar_h).max(0.0), sw, bar_h);
 
     let outer_gap = (8.0 * scale).clamp(6.0, 10.0);
     let panel_gap = (8.0 * scale).clamp(6.0, 10.0);
-    let footer_h = (50.0 * scale).clamp(42.0, 58.0);
+    let footer_h = (44.0 * scale).clamp(38.0, 50.0);
     let footer_strip_rect = Rect::new(
         bar_rect.x + outer_gap,
         bar_rect.y + bar_rect.h - footer_h - outer_gap,
@@ -395,11 +425,11 @@ pub fn build_hud_layout(_state: &GameState) -> HudLayout {
 
 fn compute_bottom_panel_widths(sw: f32) -> (f32, f32, f32, f32, f32) {
     let sw = sw.max(1.0);
-    let mut pawn_w = (sw * 0.22).clamp(72.0, 420.0);
-    let mut phone_w = (sw * 0.11).clamp(54.0, 220.0);
-    let mut minimap_w = (sw * 0.24).clamp(92.0, 430.0);
-    let mut info_w = (sw * 0.24).clamp(92.0, 470.0);
-    let min_build_w = (sw * 0.16).clamp(70.0, 340.0);
+    let mut pawn_w = (sw * 0.20).clamp(72.0, 360.0);
+    let mut phone_w = (sw * 0.09).clamp(54.0, 170.0);
+    let mut minimap_w = (sw * 0.25).clamp(92.0, 430.0);
+    let mut info_w = (sw * 0.20).clamp(92.0, 360.0);
+    let min_build_w = (sw * 0.22).clamp(90.0, 420.0);
 
     let fixed_sum = pawn_w + info_w + phone_w + minimap_w;
     if fixed_sum + min_build_w > sw {
@@ -458,6 +488,46 @@ pub fn process_hud_input(
 
         if right_click {
             state.hud_ui.build_menu_open = false;
+            out.consumed_click = true;
+            return out;
+        }
+    }
+
+    if state.hud_ui.gestion_window_open {
+        let modal_rect = gestion_window_rect();
+        let over_modal = point_in_rect(mouse, modal_rect);
+
+        out.mouse_over_ui = true;
+
+        if wheel_y.abs() > f32::EPSILON {
+            out.consumed_wheel = true;
+        }
+
+        if left_click {
+            let close_rect = gestion_window_close_rect(modal_rect);
+
+            if point_in_rect(mouse, close_rect) {
+                state.hud_ui.gestion_window_open = false;
+                out.consumed_click = true;
+                return out;
+            }
+
+            if over_modal {
+                let _ = process_gestion_window_input(state, modal_rect, mouse);
+                out.consumed_click = true;
+                return out;
+            }
+
+            state.hud_ui.gestion_window_open = false;
+            out.consumed_click = true;
+            return out;
+        }
+
+        if right_click {
+            if over_modal {
+                state.hud_ui.gestion_window_open = false;
+            }
+
             out.consumed_click = true;
             return out;
         }
@@ -531,6 +601,7 @@ pub fn process_hud_input(
             return out;
         }
         if point_in_rect(mouse, layout.top_strip_rect) {
+            let _ = process_top_strip_input(state, layout.top_strip_rect, mouse);
             out.consumed_click = true;
             return out;
         }
@@ -605,9 +676,13 @@ pub fn draw_hud(
     draw_minimap_panel(state, layout.minimap_panel, mouse, map_view, world_camera);
     draw_footer_strip(state, layout.footer_strip_rect, mouse);
     draw_info_window(state, mouse);
+    draw_gestion_window(state, mouse);
     draw_build_menu(state, mouse);
 
-    if state.pawn_ui.context_menu.is_some() && !state.hud_ui.build_menu_open {
+    if state.pawn_ui.context_menu.is_some()
+        && !state.hud_ui.build_menu_open
+        && !state.hud_ui.gestion_window_open
+    {
         ui_pawns::draw_pawn_context_menu(state, mouse);
     }
 }
@@ -746,6 +821,31 @@ fn ui_text_and_shadow_for_bg(bg: Color) -> (Color, Color) {
     }
 }
 
+fn fitted_text(text: &str, max_width: f32, font_size: f32) -> String {
+    let budget = max_width.max(0.0);
+    if budget <= 1.0 || font_size <= 1.0 {
+        return String::new();
+    }
+    let max_chars = (budget / (font_size * HUD_TEXT_AVG_WIDTH).max(1.0)).floor() as usize;
+    truncate_chars(text, max_chars)
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let mut out: String = text.chars().take(max_chars - 3).collect();
+    out.push_str("...");
+    out
+}
+
 fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: Color, off: Vec2) {
     let ox = off.x.max(0.75);
     let oy = off.y.max(0.75);
@@ -756,7 +856,7 @@ fn draw_text_shadowed(text: &str, x: f32, y: f32, fs: f32, fill: Color, shadow: 
 
 fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
     let hovered = point_in_rect(mouse, rect);
-    draw_panel_drop_shadow(rect, if hovered { 0.32 } else { 0.24 });
+    draw_panel_drop_shadow(rect, if hovered { 0.22 } else { 0.16 });
 
     let (base_top, base_bottom) = ui_panel_fill(hovered);
     draw_vertical_gradient(rect, base_top, base_bottom, 18);
@@ -765,7 +865,7 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         rect.y + rect.h * 0.54,
         (rect.w - 2.0).max(0.0),
         (rect.h * 0.46).max(0.0),
-        with_alpha(rgba(0, 0, 0, 255), 0.22),
+        with_alpha(rgba(0, 0, 0, 255), 0.16),
     );
 
     let border_col = if hovered {
@@ -773,7 +873,7 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
     } else {
         ui_col_border()
     };
-    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, border_col);
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.4, border_col);
     draw_rectangle_lines(
         rect.x + 1.0,
         rect.y + 1.0,
@@ -783,7 +883,7 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         rgba(10, 20, 34, 220),
     );
 
-    let header_h = 24.0;
+    let header_h = HUD_PANEL_HEADER_H;
     let header = Rect::new(
         rect.x + 1.0,
         rect.y + 1.0,
@@ -808,7 +908,7 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         with_alpha(ui_col_border_hi(), if hovered { 0.78 } else { 0.54 }),
     );
 
-    let fs = 16.0;
+    let fs = 14.0;
     let (fill, shadow) = ui_text_and_shadow_for_bg(header_bottom);
     draw_panel_title_icon(
         title,
@@ -820,9 +920,9 @@ fn draw_panel_frame(rect: Rect, title: &str, mouse: Vec2) {
         },
     );
     draw_text_shadowed(
-        title,
-        rect.x + 36.0,
-        rect.y + 17.5,
+        &fitted_text(title, (rect.w - 44.0).max(1.0), fs),
+        rect.x + 34.0,
+        rect.y + 17.0,
         fs,
         if hovered { ui_col_text_primary() } else { fill },
         shadow,
@@ -855,7 +955,7 @@ fn draw_panel_title_icon(title: &str, center: Vec2, color: Color) {
                 c,
             );
         }
-        "CONSTRUCTION" | "Construction" => {
+        "CONSTRUCTION" | "Construction" | "OPERATIONS" | "Operations" => {
             draw_rectangle_lines(center.x - 7.0, center.y - 7.0, 6.0, 6.0, 1.5, c);
             draw_rectangle_lines(center.x + 1.0, center.y - 1.0, 6.0, 6.0, 1.5, c);
             draw_line(
@@ -924,10 +1024,10 @@ fn draw_panel_title_icon(title: &str, center: Vec2, color: Color) {
 
 fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
     let scale = (rect.h / 78.0).clamp(0.78, 1.2);
-    let top = rgba(4, 18, 36, 252);
-    let bottom = rgba(2, 10, 24, 255);
+    let top = rgba(5, 15, 28, 248);
+    let bottom = rgba(3, 9, 18, 252);
     draw_vertical_gradient(rect, top, bottom, 18);
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h * 0.48, rgba(16, 56, 92, 82));
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h * 0.44, rgba(38, 72, 96, 42));
     draw_rectangle(
         rect.x,
         rect.y,
@@ -950,7 +1050,7 @@ fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
 
     let metrics = [
         (
-            "TRÉSORERIE",
+            "TRESORERIE",
             format_money(cash),
             HeaderIcon::Euro,
             ui_col_accent(),
@@ -968,22 +1068,16 @@ fn draw_top_strip(state: &GameState, rect: Rect, mouse: Vec2) {
             rgba(86, 188, 232, 242),
         ),
         (
-            "FIABILITÉ",
-            format!("{:.0}%", (otif * 100.0).clamp(0.0, 999.0)),
-            HeaderIcon::Shield,
-            rgba(84, 218, 112, 242),
-        ),
-        (
             "SERVICE",
             format!("{:.0}%", (otif * 100.0).clamp(0.0, 999.0)),
-            HeaderIcon::Check,
+            HeaderIcon::Shield,
             rgba(118, 218, 112, 242),
         ),
     ];
 
     let layout = compute_top_strip_layout(rect, scale, metrics.len());
     draw_brand_header(layout.brand, scale);
-    draw_header_nav_group(layout.nav, scale);
+    draw_header_nav_group(state, layout.nav, mouse, scale);
     draw_simulation_card(state, layout.simulation, mouse, scale);
 
     for ((label, value, icon, accent), card) in metrics.iter().zip(layout.metrics.iter()) {
@@ -1094,6 +1188,73 @@ enum GestionQuickAction {
     ToggleInterim,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct OperationsPanelLayout {
+    body: Rect,
+    catalogue_rect: Rect,
+    mode_rect: Rect,
+    action_rects: [(GestionQuickAction, Rect); 6],
+    kpi_rects: [Rect; 3],
+}
+
+fn operations_panel_layout(panel: Rect) -> OperationsPanelLayout {
+    let body = build_panel_inner_rect(panel);
+    let gap = HUD_PANEL_GAP;
+    let top_h = 28.0_f32.min(body.h.max(1.0));
+    let catalogue_w = (body.w * 0.40).clamp(92.0, 156.0).min(body.w.max(1.0));
+    let mode_w = (body.w - catalogue_w - gap).max(1.0);
+    let catalogue_rect = Rect::new(body.x, body.y, catalogue_w, top_h);
+    let mode_rect = Rect::new(body.x + catalogue_w + gap, body.y, mode_w, top_h);
+
+    let action_y = body.y + top_h + gap;
+    let cols = 3;
+    let rows = 2;
+    let action_gap = 5.0;
+    let action_h = HUD_MIN_BUTTON_H;
+    let action_area_h = action_h * rows as f32 + action_gap * (rows - 1) as f32;
+    let action_w = ((body.w - action_gap * (cols - 1) as f32) / cols as f32).max(1.0);
+    let actions = [
+        GestionQuickAction::HireLead,
+        GestionQuickAction::HireCariste,
+        GestionQuickAction::HireAdmin,
+        GestionQuickAction::BuyRaw500,
+        GestionQuickAction::BuyRaw1000,
+        GestionQuickAction::ToggleInterim,
+    ];
+    let action_rects = actions.map(|action| {
+        let idx = action as usize;
+        let col = idx % cols;
+        let row = idx / cols;
+        (
+            action,
+            Rect::new(
+                body.x + col as f32 * (action_w + action_gap),
+                action_y + row as f32 * (action_h + action_gap),
+                action_w,
+                action_h,
+            ),
+        )
+    });
+
+    let kpi_y = action_y + action_area_h + gap;
+    let kpi_h = (body.y + body.h - kpi_y).clamp(0.0, 24.0);
+    let kpi_gap = 5.0;
+    let kpi_w = ((body.w - kpi_gap * 2.0) / 3.0).max(1.0);
+    let kpi_rects = [
+        Rect::new(body.x, kpi_y, kpi_w, kpi_h),
+        Rect::new(body.x + kpi_w + kpi_gap, kpi_y, kpi_w, kpi_h),
+        Rect::new(body.x + (kpi_w + kpi_gap) * 2.0, kpi_y, kpi_w, kpi_h),
+    ];
+
+    OperationsPanelLayout {
+        body,
+        catalogue_rect,
+        mode_rect,
+        action_rects,
+        kpi_rects,
+    }
+}
+
 fn draw_brand_header(rect: Rect, scale: f32) {
     let title_size = (27.0 * scale).clamp(22.0, 30.0);
     let sub_size = (14.0 * scale).clamp(12.0, 16.0);
@@ -1124,7 +1285,137 @@ fn draw_brand_header(rect: Rect, scale: f32) {
     );
 }
 
-fn draw_header_nav_group(rect: Rect, scale: f32) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeaderNavAction {
+    None,
+    OpenGestion,
+}
+
+fn header_nav_cells(rect: Rect) -> [(HeaderNavAction, &'static str, &'static str, Rect); 4] {
+    let labels = [
+        (HeaderNavAction::None, "MODE JEU", "ECHAP : PAUSE"),
+        (HeaderNavAction::OpenGestion, "GESTION", "PERSONNEL"),
+        (HeaderNavAction::None, "EDITEUR", "F10"),
+        (HeaderNavAction::None, "PLEIN ECRAN", "F11"),
+    ];
+
+    let cell_w = rect.w / labels.len() as f32;
+
+    [
+        (
+            labels[0].0,
+            labels[0].1,
+            labels[0].2,
+            Rect::new(rect.x, rect.y, cell_w, rect.h),
+        ),
+        (
+            labels[1].0,
+            labels[1].1,
+            labels[1].2,
+            Rect::new(rect.x + cell_w, rect.y, cell_w, rect.h),
+        ),
+        (
+            labels[2].0,
+            labels[2].1,
+            labels[2].2,
+            Rect::new(rect.x + cell_w * 2.0, rect.y, cell_w, rect.h),
+        ),
+        (
+            labels[3].0,
+            labels[3].1,
+            labels[3].2,
+            Rect::new(rect.x + cell_w * 3.0, rect.y, cell_w, rect.h),
+        ),
+    ]
+}
+
+fn process_top_strip_input(state: &mut GameState, rect: Rect, mouse: Vec2) -> bool {
+    let scale = (rect.h / 78.0).clamp(0.78, 1.2);
+    let layout = compute_top_strip_layout(rect, scale, 5);
+
+    for (action, _, _, cell) in header_nav_cells(layout.nav) {
+        if point_in_rect(mouse, cell) && action == HeaderNavAction::OpenGestion {
+            state.hud_ui.gestion_window_open = true;
+            state.hud_ui.info_window_open = false;
+            state.hud_ui.build_menu_open = false;
+            state.hud_ui.gestion_tab = GestionTab::Personnel;
+            return true;
+        }
+    }
+
+    false
+}
+
+fn draw_header_nav_group(state: &GameState, rect: Rect, mouse: Vec2, scale: f32) {
+    draw_top_card_frame(rect, false);
+
+    let cells = header_nav_cells(rect);
+
+    for (idx, (action, label, hint, cell)) in cells.iter().enumerate() {
+        if idx > 0 {
+            draw_line(
+                cell.x,
+                rect.y + 8.0,
+                cell.x,
+                rect.y + rect.h - 8.0,
+                1.0,
+                rgba(74, 132, 184, 118),
+            );
+        }
+
+        if *action == HeaderNavAction::OpenGestion {
+            let hovered = point_in_rect(mouse, *cell);
+            let active = state.hud_ui.gestion_window_open;
+
+            if hovered || active {
+                draw_rectangle(
+                    cell.x + 2.0,
+                    cell.y + 2.0,
+                    (cell.w - 4.0).max(0.0),
+                    (cell.h - 4.0).max(0.0),
+                    if active {
+                        rgba(54, 132, 174, 118)
+                    } else {
+                        rgba(54, 132, 174, 70)
+                    },
+                );
+            }
+        }
+
+        let fs = (14.0 * scale).clamp(11.0, 15.0);
+        let hint_fs = (13.0 * scale).clamp(10.0, 14.0);
+
+        let label_w = measure_text(label, None, fs as u16, 1.0).width;
+        let hint_w = measure_text(hint, None, hint_fs as u16, 1.0).width;
+
+        draw_text_shadowed(
+            label,
+            cell.x + cell.w * 0.5 - label_w * 0.5,
+            rect.y + rect.h * 0.38,
+            fs,
+            ui_col_text_primary(),
+            rgba(0, 0, 0, 170),
+            ui_shadow_offset(fs),
+        );
+
+        draw_text_shadowed(
+            hint,
+            cell.x + cell.w * 0.5 - hint_w * 0.5,
+            rect.y + rect.h * 0.72,
+            hint_fs,
+            if *action == HeaderNavAction::OpenGestion {
+                ui_col_accent()
+            } else {
+                ui_col_text_secondary()
+            },
+            rgba(0, 0, 0, 150),
+            ui_shadow_offset(hint_fs),
+        );
+    }
+}
+
+#[allow(dead_code)]
+fn draw_header_nav_group_legacy(rect: Rect, scale: f32) {
     draw_top_card_frame(rect, false);
     let cells = [
         ("MODE JEU", "ÉCHAP : PAUSE"),
@@ -1250,8 +1541,9 @@ fn draw_metric_card(
     let label_fs = (11.0 * scale).clamp(9.0, 12.0);
     let value_fs = (22.0 * scale).clamp(16.0, 24.0);
     let text_x = rect.x + (50.0 * scale).clamp(38.0, 56.0);
+    let text_w = (rect.x + rect.w - text_x - 8.0).max(1.0);
     draw_text_shadowed(
-        label,
+        &fitted_text(label, text_w, label_fs),
         text_x,
         rect.y + rect.h * 0.36,
         label_fs,
@@ -1260,7 +1552,7 @@ fn draw_metric_card(
         ui_shadow_offset(label_fs),
     );
     draw_text_shadowed(
-        value,
+        &fitted_text(value, text_w, value_fs),
         text_x,
         rect.y + rect.h * 0.76,
         value_fs,
@@ -1271,31 +1563,31 @@ fn draw_metric_card(
 }
 
 fn draw_top_card_frame(rect: Rect, hovered: bool) {
-    draw_panel_drop_shadow(rect, if hovered { 0.26 } else { 0.18 });
+    draw_panel_drop_shadow(rect, if hovered { 0.20 } else { 0.12 });
     let top = if hovered {
-        rgba(13, 47, 78, 244)
+        rgba(16, 42, 62, 238)
     } else {
-        rgba(7, 29, 54, 240)
+        rgba(9, 24, 42, 232)
     };
-    let bottom = rgba(2, 11, 26, 246);
+    let bottom = rgba(3, 10, 20, 242);
     draw_vertical_gradient(rect, top, bottom, 14);
     draw_rectangle(
         rect.x + 1.0,
         rect.y + 1.0,
         (rect.w - 2.0).max(0.0),
         rect.h * 0.43,
-        rgba(40, 112, 166, if hovered { 70 } else { 48 }),
+        rgba(80, 116, 144, if hovered { 46 } else { 26 }),
     );
     draw_rectangle_lines(
         rect.x,
         rect.y,
         rect.w,
         rect.h,
-        1.7,
+        1.2,
         if hovered {
-            rgba(162, 226, 255, 222)
+            rgba(150, 196, 224, 204)
         } else {
-            rgba(72, 144, 204, 176)
+            rgba(72, 122, 166, 142)
         },
     );
     draw_rectangle_lines(
@@ -1516,79 +1808,70 @@ fn draw_header_icon(icon: HeaderIcon, center: Vec2, size: f32, color: Color) {
     }
 }
 
-fn draw_footer_strip(state: &GameState, rect: Rect, mouse: Vec2) {
-    let scale = (rect.h / 50.0).clamp(0.82, 1.2);
-    draw_top_card_frame(rect, point_in_rect(mouse, rect));
-    let _revenue = state.sim.revenue_total();
-    let _cost = state.sim.cost_total();
+#[derive(Clone, Copy, Debug)]
+struct FooterStripLayout {
+    time_rect: Rect,
+    day_rect: Rect,
+    status_rect: Rect,
+    result_rect: Rect,
+    speed_rect: Rect,
+}
 
+fn footer_strip_layout(rect: Rect) -> FooterStripLayout {
+    let scale = (rect.h / 44.0).clamp(0.82, 1.2);
     let pad = (6.0 * scale).clamp(5.0, 8.0);
     let gap = (8.0 * scale).clamp(6.0, 10.0);
     let cell_h = (rect.h - pad * 2.0).max(28.0);
     let y = rect.y + pad;
-    let speed_cluster_w = (rect.w * 0.18).clamp(220.0, 340.0);
-    let right_edge = rect.x + rect.w - pad;
-    let speed_rect = Rect::new(right_edge - speed_cluster_w, y, speed_cluster_w, cell_h);
-
-    let result_w = (rect.w * 0.17).clamp(190.0, 310.0);
+    let speed_w = (rect.w * 0.18).clamp(210.0, 320.0);
+    let result_w = (rect.w * 0.14).clamp(150.0, 250.0);
+    let time_w = (rect.w * 0.10).clamp(102.0, 160.0);
+    let day_w = (rect.w * 0.10).clamp(102.0, 160.0);
+    let speed_rect = Rect::new(rect.x + rect.w - pad - speed_w, y, speed_w, cell_h);
     let result_rect = Rect::new(speed_rect.x - gap - result_w, y, result_w, cell_h);
-
-    let fixed_right_x = result_rect.x - gap;
-    let cells = [
-        (
-            "HEURE",
-            state.sim.clock.format_hhmm(),
-            HeaderIcon::Clock,
-            rgba(150, 210, 252, 240),
-        ),
-        (
-            "JOUR",
-            format!("JOUR {}", state.sim.clock.day_index() + 1),
-            HeaderIcon::Calendar,
-            rgba(150, 210, 252, 240),
-        ),
-        (
-            "TRÉSORERIE",
-            format_money(state.sim.cash()),
-            HeaderIcon::Euro,
-            ui_col_accent(),
-        ),
-        (
-            "VENTES",
-            state.sim.sold_total().to_string(),
-            HeaderIcon::Cart,
-            rgba(84, 188, 242, 242),
-        ),
-        (
-            "CADENCE",
-            format!("{:.1} / h", state.sim.throughput_per_hour()),
-            HeaderIcon::Pulse,
-            rgba(86, 188, 232, 242),
-        ),
-        (
-            "FIABILITÉ",
-            format!("{:.0}%", (state.sim.otif() * 100.0).clamp(0.0, 999.0)),
-            HeaderIcon::Shield,
-            rgba(84, 218, 112, 242),
-        ),
-    ];
-    let available = (fixed_right_x - (rect.x + pad)).max(1.0);
-    let cell_w = ((available - gap * (cells.len() as f32 - 1.0)) / cells.len() as f32).max(70.0);
-    let mut x = rect.x + pad;
-    for (label, value, icon, accent) in cells {
-        if x + cell_w <= fixed_right_x + 0.5 {
-            draw_footer_cell(
-                Rect::new(x, y, cell_w, cell_h),
-                label,
-                &value,
-                icon,
-                accent,
-                mouse,
-                scale,
-            );
-        }
-        x += cell_w + gap;
+    let time_rect = Rect::new(rect.x + pad, y, time_w, cell_h);
+    let day_rect = Rect::new(time_rect.x + time_rect.w + gap, y, day_w, cell_h);
+    let status_x = day_rect.x + day_rect.w + gap;
+    let status_w = (result_rect.x - gap - status_x).max(1.0);
+    let status_rect = Rect::new(status_x, y, status_w, cell_h);
+    FooterStripLayout {
+        time_rect,
+        day_rect,
+        status_rect,
+        result_rect,
+        speed_rect,
     }
+}
+
+fn draw_footer_strip(state: &GameState, rect: Rect, mouse: Vec2) {
+    let scale = (rect.h / 44.0).clamp(0.82, 1.2);
+    draw_top_card_frame(rect, point_in_rect(mouse, rect));
+    let layout = footer_strip_layout(rect);
+    draw_footer_cell(
+        layout.time_rect,
+        "HEURE",
+        &state.sim.clock.format_hhmm(),
+        HeaderIcon::Clock,
+        rgba(150, 190, 220, 230),
+        mouse,
+        scale,
+    );
+    draw_footer_cell(
+        layout.day_rect,
+        "JOUR",
+        &format!("JOUR {}", state.sim.clock.day_index() + 1),
+        HeaderIcon::Calendar,
+        rgba(150, 190, 220, 230),
+        mouse,
+        scale,
+    );
+    let footer_status = format!(
+        "{} | CA {} / Cout {}",
+        state.sim.status_line(),
+        format_money(state.sim.revenue_total()),
+        format_money(state.sim.cost_total())
+    );
+    draw_footer_status_cell(layout.status_rect, &footer_status, mouse, scale);
 
     let profit = state.sim.profit_total();
     let profit_col = if profit >= 0.0 {
@@ -1597,15 +1880,15 @@ fn draw_footer_strip(state: &GameState, rect: Rect, mouse: Vec2) {
         feedback_theme().danger
     };
     draw_footer_cell(
-        result_rect,
-        "RÉSULTAT",
+        layout.result_rect,
+        "RESULTAT",
         &format_money(profit),
         HeaderIcon::Result,
         profit_col,
         mouse,
         scale,
     );
-    draw_speed_cluster(state, speed_rect, mouse);
+    draw_speed_cluster(state, layout.speed_rect, mouse);
 }
 
 fn draw_footer_cell(
@@ -1628,8 +1911,9 @@ fn draw_footer_cell(
     let label_fs = (11.0 * scale).clamp(9.0, 12.0);
     let value_fs = (18.0 * scale).clamp(14.0, 20.0);
     let text_x = rect.x + (48.0 * scale).clamp(40.0, 54.0);
+    let text_w = (rect.x + rect.w - text_x - 6.0).max(1.0);
     draw_text_shadowed(
-        label,
+        &fitted_text(label, text_w, label_fs),
         text_x,
         rect.y + rect.h * 0.38,
         label_fs,
@@ -1638,12 +1922,41 @@ fn draw_footer_cell(
         ui_shadow_offset(label_fs),
     );
     draw_text_shadowed(
-        value,
+        &fitted_text(value, text_w, value_fs),
         text_x,
         rect.y + rect.h * 0.76,
         value_fs,
         ui_col_text_primary(),
         rgba(0, 0, 0, 180),
+        ui_shadow_offset(value_fs),
+    );
+}
+
+fn draw_footer_status_cell(rect: Rect, status: &str, mouse: Vec2, scale: f32) {
+    if rect.w < 48.0 {
+        return;
+    }
+    draw_top_card_frame(rect, point_in_rect(mouse, rect));
+    let label_fs = (10.0 * scale).clamp(8.0, 11.0);
+    let value_fs = (15.0 * scale).clamp(12.0, 16.0);
+    let x = rect.x + (10.0 * scale).clamp(7.0, 12.0);
+    let text_w = (rect.w - (x - rect.x) - 8.0).max(1.0);
+    draw_text_shadowed(
+        "STATUT",
+        x,
+        rect.y + rect.h * 0.36,
+        label_fs,
+        ui_col_text_secondary(),
+        rgba(0, 0, 0, 145),
+        ui_shadow_offset(label_fs),
+    );
+    draw_text_shadowed(
+        &fitted_text(status, text_w, value_fs),
+        x,
+        rect.y + rect.h * 0.76,
+        value_fs,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 170),
         ui_shadow_offset(value_fs),
     );
 }
@@ -1681,17 +1994,8 @@ fn footer_speed_button_rects(rect: Rect) -> [(SimSpeed, Rect); 4] {
 }
 
 fn process_footer_strip_input(state: &mut GameState, rect: Rect, mouse: Vec2) -> bool {
-    let scale = (rect.h / 50.0).clamp(0.82, 1.2);
-    let pad = (6.0 * scale).clamp(5.0, 8.0);
-    let cell_h = (rect.h - pad * 2.0).max(28.0);
-    let speed_cluster_w = (rect.w * 0.18).clamp(220.0, 340.0);
-    let speed_rect = Rect::new(
-        rect.x + rect.w - pad - speed_cluster_w,
-        rect.y + pad,
-        speed_cluster_w,
-        cell_h,
-    );
-    for (speed, brect) in footer_speed_button_rects(speed_rect) {
+    let layout = footer_strip_layout(rect);
+    for (speed, brect) in footer_speed_button_rects(layout.speed_rect) {
         if point_in_rect(mouse, brect) {
             state.hud_ui.sim_speed = speed;
             return true;
@@ -1780,12 +2084,13 @@ fn draw_small_button(rect: Rect, label: &str, hovered: bool, active: bool) {
     );
 
     let fs = (rect.h * 0.72).clamp(12.0, 18.0);
-    let dims = measure_text(label, None, fs as u16, 1.0);
+    let fitted = fitted_text(label, (rect.w - 12.0).max(1.0), fs);
+    let dims = measure_text(&fitted, None, fs as u16, 1.0);
     let tx = rect.x + rect.w * 0.5 - dims.width * 0.5;
     let ty = rect.y + rect.h * 0.5 + dims.height * 0.34;
     let (fill, shadow) = ui_text_and_shadow_for_bg(bottom);
     let text_col = if active { rgba(18, 24, 30, 248) } else { fill };
-    draw_text_shadowed(label, tx, ty, fs, text_col, shadow, ui_shadow_offset(fs));
+    draw_text_shadowed(&fitted, tx, ty, fs, text_col, shadow, ui_shadow_offset(fs));
 }
 
 fn rects_intersect(a: Rect, b: Rect) -> bool {
@@ -2205,39 +2510,37 @@ fn process_build_panel_input(state: &mut GameState, panel: Rect, mouse: Vec2) ->
 }
 
 fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
-    draw_panel_frame(panel, "CONSTRUCTION", mouse);
-    let summary = build_panel_summary_rect(panel);
-    let bg = rgba(12, 18, 26, 228);
-    draw_rectangle(summary.x, summary.y, summary.w, summary.h, bg);
+    draw_panel_frame(panel, "OPERATIONS", mouse);
+    let layout = operations_panel_layout(panel);
+    let bg = rgba(9, 15, 24, 218);
     draw_rectangle(
-        summary.x,
-        summary.y + summary.h * 0.46,
-        summary.w,
-        summary.h * 0.54,
-        rgba(8, 12, 18, 70),
+        layout.body.x,
+        layout.body.y,
+        layout.body.w,
+        layout.body.h,
+        bg,
+    );
+    draw_rectangle(
+        layout.body.x,
+        layout.body.y + layout.body.h * 0.52,
+        layout.body.w,
+        layout.body.h * 0.48,
+        rgba(0, 0, 0, 42),
     );
     draw_rectangle_lines(
-        summary.x,
-        summary.y,
-        summary.w,
-        summary.h,
-        1.5,
-        rgba(140, 194, 228, 150),
-    );
-    draw_rectangle_lines(
-        summary.x + 1.0,
-        summary.y + 1.0,
-        summary.w - 2.0,
-        summary.h - 2.0,
+        layout.body.x,
+        layout.body.y,
+        layout.body.w,
+        layout.body.h,
         1.0,
-        rgba(24, 34, 44, 200),
+        rgba(82, 130, 164, 130),
     );
 
-    let menu_rect = build_menu_open_button_rect(panel);
+    let menu_rect = layout.catalogue_rect;
     let menu_label = if state.hud_ui.build_menu_open {
-        "FERMER MENU"
+        "Fermer"
     } else {
-        "MENU CONSTRUCTION"
+        "Catalogue"
     };
     draw_small_button(
         menu_rect,
@@ -2247,91 +2550,113 @@ fn draw_build_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     );
 
     let mode_line = if state.sim.build_mode_enabled() {
-        "Mode construction: actif"
+        "Construction active"
     } else {
-        "Mode construction: arret"
+        "Construction veille"
     };
     let brush_line = if state.sim.zone_paint_mode_enabled() {
-        format!("Brosse active: zone {}", state.sim.zone_brush().label())
+        format!("Zone {}", state.sim.zone_brush().label())
     } else if state.sim.floor_paint_mode_enabled() {
-        format!("Brosse active: sol {}", state.sim.floor_brush().label())
+        format!("Sol {}", state.sim.floor_brush().label())
     } else {
-        format!(
-            "Brosse active: bloc {}",
-            state.sim.block_brush().buyable_label()
-        )
+        format!("Bloc {}", state.sim.block_brush().buyable_label())
     };
     let selected = state
         .hud_ui
         .build_menu_selected
         .unwrap_or_else(|| default_build_menu_selection(state, state.hud_ui.build_tab));
-    let selected_line = format!("Selection menu: {}", build_menu_selection_title(selected));
-    let (_fill, shadow) = ui_text_and_shadow_for_bg(bg);
-    let mut y = menu_rect.y + menu_rect.h + 18.0;
-    for line in [&selected_line, mode_line, &brush_line] {
-        draw_text_shadowed(
-            line,
-            summary.x + 8.0,
-            y,
-            14.0,
-            ui_col_text_secondary(),
-            shadow,
-            ui_shadow_offset(14.0),
-        );
-        y += 18.0;
-    }
+    let selected_line = fitted_text(&build_menu_selection_title(selected), 78.0, 12.0);
+    draw_status_pill(
+        layout.mode_rect,
+        &format!("{mode_line} - {selected_line}"),
+        &brush_line,
+        mouse,
+    );
 
-    draw_gestion_quick_actions(state, panel, mouse, bg, shadow);
-
-    draw_build_footer(panel, state, mouse);
+    draw_gestion_quick_actions(state, panel, mouse, bg, rgba(0, 0, 0, 150));
 }
 
 fn gestion_quick_button_rects(panel: Rect) -> [(GestionQuickAction, Rect); 6] {
-    let summary = build_panel_summary_rect(panel);
-    let pad = 8.0;
-    let gap = 6.0;
-    let button_h = 24.0;
-    let col_w = ((summary.w - pad * 2.0 - gap) * 0.5).max(54.0);
-    let x0 = summary.x + pad;
-    let x1 = x0 + col_w + gap;
-    let y0 = summary.y + summary.h - pad - button_h * 3.0 - gap * 2.0;
-    [
-        (
-            GestionQuickAction::HireLead,
-            Rect::new(x0, y0, col_w, button_h),
-        ),
-        (
-            GestionQuickAction::HireCariste,
-            Rect::new(x1, y0, col_w, button_h),
-        ),
-        (
-            GestionQuickAction::HireAdmin,
-            Rect::new(x0, y0 + button_h + gap, col_w, button_h),
-        ),
-        (
-            GestionQuickAction::BuyRaw500,
-            Rect::new(x1, y0 + button_h + gap, col_w, button_h),
-        ),
-        (
-            GestionQuickAction::BuyRaw1000,
-            Rect::new(x0, y0 + (button_h + gap) * 2.0, col_w, button_h),
-        ),
-        (
-            GestionQuickAction::ToggleInterim,
-            Rect::new(x1, y0 + (button_h + gap) * 2.0, col_w, button_h),
-        ),
-    ]
+    operations_panel_layout(panel).action_rects
 }
 
 fn gestion_quick_action_label(action: GestionQuickAction) -> &'static str {
     match action {
-        GestionQuickAction::HireLead => "Chef +",
-        GestionQuickAction::HireCariste => "Cariste +",
-        GestionQuickAction::HireAdmin => "Admin +",
-        GestionQuickAction::BuyRaw500 => "Stock 500",
-        GestionQuickAction::BuyRaw1000 => "Stock 1000",
+        GestionQuickAction::HireLead => "Chef",
+        GestionQuickAction::HireCariste => "Cariste",
+        GestionQuickAction::HireAdmin => "Admin",
+        GestionQuickAction::BuyRaw500 => "+500 mat",
+        GestionQuickAction::BuyRaw1000 => "+1000 mat",
         GestionQuickAction::ToggleInterim => "Interim",
     }
+}
+
+fn draw_status_pill(rect: Rect, title: &str, subtitle: &str, mouse: Vec2) {
+    let hovered = point_in_rect(mouse, rect);
+    let top = if hovered {
+        rgba(28, 52, 68, 226)
+    } else {
+        rgba(18, 32, 44, 218)
+    };
+    draw_vertical_gradient(rect, top, rgba(8, 14, 22, 226), 8);
+    draw_rectangle_lines(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        1.0,
+        rgba(84, 132, 164, if hovered { 180 } else { 122 }),
+    );
+    let title_fs = 11.0;
+    let sub_fs = 10.0;
+    let text_w = (rect.w - 12.0).max(1.0);
+    draw_text_shadowed(
+        &fitted_text(title, text_w, title_fs),
+        rect.x + 6.0,
+        rect.y + rect.h * 0.43,
+        title_fs,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 150),
+        ui_shadow_offset(title_fs),
+    );
+    draw_text_shadowed(
+        &fitted_text(subtitle, text_w, sub_fs),
+        rect.x + 6.0,
+        rect.y + rect.h * 0.80,
+        sub_fs,
+        ui_col_text_secondary(),
+        rgba(0, 0, 0, 130),
+        ui_shadow_offset(sub_fs),
+    );
+}
+
+fn draw_operation_kpi(rect: Rect, label: &str, value: &str) {
+    if rect.h < 12.0 || rect.w < 22.0 {
+        return;
+    }
+    draw_vertical_gradient(rect, rgba(13, 24, 34, 220), rgba(7, 12, 20, 226), 6);
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.0, rgba(74, 118, 152, 116));
+    let label_fs = (rect.h * 0.38).clamp(8.0, 10.0);
+    let value_fs = (rect.h * 0.54).clamp(9.0, 12.0);
+    let text_w = (rect.w - 8.0).max(1.0);
+    draw_text_shadowed(
+        &fitted_text(label, text_w, label_fs),
+        rect.x + 4.0,
+        rect.y + rect.h * 0.38,
+        label_fs,
+        ui_col_text_secondary(),
+        rgba(0, 0, 0, 130),
+        ui_shadow_offset(label_fs),
+    );
+    draw_text_shadowed(
+        &fitted_text(value, text_w, value_fs),
+        rect.x + 4.0,
+        rect.y + rect.h * 0.82,
+        value_fs,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 150),
+        ui_shadow_offset(value_fs),
+    );
 }
 
 fn draw_gestion_quick_actions(
@@ -2341,16 +2666,17 @@ fn draw_gestion_quick_actions(
     bg: Color,
     shadow: Color,
 ) {
-    let buttons = gestion_quick_button_rects(panel);
-    let title_y = buttons[0].1.y - 9.0;
+    let layout = operations_panel_layout(panel);
+    let buttons = layout.action_rects;
+    let title_y = buttons[0].1.y - 4.0;
     draw_text_shadowed(
-        "Gestion entreprise",
+        "Gestion",
         buttons[0].1.x,
         title_y,
-        13.0,
+        11.0,
         ui_col_text_secondary(),
         shadow,
-        ui_shadow_offset(13.0),
+        ui_shadow_offset(11.0),
     );
     for (action, rect) in buttons {
         draw_small_button(
@@ -2363,63 +2689,35 @@ fn draw_gestion_quick_actions(
 
     let stock = state.sim.stock();
     let line = state.sim.main_production_line();
-    let kpi = format!(
-        "Mat rec {} | entree {} | paie {}/h",
-        stock.raw_receiving,
-        stock.raw_line_input,
-        format_money(state.sim.payroll_per_hour())
-    );
-    let kpi_y = buttons[4].1.y + buttons[4].1.h + 14.0;
-    draw_text_shadowed(
-        &kpi,
-        buttons[4].1.x,
-        kpi_y,
-        12.0,
-        ui_col_text_secondary(),
-        ui_shadow_color_for_text(ui_col_text_secondary()),
-        ui_shadow_offset(12.0),
-    );
-    let line_text = format!("Ligne: {}", line.block_reason);
-    draw_text_shadowed(
-        &line_text,
-        buttons[4].1.x,
-        kpi_y + 14.0,
-        12.0,
-        ui_col_text_secondary(),
-        ui_shadow_color_for_text(ui_col_text_secondary()),
-        ui_shadow_offset(12.0),
-    );
     let sales = state.sim.sales_state();
-    let sales_text = format!(
-        "Vente cap {:.1}/h | revenu {}/h",
-        state.sim.sales_capacity_per_hour(),
-        format_money(sales.last_revenue_per_hour)
+    draw_operation_kpi(
+        layout.kpi_rects[0],
+        "Stock",
+        &format!("R{} / L{}", stock.raw_receiving, stock.raw_line_input),
     );
-    draw_text_shadowed(
-        &sales_text,
-        buttons[4].1.x,
-        kpi_y + 28.0,
-        12.0,
-        ui_col_text_secondary(),
-        ui_shadow_color_for_text(ui_col_text_secondary()),
-        ui_shadow_offset(12.0),
+    draw_operation_kpi(
+        layout.kpi_rects[1],
+        "Equipe",
+        &format!("Paie {}/h", format_money(state.sim.payroll_per_hour())),
+    );
+    draw_operation_kpi(
+        layout.kpi_rects[2],
+        "Ligne",
+        &format!(
+            "{} | V {:.0}/h",
+            line.block_reason,
+            state
+                .sim
+                .sales_capacity_per_hour()
+                .max(sales.last_revenue_per_hour)
+        ),
     );
     let _ = bg;
 }
 
-fn build_footer_rect(panel: Rect) -> Rect {
-    let footer_h = 22.0;
-    Rect::new(
-        panel.x + 10.0,
-        panel.y + panel.h - footer_h - 8.0,
-        panel.w - 20.0,
-        footer_h,
-    )
-}
-
 fn build_panel_inner_rect(panel: Rect) -> Rect {
-    let pad = 10.0;
-    let header_h = 24.0;
+    let pad = HUD_PANEL_PAD;
+    let header_h = HUD_PANEL_HEADER_H;
     Rect::new(
         panel.x + pad,
         panel.y + header_h + 10.0,
@@ -2428,21 +2726,8 @@ fn build_panel_inner_rect(panel: Rect) -> Rect {
     )
 }
 
-fn build_panel_summary_rect(panel: Rect) -> Rect {
-    let mut inner = build_panel_inner_rect(panel);
-    let footer = build_footer_rect(panel);
-    inner.h = (footer.y - 6.0 - inner.y).max(1.0);
-    inner
-}
-
 fn build_menu_open_button_rect(panel: Rect) -> Rect {
-    let summary = build_panel_summary_rect(panel);
-    Rect::new(
-        summary.x + 8.0,
-        summary.y + 8.0,
-        (summary.w - 16.0).max(1.0),
-        34.0,
-    )
+    operations_panel_layout(panel).catalogue_rect
 }
 
 fn build_menu_rect() -> Rect {
@@ -3066,43 +3351,6 @@ fn draw_build_menu_details(state: &GameState, layout: &BuildMenuLayout, mouse: V
     );
 }
 
-fn draw_build_footer(panel: Rect, state: &GameState, mouse: Vec2) {
-    let r = build_footer_rect(panel);
-    let bg = rgba(14, 18, 24, 230);
-    draw_rectangle(r.x, r.y, r.w, r.h, bg);
-    draw_rectangle(r.x, r.y + r.h * 0.5, r.w, r.h * 0.5, rgba(8, 12, 18, 80));
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, rgba(140, 194, 228, 160));
-
-    let fs = 14.0;
-    let (_fill, shadow) = ui_text_and_shadow_for_bg(bg);
-    let text = state.sim.status_line();
-    draw_text_shadowed(
-        text,
-        r.x + 8.0,
-        r.y + r.h * 0.72,
-        fs,
-        ui_col_text_primary(),
-        shadow,
-        ui_shadow_offset(fs),
-    );
-
-    let hint = "Bouton Menu construction: ouvrir le catalogue complet";
-    let dims = measure_text(hint, None, 12, 1.0);
-    if dims.width + 12.0 < r.w {
-        draw_text_shadowed(
-            hint,
-            r.x + r.w - dims.width - 8.0,
-            r.y + r.h * 0.72,
-            12.0,
-            ui_col_text_secondary(),
-            shadow,
-            ui_shadow_offset(12.0),
-        );
-    }
-
-    let _ = mouse;
-}
-
 fn process_info_panel_input(state: &mut GameState, panel: Rect, mouse: Vec2) -> bool {
     let tab_rects = info_tab_rects(panel);
     for (tab, rect) in tab_rects {
@@ -3213,13 +3461,13 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     draw_panel_frame(panel, "PERSONNAGE", mouse);
 
     let inner = info_compact_inner_rect(panel);
-    draw_rectangle(inner.x, inner.y, inner.w, inner.h, rgba(12, 18, 26, 228));
+    draw_rectangle(inner.x, inner.y, inner.w, inner.h, rgba(9, 15, 24, 218));
     draw_rectangle(
         inner.x,
         inner.y + inner.h * 0.5,
         inner.w,
         inner.h * 0.5,
-        rgba(8, 12, 18, 78),
+        rgba(0, 0, 0, 42),
     );
     draw_rectangle_lines(
         inner.x,
@@ -3227,7 +3475,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         inner.w,
         inner.h,
         1.5,
-        rgba(140, 194, 228, 150),
+        rgba(82, 130, 164, 130),
     );
     draw_rectangle_lines(
         inner.x + 1.0,
@@ -3259,7 +3507,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     let role = match pawn.key {
         PawnKey::Player => "PATRON",
         PawnKey::Npc => "VISITEUR",
-        PawnKey::SimWorker => "EMPLOYÉ",
+        PawnKey::SimWorker => "EMPLOYE",
     };
     let portrait = Rect::new(inner.x + 10.0, inner.y + 10.0, 64.0, 64.0);
     draw_rectangle(
@@ -3267,7 +3515,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         portrait.y,
         portrait.w,
         portrait.h,
-        rgba(20, 42, 66, 230),
+        rgba(16, 30, 44, 224),
     );
     draw_rectangle_lines(
         portrait.x,
@@ -3275,7 +3523,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
         portrait.w,
         portrait.h,
         1.5,
-        rgba(108, 178, 230, 180),
+        rgba(92, 142, 176, 168),
     );
     if let Some(record) = ui_pawns::pawn_visual_record(state, pawn.key) {
         draw_character(
@@ -3300,8 +3548,9 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
 
     let title = format!("{} - {}", pawn.name.to_uppercase(), role);
     let text_x = portrait.x + portrait.w + 14.0;
+    let text_w = (inner.x + inner.w - text_x - 10.0).max(1.0);
     draw_text_shadowed(
-        &title,
+        &fitted_text(&title, text_w, 16.0),
         text_x,
         inner.y + 28.0,
         16.0,
@@ -3311,7 +3560,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
     );
 
     draw_text_shadowed(
-        "Ouvrir une fenêtre détaillée.",
+        "Dossier detaille.",
         text_x,
         inner.y + 52.0,
         13.0,
@@ -3338,7 +3587,7 @@ fn draw_info_panel(state: &GameState, panel: Rect, mouse: Vec2) {
             HeaderIcon::Pulse,
         ),
         (
-            "Efficacité",
+            "Efficacite",
             pawn.metrics.skills[SkillBar::Qualite as usize],
             HeaderIcon::Check,
         ),
@@ -3425,6 +3674,614 @@ fn info_quick_button_rects(panel: Rect) -> Vec<(HudInfoTab, Rect)> {
             Rect::new(inner.x + w + gap, y, w, h),
         ),
     ]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GestionAction {
+    Hire(EmployeeRole),
+    Fire(EmployeeId),
+    AssignLead(EmployeeId),
+    BuyRaw(u32),
+    SetInterim { enabled: bool, max_temps: u8 },
+    BootstrapFactory,
+}
+
+fn gestion_window_rect() -> Rect {
+    let sw = screen_width();
+    let sh = screen_height();
+    let w = (sw * 0.68).clamp(760.0, 1180.0);
+    let h = (sh * 0.70).clamp(500.0, 780.0);
+
+    Rect::new((sw - w) * 0.5, (sh - h) * 0.45, w, h)
+}
+
+fn gestion_window_close_rect(panel: Rect) -> Rect {
+    Rect::new(panel.x + panel.w - 28.0, panel.y + 6.0, 20.0, 20.0)
+}
+
+fn gestion_tab_rects(panel: Rect) -> Vec<(GestionTab, Rect)> {
+    let pad = 12.0;
+    let y = panel.y + 34.0;
+    let h = 28.0;
+    let gap = 8.0;
+    let w = ((panel.w - pad * 2.0 - gap * 3.0) / 4.0).max(90.0);
+
+    [
+        GestionTab::Personnel,
+        GestionTab::Stock,
+        GestionTab::Ligne,
+        GestionTab::Ventes,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, tab)| {
+        (
+            tab,
+            Rect::new(panel.x + pad + idx as f32 * (w + gap), y, w, h),
+        )
+    })
+    .collect()
+}
+
+fn gestion_body_rect(panel: Rect) -> Rect {
+    let pad = 12.0;
+    let tabs = gestion_tab_rects(panel);
+
+    let y = tabs
+        .first()
+        .map(|(_, r)| r.y + r.h + 10.0)
+        .unwrap_or(panel.y + 70.0);
+
+    Rect::new(
+        panel.x + pad,
+        y,
+        (panel.w - pad * 2.0).max(1.0),
+        (panel.y + panel.h - y - pad).max(1.0),
+    )
+}
+
+fn process_gestion_window_input(state: &mut GameState, panel: Rect, mouse: Vec2) -> bool {
+    for (tab, rect) in gestion_tab_rects(panel) {
+        if point_in_rect(mouse, rect) {
+            state.hud_ui.gestion_tab = tab;
+            return true;
+        }
+    }
+
+    for (action, rect) in gestion_action_rects(state, panel) {
+        if !point_in_rect(mouse, rect) {
+            continue;
+        }
+
+        let result = match action {
+            GestionAction::Hire(role) => state.sim.apply_command(SimCommand::HireEmployee { role }),
+            GestionAction::Fire(employee_id) => state
+                .sim
+                .apply_command(SimCommand::FireEmployee { employee_id }),
+            GestionAction::AssignLead(employee_id) => {
+                let line_id = state.sim.main_production_line().id;
+
+                state.sim.apply_command(SimCommand::AssignEmployeeToLine {
+                    employee_id,
+                    line_id,
+                })
+            }
+            GestionAction::BuyRaw(qty) => state.sim.apply_command(SimCommand::BuyRawStock { qty }),
+            GestionAction::SetInterim { enabled, max_temps } => {
+                let line_id = state.sim.main_production_line().id;
+
+                state.sim.apply_command(SimCommand::SetLineTempPolicy {
+                    line_id,
+                    enabled,
+                    max_temps,
+                })
+            }
+            GestionAction::BootstrapFactory => state.sim.bootstrap_functional_factory(),
+        };
+
+        match result {
+            Ok(msg) | Err(msg) => state.sim.set_status_line(msg),
+        }
+
+        return true;
+    }
+
+    false
+}
+
+fn gestion_action_rects(state: &GameState, panel: Rect) -> Vec<(GestionAction, Rect)> {
+    let body = gestion_body_rect(panel);
+    let mut out = Vec::new();
+
+    let button_w = 166.0;
+    let button_h = 26.0;
+    let gap = 8.0;
+    let x_right = body.x + body.w - button_w - 10.0;
+
+    match state.hud_ui.gestion_tab {
+        GestionTab::Personnel => {
+            let mut y = body.y + 12.0;
+
+            for role in [
+                EmployeeRole::ChefEquipe,
+                EmployeeRole::Cariste,
+                EmployeeRole::AdministrateurVente,
+            ] {
+                out.push((
+                    GestionAction::Hire(role),
+                    Rect::new(x_right, y, button_w, button_h),
+                ));
+
+                y += button_h + gap;
+            }
+
+            y += 14.0;
+
+            for employee in &state.sim.personnel().employees {
+                let row_y = y;
+
+                if employee.role == EmployeeRole::ChefEquipe {
+                    out.push((
+                        GestionAction::AssignLead(employee.id),
+                        Rect::new(x_right - button_w - gap, row_y, button_w, button_h),
+                    ));
+                }
+
+                if employee.role != EmployeeRole::Patron
+                    && employee.role != EmployeeRole::Interimaire
+                {
+                    out.push((
+                        GestionAction::Fire(employee.id),
+                        Rect::new(x_right, row_y, button_w, button_h),
+                    ));
+                }
+
+                y += 42.0;
+
+                if y > body.y + body.h - button_h - 4.0 {
+                    break;
+                }
+            }
+        }
+        GestionTab::Stock => {
+            let y = body.y + 38.0;
+
+            out.push((
+                GestionAction::BuyRaw(100),
+                Rect::new(x_right, y, button_w, button_h),
+            ));
+
+            out.push((
+                GestionAction::BuyRaw(500),
+                Rect::new(x_right, y + button_h + gap, button_w, button_h),
+            ));
+
+            out.push((
+                GestionAction::BuyRaw(1000),
+                Rect::new(x_right, y + (button_h + gap) * 2.0, button_w, button_h),
+            ));
+
+            out.push((
+                GestionAction::BootstrapFactory,
+                Rect::new(
+                    x_right,
+                    body.y + body.h - button_h - 12.0,
+                    button_w,
+                    button_h,
+                ),
+            ));
+        }
+        GestionTab::Ligne => {
+            let mut y = body.y + 86.0;
+
+            for employee in &state.sim.personnel().employees {
+                if employee.role == EmployeeRole::ChefEquipe {
+                    out.push((
+                        GestionAction::AssignLead(employee.id),
+                        Rect::new(x_right, y, button_w, button_h),
+                    ));
+
+                    y += button_h + gap;
+                }
+            }
+
+            let line = state.sim.main_production_line();
+
+            let policy_enabled = line
+                .assigned_lead_id
+                .and_then(|lead_id| state.sim.personnel().employee(lead_id))
+                .and_then(|lead| lead.temp_policy.as_ref())
+                .is_some_and(|policy| policy.enabled);
+
+            let policy_max = line
+                .assigned_lead_id
+                .and_then(|lead_id| state.sim.personnel().employee(lead_id))
+                .and_then(|lead| lead.temp_policy.as_ref())
+                .map(|policy| policy.max_temps)
+                .unwrap_or(3);
+
+            let y2 = body.y + body.h - button_h * 2.0 - gap - 12.0;
+
+            out.push((
+                GestionAction::SetInterim {
+                    enabled: !policy_enabled,
+                    max_temps: policy_max.clamp(1, 3),
+                },
+                Rect::new(x_right, y2, button_w, button_h),
+            ));
+
+            for idx in 0..=3 {
+                out.push((
+                    GestionAction::SetInterim {
+                        enabled: policy_enabled || idx > 0,
+                        max_temps: idx,
+                    },
+                    Rect::new(
+                        body.x + 14.0 + idx as f32 * 64.0,
+                        y2 + button_h + gap,
+                        56.0,
+                        button_h,
+                    ),
+                ));
+            }
+        }
+        GestionTab::Ventes => {
+            let y = body.y + 64.0;
+
+            out.push((
+                GestionAction::Hire(EmployeeRole::AdministrateurVente),
+                Rect::new(x_right, y, button_w, button_h),
+            ));
+
+            out.push((
+                GestionAction::BootstrapFactory,
+                Rect::new(
+                    x_right,
+                    body.y + body.h - button_h - 12.0,
+                    button_w,
+                    button_h,
+                ),
+            ));
+        }
+    }
+
+    out
+}
+
+fn gestion_action_label(action: GestionAction) -> String {
+    match action {
+        GestionAction::Hire(role) => format!("Recruter {}", role.label()),
+        GestionAction::Fire(id) => format!("Licencier #{id}"),
+        GestionAction::AssignLead(id) => format!("Assigner chef #{id}"),
+        GestionAction::BuyRaw(qty) => format!("Acheter {qty}"),
+        GestionAction::SetInterim { enabled, max_temps } => {
+            if enabled {
+                format!("Interim ON max {max_temps}")
+            } else {
+                "Interim OFF".to_string()
+            }
+        }
+        GestionAction::BootstrapFactory => "Bootstrap test".to_string(),
+    }
+}
+
+fn draw_gestion_window(state: &GameState, mouse: Vec2) {
+    if !state.hud_ui.gestion_window_open {
+        return;
+    }
+
+    let panel = gestion_window_rect();
+
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        rgba(4, 8, 12, 128),
+    );
+
+    draw_panel_frame(panel, "GESTION ENTREPRISE", mouse);
+
+    let close_rect = gestion_window_close_rect(panel);
+    draw_small_button(close_rect, "X", point_in_rect(mouse, close_rect), false);
+
+    for (tab, rect) in gestion_tab_rects(panel) {
+        draw_small_button(
+            rect,
+            tab.label(),
+            point_in_rect(mouse, rect),
+            state.hud_ui.gestion_tab == tab,
+        );
+    }
+
+    let body = gestion_body_rect(panel);
+
+    draw_rectangle(body.x, body.y, body.w, body.h, rgba(12, 18, 26, 236));
+    draw_rectangle_lines(
+        body.x,
+        body.y,
+        body.w,
+        body.h,
+        1.5,
+        rgba(140, 194, 228, 150),
+    );
+
+    match state.hud_ui.gestion_tab {
+        GestionTab::Personnel => draw_gestion_personnel_tab(state, body),
+        GestionTab::Stock => draw_gestion_stock_tab(state, body),
+        GestionTab::Ligne => draw_gestion_ligne_tab(state, body),
+        GestionTab::Ventes => draw_gestion_ventes_tab(state, body),
+    }
+
+    for (action, rect) in gestion_action_rects(state, panel) {
+        let label = gestion_action_label(action);
+        draw_small_button(rect, &label, point_in_rect(mouse, rect), false);
+    }
+}
+
+fn draw_gestion_section_title(title: &str, x: f32, y: f32) {
+    draw_text_shadowed(
+        title,
+        x,
+        y,
+        18.0,
+        ui_col_text_primary(),
+        rgba(0, 0, 0, 160),
+        ui_shadow_offset(18.0),
+    );
+}
+
+fn draw_gestion_small_line(text: &str, x: f32, y: f32, strong: bool) {
+    draw_text_shadowed(
+        text,
+        x,
+        y,
+        if strong { 14.0 } else { 13.0 },
+        if strong {
+            ui_col_text_primary()
+        } else {
+            ui_col_text_secondary()
+        },
+        rgba(0, 0, 0, 150),
+        ui_shadow_offset(if strong { 14.0 } else { 13.0 }),
+    );
+}
+
+fn draw_gestion_personnel_tab(state: &GameState, body: Rect) {
+    let personnel = state.sim.personnel();
+    let line = state.sim.main_production_line();
+
+    let x = body.x + 16.0;
+    let mut y = body.y + 28.0;
+
+    draw_gestion_section_title("Personnel autonome", x, y);
+    y += 26.0;
+
+    let summary = format!(
+        "Chefs {} | Caristes {} | Admins vente {} | Interimaires {} | Paie {}/h",
+        personnel.count_role(EmployeeRole::ChefEquipe),
+        personnel.count_role(EmployeeRole::Cariste),
+        personnel.count_role(EmployeeRole::AdministrateurVente),
+        personnel.count_role(EmployeeRole::Interimaire),
+        format_money(state.sim.payroll_per_hour())
+    );
+
+    draw_gestion_small_line(&summary, x, y, true);
+
+    y += 22.0;
+
+    draw_gestion_small_line(
+        "Les employes travaillent seuls: chefs supervisent, caristes alimentent, admins vendent.",
+        x,
+        y,
+        false,
+    );
+
+    y += 36.0;
+
+    for employee in &personnel.employees {
+        if y > body.y + body.h - 34.0 {
+            draw_gestion_small_line(
+                "Liste tronquee: agrandis la fenetre ou reduis l'equipe.",
+                x,
+                y,
+                false,
+            );
+            break;
+        }
+
+        let assigned = employee
+            .assigned_line
+            .map(|id| format!("ligne {id}"))
+            .unwrap_or_else(|| "-".to_string());
+
+        let contract = if employee.role == EmployeeRole::Interimaire {
+            format!(
+                " | contrat {:.1}h",
+                employee.temp_contract_remaining_s.max(0.0) / 3600.0
+            )
+        } else {
+            String::new()
+        };
+
+        let row = format!(
+            "#{} {} | {} | {} | {} EUR/h{}",
+            employee.id,
+            employee.name,
+            employee.role.label(),
+            assigned,
+            employee.hourly_wage.round(),
+            contract
+        );
+
+        draw_gestion_small_line(&row, x, y, true);
+
+        draw_gestion_small_line(
+            &format!(
+                "IA: {} | etat {} | score {:.0}",
+                employee.task_label,
+                employee.status.label(),
+                employee.ai_score
+            ),
+            x + 14.0,
+            y + 16.0,
+            false,
+        );
+
+        y += 42.0;
+    }
+
+    if line.assigned_lead_id.is_none() {
+        draw_gestion_small_line(
+            "Alerte: aucun chef n'est assigne a la ligne principale.",
+            x,
+            body.y + body.h - 20.0,
+            true,
+        );
+    }
+}
+
+fn draw_gestion_stock_tab(state: &GameState, body: Rect) {
+    let stock = state.sim.stock();
+
+    let x = body.x + 16.0;
+    let mut y = body.y + 30.0;
+
+    draw_gestion_section_title("Approvisionnement", x, y);
+    y += 32.0;
+
+    let rows = [
+        format!("Stock reception matiere: {} unites", stock.raw_receiving),
+        format!(
+            "Entree ligne / tremie: {} / {} unites",
+            stock.raw_line_input,
+            crate::gestion::RAW_LINE_INPUT_CAPACITY
+        ),
+        format!("Commandes en attente: {} unites", stock.pending_raw_qty()),
+        format!("Cash disponible: {}", format_money(state.sim.cash())),
+    ];
+
+    for row in rows {
+        draw_gestion_small_line(&row, x, y, true);
+        y += 24.0;
+    }
+
+    y += 14.0;
+
+    draw_gestion_small_line(
+        "Regle: le stock achete arrive en reception, puis les caristes remplissent automatiquement l'entree de ligne.",
+        x,
+        y,
+        false,
+    );
+
+    y += 22.0;
+
+    draw_gestion_small_line(
+        "Si reception > 0 mais entree ligne = 0, recrute un cariste ou attends son cycle logistique.",
+        x,
+        y,
+        false,
+    );
+}
+
+fn draw_gestion_ligne_tab(state: &GameState, body: Rect) {
+    let line = state.sim.main_production_line();
+
+    let x = body.x + 16.0;
+    let mut y = body.y + 30.0;
+
+    draw_gestion_section_title(&format!("{} - pilotage production", line.label), x, y);
+    y += 32.0;
+
+    let lead_name = line
+        .assigned_lead_id
+        .and_then(|id| state.sim.personnel().employee(id))
+        .map(|employee| employee.name.clone())
+        .unwrap_or_else(|| "aucun".to_string());
+
+    let policy = line
+        .assigned_lead_id
+        .and_then(|id| state.sim.personnel().employee(id))
+        .and_then(|employee| employee.temp_policy.as_ref());
+
+    let rows = [
+        format!("Etat: {:?} | raison: {}", line.status, line.block_reason),
+        format!("Chef assigne: {}", lead_name),
+        format!("Interimaires actifs: {} / 3", line.active_temps),
+        format!("Facteur effectifs: x{:.2}", line.staffing_factor),
+        format!("Objectif: {:.1} boxes/h", line.target_boxes_per_hour),
+        format!(
+            "Politique interim: {} max {}",
+            if policy.is_some_and(|p| p.enabled) {
+                "ON"
+            } else {
+                "OFF"
+            },
+            policy.map(|p| p.max_temps).unwrap_or(0)
+        ),
+    ];
+
+    for row in rows {
+        draw_gestion_small_line(&row, x, y, true);
+        y += 24.0;
+    }
+
+    y += 14.0;
+
+    draw_gestion_small_line(
+        "Le chef recrute automatiquement jusqu'a 3 interimaires si la ligne a du stock et manque de cadence.",
+        x,
+        y,
+        false,
+    );
+}
+
+fn draw_gestion_ventes_tab(state: &GameState, body: Rect) {
+    let sales = state.sim.sales_state();
+
+    let x = body.x + 16.0;
+    let mut y = body.y + 30.0;
+
+    draw_gestion_section_title("Ventes et revenus", x, y);
+    y += 32.0;
+
+    let rows = [
+        format!(
+            "Produits finis en attente: {} boxes",
+            state.sim.line.finished
+        ),
+        format!(
+            "Administrateurs vente: {}",
+            state
+                .sim
+                .personnel()
+                .count_role(EmployeeRole::AdministrateurVente)
+        ),
+        format!(
+            "Capacite vente: {:.1} boxes/h",
+            state.sim.sales_capacity_per_hour()
+        ),
+        format!(
+            "Revenu potentiel: {}/h",
+            format_money(sales.last_revenue_per_hour)
+        ),
+        format!("Blocage vente: {:?}", sales.last_block_reason),
+    ];
+
+    for row in rows {
+        draw_gestion_small_line(&row, x, y, true);
+        y += 24.0;
+    }
+
+    y += 14.0;
+
+    draw_gestion_small_line(
+        "Regle: les produits finis ne donnent de l'argent qu'une fois vendus par un administrateur avec bureau en zone vente.",
+        x,
+        y,
+        false,
+    );
 }
 
 fn info_window_rect() -> Rect {
@@ -3853,22 +4710,22 @@ fn draw_minimap_panel(
     draw_panel_frame(panel, "MINI-CARTE", mouse);
 
     let inner = minimap_inner_rect(panel);
-    let bg = rgba(10, 14, 18, 240);
+    let bg = rgba(8, 12, 16, 232);
     draw_rectangle(inner.x, inner.y, inner.w, inner.h, bg);
     draw_rectangle(
         inner.x,
         inner.y + inner.h * 0.5,
         inner.w,
         inner.h * 0.5,
-        rgba(8, 12, 18, 90),
+        rgba(0, 0, 0, 52),
     );
     draw_rectangle_lines(
         inner.x,
         inner.y,
         inner.w,
         inner.h,
-        1.5,
-        rgba(140, 194, 228, 150),
+        1.0,
+        rgba(82, 130, 164, 130),
     );
     draw_rectangle_lines(
         inner.x + 1.0,
@@ -3912,7 +4769,7 @@ fn draw_minimap_panel(
         let (tx, ty) = b.origin_tile;
         let x = inner.x + (tx as f32 / state.world.w as f32) * inner.w;
         let y = inner.y + (ty as f32 / state.world.h as f32) * inner.h;
-        draw_rectangle(x, y, 4.0, 4.0, rgba(252, 208, 138, 220));
+        draw_rectangle(x, y, 3.5, 3.5, rgba(228, 184, 112, 210));
     }
 
     let pawn_points: [Vec2; 3] = [
@@ -3933,7 +4790,7 @@ fn draw_minimap_panel(
         let px = inner.x + nx * inner.w;
         let py = inner.y + ny * inner.h;
         draw_circle(px, py, 3.0, col);
-        draw_circle_lines(px, py, 3.2, 1.0, rgba(0, 0, 0, 120));
+        draw_circle_lines(px, py, 3.3, 1.0, rgba(2, 8, 12, 170));
     }
     if let Some(papa) = state.papa.pnj() {
         let nx = (papa.pos.x / world_w).clamp(0.0, 1.0);
@@ -3973,7 +4830,7 @@ fn draw_minimap_panel(
     let rw = ((max_x - min_x) / world_w) * inner.w;
     let rh = ((max_y - min_y) / world_h) * inner.h;
 
-    draw_rectangle_lines(rx, ry, rw, rh, 2.0, rgba(252, 208, 138, 240));
+    draw_rectangle_lines(rx, ry, rw, rh, 1.6, rgba(238, 196, 126, 226));
 }
 
 fn minimap_inner_rect(panel: Rect) -> Rect {
@@ -4215,6 +5072,101 @@ mod tests {
         assert!(!build_menu_entries(HudBuildTab::Outils).is_empty());
     }
 
+    fn rect_inside(parent: Rect, child: Rect) -> bool {
+        child.x >= parent.x - 0.001
+            && child.y >= parent.y - 0.001
+            && child.x + child.w <= parent.x + parent.w + 0.001
+            && child.y + child.h <= parent.y + parent.h + 0.001
+    }
+
+    #[test]
+    fn hud_layout_rects_stay_inside_supported_viewports() {
+        for (sw, sh) in [
+            (640.0_f32, 360.0_f32),
+            (1280.0, 720.0),
+            (1550.0, 926.0),
+            (1920.0, 1080.0),
+        ] {
+            let viewport = Rect::new(0.0, 0.0, sw, sh);
+            let layout = compute_hud_layout_for_viewport(sw, sh);
+            for rect in [
+                layout.bar_rect,
+                layout.top_strip_rect,
+                layout.footer_strip_rect,
+                layout.pawn_panel,
+                layout.build_panel,
+                layout.info_panel,
+                layout.telephone_panel,
+                layout.minimap_panel,
+            ] {
+                assert!(
+                    rect.w > 0.0 && rect.h > 0.0,
+                    "rect should stay positive at {sw}x{sh}"
+                );
+                assert!(
+                    rect_inside(viewport, rect),
+                    "rect {rect:?} should stay inside viewport {sw}x{sh}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn operations_buttons_are_clickable_and_do_not_overlap() {
+        for panel in [
+            Rect::new(12.0, 480.0, 160.0, 150.0),
+            Rect::new(360.0, 660.0, 340.0, 150.0),
+            Rect::new(420.0, 720.0, 410.0, 170.0),
+        ] {
+            let layout = operations_panel_layout(panel);
+            for (idx, (_, rect)) in layout.action_rects.iter().enumerate() {
+                assert!(
+                    rect_inside(panel, *rect),
+                    "action rect should stay inside panel"
+                );
+                assert!(rect.w >= 36.0, "action width should stay clickable");
+                assert!(
+                    rect.h >= HUD_MIN_BUTTON_H,
+                    "action height should stay clickable"
+                );
+                for (_, other) in layout.action_rects.iter().skip(idx + 1) {
+                    assert!(
+                        !rects_intersect(*rect, *other),
+                        "operation buttons must not overlap"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn footer_speed_input_uses_rendered_speed_cluster() {
+        for rect in [
+            Rect::new(8.0, 680.0, 624.0, 38.0),
+            Rect::new(8.0, 850.0, 1534.0, 44.0),
+            Rect::new(8.0, 1018.0, 1904.0, 50.0),
+        ] {
+            let layout = footer_strip_layout(rect);
+            assert!(rect_inside(rect, layout.speed_rect));
+            assert!(rect_inside(rect, layout.result_rect));
+            if layout.status_rect.w > 1.0 {
+                assert!(rect_inside(rect, layout.status_rect));
+            }
+            for (_, speed_rect) in footer_speed_button_rects(layout.speed_rect) {
+                assert!(rect_inside(layout.speed_rect, speed_rect));
+            }
+        }
+    }
+
+    #[test]
+    fn fitted_text_truncates_long_status_without_breaking_budget() {
+        let long = "Ligne bloquee par absence d'administrateur vente et stock reception plein";
+        let fitted = fitted_text(long, 120.0, 12.0);
+        assert!(fitted.len() < long.len());
+        assert!(fitted.ends_with("..."));
+        assert!(fitted.chars().count() <= 18);
+    }
+
     #[test]
     fn bottom_panel_widths_always_fit_screen() {
         for sw in [120.0_f32, 240.0, 320.0, 640.0, 800.0, 1024.0, 1600.0] {
@@ -4257,5 +5209,22 @@ mod tests {
             let first_metric = layout.metrics.first().expect("metric card");
             assert!(layout.simulation.x + layout.simulation.w <= first_metric.x + 0.001);
         }
+    }
+
+    #[test]
+    fn header_nav_exposes_gestion_personnel_action() {
+        let nav = Rect::new(120.0, 8.0, 360.0, 54.0);
+        let cells = header_nav_cells(nav);
+        let gestion_cells = cells
+            .iter()
+            .filter(|(action, label, hint, rect)| {
+                *action == HeaderNavAction::OpenGestion
+                    && *label == "GESTION"
+                    && *hint == "PERSONNEL"
+                    && rect_inside(nav, *rect)
+            })
+            .count();
+
+        assert_eq!(gestion_cells, 1);
     }
 }

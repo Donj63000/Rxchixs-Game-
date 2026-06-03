@@ -13,6 +13,7 @@ pub struct PapaPlanAsset {
     pub label: String,
     pub delai_etape_s: f32,
     pub sols: Vec<PapaPlanSol>,
+    pub zones: Vec<PapaPlanZone>,
     pub blocs: Vec<PapaPlanBloc>,
 }
 
@@ -23,6 +24,7 @@ impl Default for PapaPlanAsset {
             label: "Ligne moderne Papa".to_string(),
             delai_etape_s: 0.42,
             sols: Vec::new(),
+            zones: Vec::new(),
             blocs: Vec::new(),
         }
     }
@@ -54,6 +56,13 @@ impl PapaPlanSolKind {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct PapaPlanZone {
+    pub kind: sim::ZoneKind,
+    pub offset: (i32, i32),
+    pub size: (i32, i32),
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct PapaPlanBloc {
     pub kind: sim::BlockKind,
     pub orientation: sim::BlockOrientation,
@@ -81,6 +90,7 @@ impl PapaPlanAsset {
             return Err("delai_etape_s doit etre > 0".to_string());
         }
         self.valider_sols()?;
+        self.valider_zones()?;
         if self.blocs.is_empty() {
             return Err("plan Papa vide: aucun bloc a poser".to_string());
         }
@@ -160,6 +170,47 @@ impl PapaPlanAsset {
         Ok(())
     }
 
+    fn valider_zones(&self) -> Result<(), String> {
+        for zone in &self.zones {
+            if zone.size.0 <= 0 || zone.size.1 <= 0 {
+                return Err(format!(
+                    "plan Papa zone invalide: taille {:?} pour offset {:?}",
+                    zone.size, zone.offset
+                ));
+            }
+
+            let Some(area) = zone.size.0.checked_mul(zone.size.1) else {
+                return Err(format!(
+                    "plan Papa zone invalide: surface deborde pour offset {:?} taille {:?}",
+                    zone.offset, zone.size
+                ));
+            };
+
+            if area > 50_000 {
+                return Err(format!(
+                    "plan Papa zone invalide: surface trop grande {} pour offset {:?}",
+                    area, zone.offset
+                ));
+            }
+
+            zone.offset.0.checked_add(zone.size.0 - 1).ok_or_else(|| {
+                format!(
+                    "plan Papa zone invalide: debordement x pour offset {:?} taille {:?}",
+                    zone.offset, zone.size
+                )
+            })?;
+
+            zone.offset.1.checked_add(zone.size.1 - 1).ok_or_else(|| {
+                format!(
+                    "plan Papa zone invalide: debordement y pour offset {:?} taille {:?}",
+                    zone.offset, zone.size
+                )
+            })?;
+        }
+
+        Ok(())
+    }
+
     fn valider_connectivite_fonctionnelle(&self) -> Result<(), String> {
         let map_w = 220;
         let map_h = 220;
@@ -193,6 +244,13 @@ impl PapaPlanAsset {
             }
         }
 
+        for zone in &self.zones {
+            let origin = (anchor_x + zone.offset.0, anchor_y + zone.offset.1);
+
+            sim.paint_zone_rect_script(origin, zone.size, zone.kind)
+                .map_err(|err| format!("plan Papa invalide: zone impossible ({err})"))?;
+        }
+
         for bloc in &self.blocs {
             let tile = (anchor_x + bloc.offset.0, anchor_y + bloc.offset.1);
             sim.poser_bloc_script(&world, bloc.kind, tile, bloc.orientation, false)
@@ -221,6 +279,7 @@ mod tests {
             label: "test".to_string(),
             delai_etape_s: 0.2,
             sols: Vec::new(),
+            zones: Vec::new(),
             blocs: vec![PapaPlanBloc {
                 kind: sim::BlockKind::InputHopper,
                 orientation: sim::BlockOrientation::East,
@@ -268,6 +327,28 @@ mod tests {
     }
 
     #[test]
+    fn plan_deserializes_industrial_zones() {
+        let payload = r#"
+        (
+            schema_version: 1,
+            label: "plan avec zones",
+            delai_etape_s: 0.2,
+            sols: [],
+            zones: [
+                (kind: receiving, offset: (-2, -5), size: (11, 14)),
+                (kind: support, offset: (62, 5), size: (4, 4)),
+            ],
+            blocs: [],
+        )
+        "#;
+
+        let plan: PapaPlanAsset = ron_from_str(payload).expect("zone plan should deserialize");
+        assert_eq!(plan.zones.len(), 2);
+        assert_eq!(plan.zones[0].kind, sim::ZoneKind::Receiving);
+        assert_eq!(plan.zones[1].kind, sim::ZoneKind::Support);
+    }
+
+    #[test]
     fn plan_validation_rejects_invalid_floor_rectangles() {
         let plan = PapaPlanAsset {
             schema_version: PAPA_PLAN_SCHEMA_VERSION,
@@ -278,6 +359,7 @@ mod tests {
                 offset: (0, 0),
                 size: (0, 14),
             }],
+            zones: Vec::new(),
             blocs: Vec::new(),
         };
 
@@ -288,12 +370,32 @@ mod tests {
     }
 
     #[test]
+    fn plan_validation_rejects_invalid_zone_rectangles() {
+        let plan = PapaPlanAsset {
+            schema_version: PAPA_PLAN_SCHEMA_VERSION,
+            label: "test-invalid-zone".to_string(),
+            delai_etape_s: 0.2,
+            sols: Vec::new(),
+            zones: vec![PapaPlanZone {
+                kind: sim::ZoneKind::Receiving,
+                offset: (0, 0),
+                size: (8, 0),
+            }],
+            blocs: Vec::new(),
+        };
+
+        let err = plan.valider().expect_err("invalid zone should be rejected");
+        assert!(err.contains("zone invalide"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn plan_validation_rejects_disconnected_layout_even_with_required_kinds() {
         let plan = PapaPlanAsset {
             schema_version: PAPA_PLAN_SCHEMA_VERSION,
             label: "test-broken-connectivity".to_string(),
             delai_etape_s: 0.2,
             sols: Vec::new(),
+            zones: Vec::new(),
             blocs: vec![
                 PapaPlanBloc {
                     kind: sim::BlockKind::InputHopper,

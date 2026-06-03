@@ -48,6 +48,7 @@ impl Default for StockState {
 }
 
 impl StockState {
+    #[allow(dead_code)]
     pub fn sandbox_start() -> Self {
         Self {
             raw_receiving: 300,

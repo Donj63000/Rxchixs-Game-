@@ -1,8 +1,8 @@
 use super::{contact_label, contacts_disponibles};
 use macroquad::prelude::*;
 
-const PANEL_TITLE_SIZE: f32 = 18.0;
-const CONTACT_TEXT_SIZE: f32 = 16.0;
+const PANEL_TITLE_SIZE: f32 = 15.0;
+const CONTACT_TEXT_SIZE: f32 = 14.0;
 const CONTACTS_HEADER_H: f32 = 28.0;
 const CONTACT_ROW_H: f32 = 30.0;
 const CONTACT_ROW_STEP: f32 = 34.0;
@@ -13,13 +13,13 @@ pub fn contacts_panel_rect(panel: Rect) -> Rect {
         (CONTACTS_HEADER_H + contacts_disponibles().len() as f32 * CONTACT_ROW_STEP + 6.0)
             .max(62.0);
     let max_w = (panel.x + panel.w - 16.0).max(90.0);
-    let w = 170.0_f32.min(max_w);
-    let x = (panel.x - w - 10.0).max(8.0);
+    let w = (panel.w * 1.10).clamp(150.0, 220.0).min(max_w);
+    let x = (panel.x + panel.w - w).max(8.0);
     Rect::new(x, (panel.y - contacts_h - 8.0).max(8.0), w, contacts_h)
 }
 
 fn bouton_telephone_rect(panel: Rect) -> Rect {
-    let btn_h = (panel.h * 0.34).clamp(42.0, 64.0);
+    let btn_h = (panel.h * 0.28).clamp(36.0, 52.0);
     let btn_w = (panel.w - 20.0).max(40.0);
     Rect::new(
         panel.x + (panel.w - btn_w) * 0.5,
@@ -55,6 +55,7 @@ fn truncate_safe_text(text: &str, max_chars: usize) -> &str {
 
 fn draw_phone_text(text: &str, x: f32, y: f32, size: f32, color: Color) {
     crate::render_safety::begin_ui_pass();
+    draw_text(text, x + 1.0, y + 1.0, size, Color::from_rgba(0, 0, 0, 110));
     draw_text(text, x, y, size, color);
 }
 
@@ -108,14 +109,14 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         panel.y,
         panel.w,
         panel.h,
-        Color::from_rgba(4, 16, 34, 244),
+        Color::from_rgba(7, 14, 24, 236),
     );
     draw_rectangle(
         panel.x + 1.0,
         panel.y + 1.0,
         (panel.w - 2.0).max(1.0),
         24.0,
-        Color::from_rgba(18, 46, 74, 216),
+        Color::from_rgba(18, 34, 50, 216),
     );
     draw_rectangle(
         panel.x,
@@ -131,9 +132,9 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         panel.h,
         1.8,
         if hovered {
-            Color::from_rgba(172, 220, 255, 238)
+            Color::from_rgba(150, 196, 224, 214)
         } else {
-            Color::from_rgba(102, 166, 222, 198)
+            Color::from_rgba(72, 122, 166, 154)
         },
     );
 
@@ -143,7 +144,7 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         panel.x + 23.0,
         panel.y + 20.0,
         2.2,
-        Color::from_rgba(150, 214, 255, 230),
+        Color::from_rgba(150, 190, 220, 220),
     );
     draw_line(
         panel.x + 23.0,
@@ -151,14 +152,14 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         panel.x + 31.0,
         panel.y + 13.0,
         2.2,
-        Color::from_rgba(150, 214, 255, 230),
+        Color::from_rgba(150, 190, 220, 220),
     );
     draw_phone_text(
-        "TÉLÉPHONE",
+        "TELEPHONE",
         panel.x + 42.0,
         panel.y + 22.0,
         PANEL_TITLE_SIZE,
-        Color::from_rgba(224, 238, 250, 255),
+        Color::from_rgba(224, 236, 244, 246),
     );
 
     let screen_h = (panel.h * 0.34).clamp(46.0, 76.0);
@@ -168,7 +169,7 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         screen.y,
         screen.w,
         screen.h,
-        Color::from_rgba(2, 12, 26, 224),
+        Color::from_rgba(4, 10, 18, 224),
     );
     draw_rectangle_lines(
         screen.x + 0.6,
@@ -176,14 +177,14 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         (screen.w - 1.2).max(1.0),
         (screen.h - 1.2).max(1.0),
         1.0,
-        Color::from_rgba(76, 140, 198, 126),
+        Color::from_rgba(72, 122, 166, 126),
     );
     let blink = (time * 2.4).sin().abs();
     draw_circle(
         screen.x + 11.0,
         screen.y + 14.0,
         1.4,
-        Color::from_rgba(44, 206, 194, 90 + (blink * 110.0) as u8),
+        Color::from_rgba(70, 180, 170, 72 + (blink * 70.0) as u8),
     );
 
     let bouton = bouton_telephone_rect(panel);
@@ -192,14 +193,14 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         bouton.y,
         bouton.w,
         bouton.h,
-        Color::from_rgba(12, 92, 116, 236),
+        Color::from_rgba(18, 52, 72, 232),
     );
     draw_rectangle(
         bouton.x,
         bouton.y,
         bouton.w,
         bouton.h * 0.44,
-        Color::from_rgba(50, 190, 214, 56),
+        Color::from_rgba(120, 160, 190, 34),
     );
     draw_rectangle_lines(
         bouton.x + 0.6,
@@ -207,7 +208,7 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         (bouton.w - 1.2).max(1.0),
         (bouton.h - 1.2).max(1.0),
         1.2,
-        Color::from_rgba(74, 228, 246, 220),
+        Color::from_rgba(96, 156, 190, 198),
     );
 
     let pulse = if state.telephone.ouvert {
@@ -221,7 +222,7 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         bouton.w * 0.40,
         bouton.h * 0.52,
     );
-    let icon_col = Color::from_rgba(36, 226, 246, 190 + (pulse * 55.0) as u8);
+    let icon_col = Color::from_rgba(88, 186, 206, 168 + (pulse * 38.0) as u8);
     draw_line(
         icon.x + icon.w * 0.18,
         icon.y + icon.h * 0.18,
@@ -242,6 +243,20 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
         5.0,
         icon_col,
     );
+    let label = if state.telephone.ouvert {
+        "FERMER"
+    } else {
+        "CONTACTS"
+    };
+    let label_size = 12.0;
+    let dims = measure_text(label, None, label_size as u16, 1.0);
+    draw_phone_text(
+        label,
+        bouton.x + bouton.w * 0.5 - dims.width * 0.5,
+        bouton.y + bouton.h - 8.0,
+        label_size,
+        Color::from_rgba(230, 240, 246, 238),
+    );
 
     if state.telephone.ouvert {
         let contacts_panel = contacts_panel_rect(panel);
@@ -250,7 +265,7 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
             contacts_panel.y,
             contacts_panel.w,
             contacts_panel.h,
-            Color::from_rgba(10, 20, 34, 242),
+            Color::from_rgba(8, 14, 24, 242),
         );
         draw_rectangle_lines(
             contacts_panel.x,
@@ -258,14 +273,14 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
             contacts_panel.w,
             contacts_panel.h,
             1.6,
-            Color::from_rgba(130, 192, 234, 220),
+            Color::from_rgba(96, 154, 196, 204),
         );
         draw_phone_text(
             "Contacts",
             contacts_panel.x + 10.0,
             contacts_panel.y + 20.0,
             17.0,
-            Color::from_rgba(226, 242, 255, 255),
+            Color::from_rgba(226, 238, 246, 248),
         );
 
         for (idx, contact) in contacts_disponibles().iter().enumerate() {
@@ -277,9 +292,9 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
                 row.w,
                 row.h,
                 if row_hovered {
-                    Color::from_rgba(40, 86, 128, 245)
+                    Color::from_rgba(34, 64, 92, 242)
                 } else {
-                    Color::from_rgba(24, 54, 84, 238)
+                    Color::from_rgba(18, 36, 56, 236)
                 },
             );
             draw_rectangle_lines(
@@ -288,14 +303,14 @@ pub fn draw_telephone_panel(state: &crate::GameState, panel: Rect, mouse: Vec2, 
                 (row.w - 1.2).max(1.0),
                 (row.h - 1.2).max(1.0),
                 1.0,
-                Color::from_rgba(124, 188, 236, 185),
+                Color::from_rgba(92, 146, 190, 162),
             );
             draw_phone_text(
                 contact_label(*contact),
                 row.x + 8.0,
                 row.y + 20.0,
                 CONTACT_TEXT_SIZE,
-                Color::from_rgba(240, 248, 255, 255),
+                Color::from_rgba(232, 242, 248, 246),
             );
         }
     }
@@ -329,7 +344,23 @@ mod tests {
         let phone_panel = Rect::new(20.0, 400.0, 90.0, 120.0);
         let contacts = contacts_panel_rect(phone_panel);
         assert!(contacts.x >= 8.0);
-        assert!(contacts.w <= 170.0);
+        assert!(contacts.w <= 220.0);
         assert!(contacts.x + contacts.w <= phone_panel.x + phone_panel.w + 0.001);
+    }
+
+    #[test]
+    fn sober_phone_button_keeps_click_target_inside_panel() {
+        for panel in [
+            Rect::new(0.0, 0.0, 90.0, 120.0),
+            Rect::new(500.0, 600.0, 150.0, 150.0),
+            Rect::new(1200.0, 740.0, 170.0, 170.0),
+        ] {
+            let button = bouton_telephone_rect(panel);
+            assert!(button.x >= panel.x);
+            assert!(button.y >= panel.y);
+            assert!(button.x + button.w <= panel.x + panel.w + 0.001);
+            assert!(button.y + button.h <= panel.y + panel.h + 0.001);
+            assert!(button.h >= 36.0);
+        }
     }
 }

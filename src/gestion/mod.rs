@@ -6,6 +6,7 @@ pub mod vente;
 
 pub use commandes::SimCommand;
 pub use lignes::{LineOperationalState, ProductionLineId, ProductionLineState};
-pub use personnel::{EmployeeRole, PersonnelState};
+#[allow(unused_imports)]
+pub use personnel::{Employee, EmployeeId, EmployeeRole, EmployeeStatus, PersonnelState};
 pub use stock::{RAW_LINE_INPUT_CAPACITY, StockState};
 pub use vente::SalesState;
